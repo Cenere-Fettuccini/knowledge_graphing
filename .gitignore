@@ -24,3 +24,4 @@ neo4j_data/
 #design plans
 DESIGN.md
 implementation_plan.md
+stublist.py

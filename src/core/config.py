@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     google_api_key: str
     llm_model: str = "gemini-2.5-flash"
     llm_temperature: float = 0.7
-    embedding_model: str = "models/text-embedding-004"
+    embedding_model: str = "models/gemini-embedding-2"
 
     # --- ChromaDB ---
     chroma_persist_dir: str = "./data/chroma"
