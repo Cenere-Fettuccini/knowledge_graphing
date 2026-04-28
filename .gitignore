@@ -21,7 +21,10 @@ __pycache__/
 chroma_db/
 neo4j_data/
 
-#design plans
+# design plans
 DESIGN.md
 implementation_plan.md
 stublist.py
+
+# chroma db data
+data/

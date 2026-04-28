@@ -56,7 +56,7 @@ class TelegramBot:
     # ------------------------------------------------------------------
 
     async def _handle_start(
-        self, update: Update, _context: ContextTypes.DEFAULT_TYPE
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         if not self._is_authorized(update):
             await self._deny(update)
@@ -67,7 +67,7 @@ class TelegramBot:
         )
 
     async def _handle_help(
-        self, update: Update, _context: ContextTypes.DEFAULT_TYPE
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         if not self._is_authorized(update):
             await self._deny(update)
@@ -94,15 +94,15 @@ class TelegramBot:
         await update.message.chat.send_action(ChatAction.TYPING)
 
         try:
-            reply = await self._agent.process_message(user_id=user_id, text=text)
+            tokens: list[str] = []
+            async for token in self._agent.process_message_stream(user_id, text):
+                tokens.append(token)
+            await update.message.reply_text("".join(tokens))
         except Exception:
-            logger.exception("Agent failed for user_id=%s", user_id)
-            reply = (
-                "⚠️ I'm having trouble thinking right now. "
-                "Please try again in a moment."
+            logger.exception("Agent stream failed for user_id=%s", user_id)
+            await update.message.reply_text(
+                "⚠️ I'm having trouble thinking right now. Please try again in a moment."
             )
-
-        await update.message.reply_text(reply)
 
     # ------------------------------------------------------------------
     # Lifecycle

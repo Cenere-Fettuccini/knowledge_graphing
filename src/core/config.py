@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     embedding_model: str = "models/gemini-embedding-2"
 
+    # --- LM Studio ---
+    lm_studio_base_url: str | None = None
+    lm_studio_model: str | None = None
+
+    # --- Session ---
+    session_store_path: str | None = None
+
     # --- ChromaDB ---
     chroma_persist_dir: str = "./data/chroma"
     chroma_collection: str = "conversations"
