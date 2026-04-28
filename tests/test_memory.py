@@ -48,14 +48,16 @@ def patched_settings(tmp_chroma_dir):
 @pytest.fixture(scope="module")
 def chroma_store(patched_settings):
     from src.memory.chroma_store import ChromaStore
-    return ChromaStore()
-
+    store = ChromaStore()
+    yield store
+    store.close()
 
 @pytest.fixture(scope="module")
 def memory_manager(patched_settings):
     from src.memory.memory_manager import MemoryManager
-    return MemoryManager()
-
+    mm = MemoryManager()
+    yield mm
+    mm._chroma.close()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -191,10 +193,13 @@ class TestChromaStore:
         with tempfile.TemporaryDirectory() as empty_dir:
             patched_settings.__dict__["chroma_persist_dir"] = empty_dir
             store = ChromaStore()
-            results = asyncio.get_event_loop().run_until_complete(
-                store.query_memory(query="anything", k=5)
-            )
-            assert results == []
+            try:
+                results = asyncio.get_event_loop().run_until_complete(
+                    store.query_memory(query="anything", k=5)
+                )
+                assert results == []
+            finally:
+                store.close()
             patched_settings.__dict__["chroma_persist_dir"] = patched_settings.chroma_persist_dir
 
 

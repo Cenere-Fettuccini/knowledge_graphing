@@ -281,8 +281,16 @@ class ChromaStore:
     def close(self) -> None:
         """Release Chroma resources (required on Windows)."""
         try:
-            if hasattr(self._client, "_system"):
-                self._client._system.stop()
+            system = getattr(self._client, "_system", None)
+            if system is not None:
+                system.stop()
         except Exception:
             pass
 
+    # ── Context manager support ───────────────────────────────────────────────
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
