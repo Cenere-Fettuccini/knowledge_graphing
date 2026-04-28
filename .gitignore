@@ -1,0 +1,26 @@
+# Environments
+.env
+
+# Virtual Environment
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# DBs
+*.sqlite3
+*.db
+chroma_db/
+neo4j_data/
+
+#design plans
+DESIGN.md
+implementation_plan.md
