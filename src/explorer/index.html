@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AIManager — Knowledge Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;800&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+
+<body>
+
+    <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
+    <header id="topbar">
+        <div id="brand">
+            <span class="brand-icon">◈</span>
+            <span class="brand-name">AIManager</span>
+            <span class="brand-sub">Knowledge Explorer</span>
+        </div>
+
+        <div id="search-wrap">
+            <span class="search-icon">⌕</span>
+            <input id="search-input" type="text" placeholder="Search nodes, facts, topics…" autocomplete="off" />
+            <div id="search-results" class="hidden"></div>
+        </div>
+
+        <div id="topbar-stats">
+            <span class="stat-pill" id="stat-nodes">— nodes</span>
+            <span class="stat-pill" id="stat-edges">— edges</span>
+            <span class="stat-pill muted" id="stat-rumination">rumination: never</span>
+        </div>
+    </header>
+
+    <!-- ── Main layout ──────────────────────────────────────────────────────── -->
+    <main id="layout">
+
+        <!-- Sidebar: label filters -->
+        <aside id="sidebar">
+            <p class="sidebar-label">FILTER</p>
+            <div id="label-filters"></div>
+
+            <p class="sidebar-label" style="margin-top:2rem">LEGEND</p>
+            <div id="legend"></div>
+        </aside>
+
+        <!-- Graph canvas -->
+        <section id="canvas-wrap">
+            <svg id="graph-svg"></svg>
+            <div id="canvas-hint">Click a node to inspect it</div>
+        </section>
+
+        <!-- Detail panel -->
+        <aside id="detail-panel" class="hidden">
+            <button id="panel-close">✕</button>
+            <div id="panel-content"></div>
+        </aside>
+
+    </main>
+
+    <!-- ── Source conversation overlay ─────────────────────────────────────── -->
+    <div id="source-overlay" class="hidden">
+        <div id="source-modal">
+            <div id="source-header">
+                <span id="source-title">Source Conversation</span>
+                <button id="source-close">✕</button>
+            </div>
+            <div id="source-body"></div>
+        </div>
+    </div>
+
+    <!-- ── Scripts ──────────────────────────────────────────────────────────── -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+    <script src="/static/api.js"></script>
+    <script src="/static/panel.js"></script>
+    <script src="/static/graph.js"></script>
+</body>
+
+</html>
