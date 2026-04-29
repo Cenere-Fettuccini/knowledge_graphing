@@ -28,3 +28,6 @@ stublist.py
 
 # chroma db data
 data/
+
+# Backup for restart
+backup/
