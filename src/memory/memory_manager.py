@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.memory.chroma_store import ChromaStore
+from src.memory.neo4j_store import Neo4jStore
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class MemoryManager:
 
     def __init__(self) -> None:
         self._chroma = ChromaStore()
-        # self._neo4j = Neo4jStore()   ← wired in Step 5
+        self._neo4j = Neo4jStore()
         logger.info("MemoryManager ready")
 
     # ── Session helpers ───────────────────────────────────────────────────────
@@ -45,6 +46,18 @@ class MemoryManager:
     def new_session_id() -> str:
         """Generate a fresh session ID (UUID4)."""
         return str(uuid.uuid4())
+
+    def set_active_session(self, user_id: str, session_id: str) -> None:
+        self._neo4j.set_active_session(user_id, session_id)
+
+    def get_active_session(self, user_id: str) -> str | None:
+        return self._neo4j.get_active_session(user_id)
+
+    def pin_session(self, user_id: str, session_id: str, name: str) -> None:
+        self._neo4j.pin_session(user_id, session_id, name)
+
+    def get_pinned_sessions(self, user_id: str) -> list[dict[str, str]]:
+        return self._neo4j.get_pinned_sessions(user_id)
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
@@ -120,4 +133,5 @@ class MemoryManager:
     def stats(self) -> dict[str, Any]:
         return {
             "chroma_total_docs": self._chroma.count(),
+            "neo4j_connected": self._neo4j.is_connected,
         }

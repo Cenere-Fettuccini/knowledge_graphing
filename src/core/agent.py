@@ -77,15 +77,51 @@ class Agent:
 
     def _get_session(self, user_id: str) -> dict[str, Any]:
         if user_id not in self._sessions:
-            self._sessions[user_id] = {
-                "session_id": MemoryManager.new_session_id(),
-                "turn_index": 0,
-            }
+            active_session_id = self._memory.get_active_session(user_id)
+            if active_session_id:
+                self._sessions[user_id] = {
+                    "session_id": active_session_id,
+                    "turn_index": 0,
+                }
+            else:
+                new_session_id = MemoryManager.new_session_id()
+                self._memory.set_active_session(user_id, new_session_id)
+                self._sessions[user_id] = {
+                    "session_id": new_session_id,
+                    "turn_index": 0,
+                }
         return self._sessions[user_id]
 
     def _advance_turn(self, user_id: str, by: int = 2) -> None:
         """Advance turn index by 2 after each full exchange (user + assistant)."""
         self._sessions[user_id]["turn_index"] += by
+
+    def reset_session(self, user_id: str) -> str:
+        """Start a new session for the user."""
+        new_session_id = MemoryManager.new_session_id()
+        self._memory.set_active_session(user_id, new_session_id)
+        self._sessions[user_id] = {
+            "session_id": new_session_id,
+            "turn_index": 0,
+        }
+        return new_session_id
+
+    def pin_session(self, user_id: str, name: str) -> None:
+        """Pin the current active session with a name."""
+        session = self._get_session(user_id)
+        self._memory.pin_session(user_id, session["session_id"], name)
+
+    def get_pinned_sessions(self, user_id: str) -> list[dict[str, str]]:
+        """Return a list of pinned sessions."""
+        return self._memory.get_pinned_sessions(user_id)
+
+    def swap_session(self, user_id: str, session_id: str) -> None:
+        """Swap to a different session_id."""
+        self._memory.set_active_session(user_id, session_id)
+        self._sessions[user_id] = {
+            "session_id": session_id,
+            "turn_index": 0, # Start counting from 0 again for this session
+        }
 
     # ── Graph nodes ───────────────────────────────────────────────────────────
 
@@ -251,6 +287,11 @@ class Agent:
             full_reply,
         )
         self._advance_turn(user_id)
+
+    async def get_history(self, user_id: str, n: int = 10) -> str:
+        """Retrieve formatted recent conversation history."""
+        history = await self._memory.get_recent_turns(user_id, n=n)
+        return _format_history(history)
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────

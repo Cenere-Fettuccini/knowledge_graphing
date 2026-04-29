@@ -28,6 +28,7 @@ const Graph = (() => {
     const hintEl = document.getElementById('canvas-hint');
     const filterWrap = document.getElementById('label-filters');
     const legendWrap = document.getElementById('legend');
+    const statNeo4j = document.getElementById('stat-neo4j');
     const statNodes = document.getElementById('stat-nodes');
     const statEdges = document.getElementById('stat-edges');
     const statRum = document.getElementById('stat-rumination');
@@ -44,6 +45,14 @@ const Graph = (() => {
         statNodes.textContent = `${allNodes.length} nodes`;
         statEdges.textContent = `${allEdges.length} edges`;
         statRum.textContent = `rumination: ${data.stats?.last_rumination ?? 'never'}`;
+        
+        if (data.stats?.neo4j_connected) {
+            statNeo4j.textContent = '● Neo4j Connected';
+            statNeo4j.style.color = '#7ee8a2'; // Green
+        } else {
+            statNeo4j.textContent = '○ Neo4j Offline';
+            statNeo4j.style.color = '#f77e7e'; // Red
+        }
 
         // Compute degree for radius scaling
         const degree = {};

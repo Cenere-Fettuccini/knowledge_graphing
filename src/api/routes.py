@@ -10,7 +10,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from src.memory.memory_manager import MemoryManager
+
 router = APIRouter(tags=["graph"])
+
+_memory = None
+def get_memory():
+    global _memory
+    if _memory is None:
+        _memory = MemoryManager()
+    return _memory
 
 # ── Mock data ─────────────────────────────────────────────────────────────────
 # Realistic enough to exercise every UI component.
@@ -190,10 +199,13 @@ async def stats() -> dict[str, Any]:
     for n in _MOCK_NODES:
         counts[n["label"]] = counts.get(n["label"], 0) + 1
 
+    mem_stats = get_memory().stats()
+
     return {
         "nodes_by_label": counts,
         "total_nodes": len(_MOCK_NODES),
         "total_edges": len(_MOCK_EDGES),
         "last_rumination_ts": None,
         "last_rumination_human": "Never",
+        "neo4j_connected": mem_stats.get("neo4j_connected", False),
     }
