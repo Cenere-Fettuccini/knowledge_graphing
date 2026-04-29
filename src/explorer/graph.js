@@ -69,6 +69,27 @@ const Graph = (() => {
         buildSVG();
         render();
         wireSearch();
+        startPolling();
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+    function startPolling() {
+        setInterval(async () => {
+            try {
+                const data = await API.stats();
+                if (data.neo4j_connected) {
+                    statNeo4j.textContent = '● Neo4j Connected';
+                    statNeo4j.style.color = '#7ee8a2';
+                } else {
+                    statNeo4j.textContent = '○ Neo4j Offline';
+                    statNeo4j.style.color = '#f77e7e';
+                }
+            } catch (err) {
+                console.error('Polling stats failed', err);
+                statNeo4j.textContent = '○ UI Disconnected';
+                statNeo4j.style.color = '#f77e7e';
+            }
+        }, 5000);
     }
 
     // ── Label filter sidebar ──────────────────────────────────────────────────

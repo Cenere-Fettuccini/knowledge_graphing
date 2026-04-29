@@ -38,7 +38,13 @@ class Neo4jStore:
 
     @property
     def is_connected(self) -> bool:
-        return self._driver is not None
+        if not self._driver:
+            return False
+        try:
+            self._driver.verify_connectivity()
+            return True
+        except Exception:
+            return False
 
     # ── Sessions / Conversations ──────────────────────────────────────────────
 
