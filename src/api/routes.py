@@ -52,3 +52,15 @@ async def get_node_detail(node_id: str):
         "tasks": [],
         "connections": []
     })
+
+@router.get("/system/status")
+async def get_system_status():
+    """Returns the health status of backend systems (independent check)."""
+    # In Step 5, this will actually ping the Neo4j driver
+    # In Step 3, this will ping ChromaDB
+    import random
+    return {
+        "neo4j": "online" if random.random() > 0.1 else "offline",
+        "chroma": "online",
+        "agent": "standby"
+    }

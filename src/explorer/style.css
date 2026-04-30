@@ -10,13 +10,6 @@
     --border-main: #363430;  /* Soft dark border */
     --border-focus: #524E48;
     
-    /* Muted Pastel Accents */
-    --color-person:  #7FA38D; /* Sage / Moss */
-    --color-project: #B88E7D; /* Soft Terracotta */
-    --color-topic:   #8497B0; /* Dusty Slate */
-    --color-belief:  #BEAA7E; /* Muted Mustard */
-    --color-task:    #A37A87; /* Mauve */
-    
     --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --radius-sm: 6px;
     --radius-md: 12px;
@@ -58,12 +51,13 @@ body {
     padding: 12px;
     gap: 12px;
     /* Desktop layout */
-    grid-template-columns: 240px 1fr 300px;
-    grid-template-rows: 50px 1fr 180px;
+    grid-template-columns: 240px 1fr 1fr 300px;
+    grid-template-rows: 50px 140px 1fr 180px;
     grid-template-areas: 
-        "header header header"
-        "sidebar graph details"
-        "upload tasks rumination";
+        "header header header header"
+        "status graph graph details"
+        "sidebar graph graph details"
+        "upload tasks calendar rumination";
 }
 
 .module {
@@ -100,12 +94,36 @@ body {
 }
 
 .module-header { grid-area: header; flex-direction: row; align-items: center; justify-content: space-between; padding: 0 20px; }
+.module-status { grid-area: status; }
 .module-sidebar { grid-area: sidebar; overflow-y: auto; }
 .module-graph { grid-area: graph; position: relative; }
 .module-details { grid-area: details; overflow-y: auto; }
 .module-tasks { grid-area: tasks; }
+.module-calendar { grid-area: calendar; }
 .module-rumination { grid-area: rumination; }
 .module-upload { grid-area: upload; }
+
+/* Status module styles */
+.status-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--fg-primary);
+}
+.status-badge {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.status-badge.online { background: rgba(127, 163, 141, 0.2); color: var(--color-person); }
+.status-badge.offline { background: rgba(163, 122, 135, 0.2); color: var(--color-task); }
+.status-badge.connecting { background: var(--bg-hover); color: var(--fg-dim); }
+.status-badge.standby { background: rgba(190, 170, 126, 0.2); color: var(--color-belief); }
 
 /* ── HEADER ────────────────────────────────────────────── */
 
@@ -170,19 +188,46 @@ h3 {
 ul { list-style: none; }
 li { margin-bottom: 8px; color: var(--fg-primary); display: flex; align-items: center; }
 
-.swatch {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    margin-right: 10px;
+.filter-item {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    width: 100%;
 }
-
-.c-person { background: var(--color-person); }
-.c-project { background: var(--color-project); }
-.c-topic { background: var(--color-topic); }
-.c-belief { background: var(--color-belief); }
-.c-task { background: var(--color-task); }
+.filter-item input[type="checkbox"] {
+    display: none;
+}
+.color-box {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    margin-right: 12px;
+    border: 2px solid var(--cb-color); /* Thicker, colored outline */
+    padding: 2px; /* Gap between outline and patch */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s ease;
+}
+.color-box::after {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 2px;
+    background-color: var(--cb-color);
+    transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s ease;
+}
+.filter-item input[type="checkbox"]:not(:checked) + .color-box::after {
+    transform: scale(0);
+    opacity: 0;
+}
+.filter-item input[type="checkbox"]:not(:checked) ~ .filter-name {
+    opacity: 0.5;
+}
+.filter-name {
+    transition: opacity 0.2s ease;
+}
 
 /* ── GRAPH CANVAS ──────────────────────────────────────── */
 
@@ -244,6 +289,38 @@ li { margin-bottom: 8px; color: var(--fg-primary); display: flex; align-items: c
 .edge-list li:last-child { border-bottom: none; }
 .edge-type { color: var(--fg-dim); font-size: 10px; background: var(--bg-app); padding: 2px 6px; border-radius: 4px; }
 
+.provenance-list li {
+    padding: 10px;
+    background: var(--bg-app);
+    border: 1px dashed var(--border-focus);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    line-height: 1.4;
+    transition: border-color 0.2s ease;
+}
+.provenance-list li:hover { border-color: var(--color-topic); }
+.provenance-list li:last-child { margin-bottom: 0; }
+
+.graph-controls {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--bg-app);
+    padding: 6px;
+    border: 1px solid var(--border-main);
+    border-radius: 24px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 10;
+}
+.graph-controls .theme-btn {
+    margin: 0;
+}
+
 /* ── PLACEHOLDERS ──────────────────────────────────────── */
 
 .placeholder-module {
@@ -271,13 +348,15 @@ li { margin-bottom: 8px; color: var(--fg-primary); display: flex; align-items: c
 @media (max-width: 1024px) {
     .app-container {
         grid-template-columns: 240px 1fr;
-        grid-template-rows: 50px 1fr 1fr 200px;
+        grid-template-rows: 50px 140px 1fr 1fr 150px 150px;
         grid-template-areas:
             "header header"
+            "status graph"
             "sidebar graph"
             "sidebar details"
             "upload tasks"
-            "upload rumination";
+            "upload calendar"
+            "rumination rumination";
     }
 }
 
@@ -290,11 +369,13 @@ li { margin-bottom: 8px; color: var(--fg-primary); display: flex; align-items: c
         grid-template-rows: auto;
         grid-template-areas:
             "header"
+            "status"
             "graph"
             "sidebar"
             "details"
             "upload"
             "tasks"
+            "calendar"
             "rumination";
     }
     .module-graph { height: 60vh; min-height: 400px; }
