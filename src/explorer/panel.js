@@ -3,10 +3,121 @@
  */
 
 const Panel = {
+    typeSequence: 0,
     init() {
+        this.container = document.getElementById('detailPanel');
         this.nodeInfo = document.getElementById('nodeInfo');
         this.nodeConnections = document.getElementById('nodeConnections');
         this.edgeList = document.getElementById('edgeList');
+        const backdrop = document.createElement('div');
+        backdrop.className = 'module-backdrop';
+        document.body.appendChild(backdrop);
+        
+        let activeMod = null;
+        let originalRect = null;
+        
+        const collapseModule = (mod) => {
+            if (!mod) return;
+            mod.style.top = originalRect.top + 'px';
+            mod.style.left = originalRect.left + 'px';
+            mod.style.width = originalRect.width + 'px';
+            mod.style.height = originalRect.height + 'px';
+            mod.classList.remove('expanded-module');
+            backdrop.classList.remove('active');
+            
+            setTimeout(() => {
+                if (!mod.classList.contains('expanded-module')) {
+                    mod.style.position = '';
+                    mod.style.margin = '';
+                    mod.style.top = '';
+                    mod.style.left = '';
+                    mod.style.width = '';
+                    mod.style.height = '';
+                    mod.style.zIndex = '';
+                    mod.style.transition = '';
+                    activeMod = null;
+                }
+            }, 500);
+        };
+
+        const expandModule = (mod) => {
+            if (activeMod) return;
+            activeMod = mod;
+            originalRect = mod.getBoundingClientRect();
+            
+            mod.style.position = 'fixed';
+            mod.style.margin = '0';
+            mod.style.top = originalRect.top + 'px';
+            mod.style.left = originalRect.left + 'px';
+            mod.style.width = originalRect.width + 'px';
+            mod.style.height = originalRect.height + 'px';
+            mod.style.zIndex = '1000';
+            mod.style.transition = 'all 0.5s cubic-bezier(0.25, 1, 0.5, 1)';
+            
+            mod.classList.add('expanded-module');
+            backdrop.classList.add('active');
+            
+            void mod.offsetWidth; // Force reflow
+            
+            mod.style.top = '12px';
+            mod.style.left = '12px';
+            mod.style.width = 'calc(100vw - 24px)';
+            mod.style.height = 'calc(100vh - 24px)';
+        };
+
+        backdrop.addEventListener('click', () => collapseModule(activeMod));
+
+        document.querySelectorAll('.placeholder-module').forEach(mod => {
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'module-close-btn';
+            closeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg> <span>Back</span>`;
+            mod.appendChild(closeBtn);
+
+            mod.addEventListener('click', (e) => {
+                if (mod.classList.contains('expanded-module')) {
+                    if (e.target.closest('.module-close-btn')) collapseModule(mod);
+                    return;
+                }
+                if (e.target.closest('button') || e.target.closest('a')) return;
+                expandModule(mod);
+            });
+        });
+    },
+
+    close() {
+        if (this.container) this.container.classList.remove('active');
+    },
+
+    async typeWriter(element, html, speed = 8) {
+        this.typeSequence++;
+        const currentSeq = this.typeSequence;
+        element.innerHTML = '';
+        const temp = document.createElement('div');
+        temp.innerHTML = html;
+        
+        const typeNode = async (node, parent) => {
+            if (currentSeq !== this.typeSequence) return;
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = node.textContent;
+                for (let i = 0; i < text.length; i++) {
+                    if (currentSeq !== this.typeSequence) return;
+                    parent.appendChild(document.createTextNode(text.charAt(i)));
+                    await new Promise(r => setTimeout(r, speed));
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const clone = node.cloneNode(false);
+                parent.appendChild(clone);
+                for (let child of node.childNodes) {
+                    if (currentSeq !== this.typeSequence) return;
+                    await typeNode(child, clone);
+                }
+            }
+        };
+        
+        for (let child of temp.childNodes) {
+            if (currentSeq !== this.typeSequence) return;
+            await typeNode(child, element);
+        }
     },
 
     clear() {
@@ -16,11 +127,12 @@ const Panel = {
     },
 
     async loadNode(nodeId) {
+        if (this.container) this.container.classList.add('active');
         this.nodeInfo.innerHTML = '<p class="dim">Fetching data...</p>';
         const data = await API.getNodeDetail(nodeId);
 
         if (!data || !data.node) {
-            this.nodeInfo.innerHTML = '<p class="dim" style="color:var(--c-red)">ERR: Node not found.</p>';
+            await this.typeWriter(this.nodeInfo, '<p class="dim" style="color:var(--c-red)">ERR: Node not found.</p>');
             return;
         }
 
@@ -45,7 +157,7 @@ const Panel = {
             html += `<p><span class="dim">Status:</span> <span class="highlight">${n.status}</span></p>`;
         }
 
-        this.nodeInfo.innerHTML = html;
+        await this.typeWriter(this.nodeInfo, html);
 
         // Render connections
         const connSec = this.nodeConnections;

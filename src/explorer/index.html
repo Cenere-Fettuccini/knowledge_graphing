@@ -90,28 +90,27 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg>
                 </button>
             </div>
+            <!-- DETAILS MODULE -->
+            <aside class="module-details" id="detailPanel">
+                <div class="inner-section">
+                    <h3>Node Inspector</h3>
+                    <div id="nodeInfo" class="node-content">
+                        <p class="dim">Select a node in the graph to view details.</p>
+                    </div>
+                </div>
+                <div class="inner-section" id="nodeConnections" style="display:none;">
+                    <h3>Connected Edges</h3>
+                    <ul class="edge-list" id="edgeList"></ul>
+                </div>
+                <div class="inner-section" id="nodeProvenance" style="display:none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="margin: 0;">Source Memories</h3>
+                        <span style="font-size:9px; color:var(--fg-dim);">(Step 6)</span>
+                    </div>
+                    <ul class="provenance-list" id="provenanceList"></ul>
+                </div>
+            </aside>
         </main>
-
-        <!-- DETAILS MODULE -->
-        <aside class="module module-details" id="detailPanel">
-            <div class="inner-section">
-                <h3>Node Inspector</h3>
-                <div id="nodeInfo" class="node-content">
-                    <p class="dim">Select a node in the graph to view details.</p>
-                </div>
-            </div>
-            <div class="inner-section" id="nodeConnections" style="display:none;">
-                <h3>Connected Edges</h3>
-                <ul class="edge-list" id="edgeList"></ul>
-            </div>
-            <div class="inner-section" id="nodeProvenance" style="display:none;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin: 0;">Source Memories</h3>
-                    <span style="font-size:9px; color:var(--fg-dim);">(Step 6)</span>
-                </div>
-                <ul class="provenance-list" id="provenanceList"></ul>
-            </div>
-        </aside>
 
         <!-- FUTURE PLACEHOLDER: BULK UPLOAD -->
         <section class="module module-upload placeholder-module">

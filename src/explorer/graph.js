@@ -494,6 +494,10 @@
                     targetFov = Math.max(500, fov); // Bring it a bit closer too
                     isAnimating = true;
                 }
+            } else {
+                // Clicked empty space
+                activeNodeId = null;
+                if (typeof Panel !== 'undefined') Panel.close();
             }
         });
 

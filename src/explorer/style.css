@@ -70,8 +70,8 @@ body {
     grid-template-rows: 50px 140px 1fr 180px;
     grid-template-areas:
         "header header header header"
-        "status graph graph details"
-        "sidebar graph graph details"
+        "status graph graph graph"
+        "sidebar graph graph graph"
         "upload tasks calendar rumination";
 }
 
@@ -133,8 +133,82 @@ body {
 }
 
 .module-details {
-    grid-area: details;
+    position: absolute;
+    box-sizing: border-box;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    height: 100%;
+    width: 300px;
+    z-index: 50;
+    background: var(--bg-module);
+    border-left: 1px solid var(--border-main);
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    padding: 16px;
+    transform: translateX(100%);
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease, border-color 0.3s ease;
+    box-shadow: none;
     overflow-y: auto;
+}
+
+.module-details.active {
+    transform: translateX(0);
+}
+
+.module-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+}
+
+.module-backdrop.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.module-close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: var(--bg-app);
+    border: 1px solid var(--border-main);
+    color: var(--fg-dim);
+    height: 32px;
+    padding: 0 16px 0 12px;
+    border-radius: 16px;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, background-color 0.2s ease, color 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+}
+
+.module-close-btn:hover {
+    background: var(--border-main);
+    color: var(--fg-primary);
+}
+
+.expanded-module .module-close-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.expanded-module {
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    cursor: default !important;
 }
 
 .module-tasks {
