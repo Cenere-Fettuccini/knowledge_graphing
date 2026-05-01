@@ -127,7 +127,19 @@ const Panel = {
     },
 
     async loadNode(nodeId) {
-        if (this.container) this.container.classList.add('active');
+        const provSec = document.getElementById('nodeProvenance');
+        const provList = document.getElementById('provenanceList');
+
+        if (this.container && this.container.classList.contains('active')) {
+            if (provSec.style.display !== 'none') {
+                provSec.classList.add('slide-out');
+                await new Promise(r => setTimeout(r, 200));
+            }
+        } else {
+            provSec.classList.add('slide-out');
+            if (this.container) this.container.classList.add('active');
+        }
+
         this.nodeInfo.innerHTML = '<p class="dim">Fetching data...</p>';
         const data = await API.getNodeDetail(nodeId);
 
@@ -137,7 +149,6 @@ const Panel = {
         }
 
         const n = data.node;
-
         const bgColor = window.ColorManager ? window.ColorManager.getColor(n.label) : 'var(--fg-dim)';
 
         let html = `
@@ -148,7 +159,6 @@ const Panel = {
             </div>
         `;
 
-        // Render extra props based on type
         if (n.label === 'Belief') {
             html += `<p><span class="dim">Status:</span> ${n.status}</p>`;
             html += `<p><span class="dim">Conf:</span> ${n.conf}</p>`;
@@ -157,16 +167,32 @@ const Panel = {
             html += `<p><span class="dim">Status:</span> <span class="highlight">${n.status}</span></p>`;
         }
 
-        await this.typeWriter(this.nodeInfo, html);
-
-        // Render connections
         const connSec = this.nodeConnections;
         const edgeList = this.edgeList;
         edgeList.innerHTML = '';
         if (data.connections && data.connections.length > 0) {
             data.connections.forEach(c => {
                 const li = document.createElement('li');
-                li.innerHTML = `<span>${c.target}</span> <span class="edge-type">${c.type}</span>`;
+                li.style.cursor = 'pointer';
+                const dirIcon = c.direction === 'in' ? '↙' : '↗';
+                const labelColor = window.ColorManager ? window.ColorManager.getColor(c.target_label) : 'var(--fg-dim)';
+                
+                li.innerHTML = `
+                    <div style="display:flex; flex-direction:column;">
+                        <span style="font-size:13px; font-weight:500;">${c.target}</span>
+                        <div style="display:flex; align-items:center; gap:4px; margin-top:2px;">
+                            <span style="font-size:8px; color:var(--bg-app); background:${labelColor}; padding:1px 4px; border-radius:4px; font-weight:600; text-transform:uppercase;">${c.target_label}</span>
+                            <span style="font-size:9px; color:var(--fg-dim);">${dirIcon} ${c.direction === 'in' ? 'From' : 'To'}</span>
+                        </div>
+                    </div>
+                    <span class="edge-type">${c.type}</span>
+                `;
+
+                li.addEventListener('click', () => {
+                    this.loadNode(c.id);
+                    if (window.GraphManager) window.GraphManager.focusNode(c.id);
+                });
+
                 edgeList.appendChild(li);
             });
             connSec.style.display = 'block';
@@ -174,18 +200,33 @@ const Panel = {
             connSec.style.display = 'none';
         }
 
-        // Mock Belief Provenance (Step 6)
-        const provSec = document.getElementById('nodeProvenance');
-        const provList = document.getElementById('provenanceList');
+        await this.typeWriter(this.nodeInfo, html);
+
         provList.innerHTML = '';
-        
-        // We only show provenance if it's a Belief or Task for the mock
         if (n.label === 'Belief' || n.label === 'Task' || n.label === 'Project') {
-            provList.innerHTML = `
-                <li>"We definitely need to implement timeblocking and proactive calendar management." <br/><span style="opacity:0.6;font-size:9px;">— Kevin, just now</span></li>
-                <li>"The knowledge graph UI looks completely zen." <br/><span style="opacity:0.6;font-size:9px;">— Kevin, 30 mins ago</span></li>
-            `;
             provSec.style.display = 'block';
+            
+            const memories = [
+                { text: "We definitely need to implement timeblocking and proactive calendar management.", author: "Kevin", time: "just now" },
+                { text: "The knowledge graph UI looks completely zen.", author: "Kevin", time: "30 mins ago" }
+            ];
+
+            memories.forEach((m, i) => {
+                const li = document.createElement('li');
+                li.innerHTML = `"${m.text}" <br/><span style="opacity:0.6;font-size:9px;">— ${m.author}, ${m.time}</span>`;
+                provList.appendChild(li);
+                
+                // Staggered reveal
+                setTimeout(() => {
+                    li.classList.add('visible');
+                }, i * 150 + 100); 
+            });
+            
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    provSec.classList.remove('slide-out');
+                });
+            });
         } else {
             provSec.style.display = 'none';
         }

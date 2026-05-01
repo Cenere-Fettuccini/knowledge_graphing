@@ -149,6 +149,18 @@ body {
     transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease, border-color 0.3s ease;
     box-shadow: none;
     overflow-y: auto;
+    overflow-x: hidden;
+}
+
+#nodeProvenance {
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+    transform: translateX(0);
+    opacity: 1;
+}
+
+#nodeProvenance.slide-out {
+    transform: translateX(120%);
+    opacity: 0;
 }
 
 .module-details.active {
@@ -463,13 +475,25 @@ li {
 }
 
 .edge-list li {
-    padding: 8px 0;
-    border-bottom: 1px dashed var(--border-main);
+    display: flex;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-main);
+    border-radius: var(--radius-sm);
     justify-content: space-between;
+    align-items: center;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+.edge-list li:hover {
+    border-color: var(--border-focus);
+    transform: translateX(4px);
+    background: var(--bg-module);
 }
 
 .edge-list li:last-child {
-    border-bottom: none;
+    margin-bottom: 0;
 }
 
 .edge-type {
@@ -481,11 +505,24 @@ li {
 }
 
 .provenance-list li {
-    padding: 10px;
-    background: var(--bg-app);
-    border: 1px dashed var(--border-focus);
-    border-radius: var(--radius-sm);
-    margin-bottom: 8px;
+    padding: 12px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-main);
+    border-radius: var(--radius-md);
+    margin-bottom: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    
+    /* Animation state */
+    opacity: 0;
+    transform: translateX(20px);
+    transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.provenance-list li.visible {
+    opacity: 1;
+    transform: translateX(0);
+}
     font-size: 11px;
     color: var(--fg-dim);
     line-height: 1.4;

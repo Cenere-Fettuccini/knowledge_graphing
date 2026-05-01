@@ -27,17 +27,6 @@ MOCK_GRAPH = {
     }
 }
 
-MOCK_NODE_DETAILS = {
-    "b1": {
-        "node": MOCK_GRAPH["nodes"][4],
-        "beliefs": [],
-        "tasks": [],
-        "connections": [
-            {"target": "Rust", "type": "ABOUT"}
-        ]
-    }
-}
-
 @router.get("/graph/overview")
 async def get_overview():
     """Returns the full graph overview (mocked)."""
@@ -46,12 +35,35 @@ async def get_overview():
 @router.get("/graph/node/{node_id}")
 async def get_node_detail(node_id: str):
     """Returns details for a specific node (mocked)."""
-    return MOCK_NODE_DETAILS.get(node_id, {
-        "node": next((n for n in MOCK_GRAPH["nodes"] if n["id"] == node_id), None),
-        "beliefs": [],
-        "tasks": [],
-        "connections": []
-    })
+    node = next((n for n in MOCK_GRAPH["nodes"] if n["id"] == node_id), None)
+    if not node:
+        return {"node": None, "connections": []}
+    
+    connections = []
+    for edge in MOCK_GRAPH["edges"]:
+        if edge["source"] == node_id:
+            target = next((n for n in MOCK_GRAPH["nodes"] if n["id"] == edge["target"]), None)
+            connections.append({
+                "id": edge["target"],
+                "target": target["name"] if target else edge["target"],
+                "target_label": target["label"] if target else "Unknown",
+                "type": edge["type"],
+                "direction": "out"
+            })
+        elif edge["target"] == node_id:
+            source = next((n for n in MOCK_GRAPH["nodes"] if n["id"] == edge["source"]), None)
+            connections.append({
+                "id": edge["source"],
+                "target": source["name"] if source else edge["source"],
+                "target_label": source["label"] if source else "Unknown",
+                "type": edge["type"],
+                "direction": "in"
+            })
+            
+    return {
+        "node": node,
+        "connections": connections
+    }
 
 @router.get("/system/status")
 async def get_system_status():

@@ -168,8 +168,8 @@
         // Project all nodes
         const projected = graphData.nodes.map(n => ({ p: project(n), n }));
 
-        // Sort by z (painter's order, back to front)
-        const sorted = [...projected].sort((a, b) => a.p.z - b.p.z);
+        // Sort by z (painter's order, back to front: largest Z is back)
+        const sorted = [...projected].sort((a, b) => b.p.z - a.p.z);
 
         // ── Edges ────────────────────────────────────────────────────────────────
         graphData.edges.forEach(e => {
@@ -465,35 +465,8 @@
             if (dragging) return;
             const hit = hitTest(e.clientX, e.clientY);
             if (hit) {
-                activeNodeId = hit.id;
+                focusNode(hit.id);
                 if (typeof Panel !== 'undefined') Panel.loadNode(hit.id);
-                
-                // Bring node forward and center
-                let v_curr = mulMV(transformMatrix, [hit.x3d, hit.y3d, hit.z3d]);
-                let mag = Math.hypot(v_curr[0], v_curr[1], v_curr[2]);
-                if (mag > 0.001) {
-                    let n1 = [v_curr[0]/mag, v_curr[1]/mag, v_curr[2]/mag];
-                    let crossX = -n1[1], crossY = n1[0], crossZ = 0; // cross with [0,0,-1]
-                    let sin_t = Math.hypot(crossX, crossY, crossZ);
-                    let cos_t = -n1[2];
-                    
-                    let R_delta = [[1,0,0], [0,1,0], [0,0,1]];
-                    if (sin_t > 0.001) {
-                        let ax = crossX / sin_t, ay = crossY / sin_t, az = crossZ / sin_t;
-                        let v = 1 - cos_t;
-                        R_delta = [
-                            [ cos_t + ax*ax*v, ax*ay*v - az*sin_t, ax*az*v + ay*sin_t ],
-                            [ ay*ax*v + az*sin_t, cos_t + ay*ay*v, ay*az*v - ax*sin_t ],
-                            [ az*ax*v - ay*sin_t, az*ay*v + ax*sin_t, cos_t + az*az*v ]
-                        ];
-                    } else if (cos_t < 0) {
-                        R_delta = [[1,0,0], [0,-1,0], [0,0,-1]]; // 180 flip
-                    }
-                    
-                    targetMatrix = mulMM(R_delta, transformMatrix);
-                    targetFov = Math.max(500, fov); // Bring it a bit closer too
-                    isAnimating = true;
-                }
             } else {
                 // Clicked empty space
                 activeNodeId = null;
@@ -532,6 +505,42 @@
         // Start render loop
         requestAnimationFrame(tick);
     }
+
+    function focusNode(nodeId) {
+        const node = graphData.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+        
+        activeNodeId = node.id;
+        
+        // Bring node forward and center
+        let v_curr = mulMV(transformMatrix, [node.x3d, node.y3d, node.z3d]);
+        let mag = Math.hypot(v_curr[0], v_curr[1], v_curr[2]);
+        if (mag > 0.001) {
+            let n1 = [v_curr[0]/mag, v_curr[1]/mag, v_curr[2]/mag];
+            let crossX = -n1[1], crossY = n1[0], crossZ = 0; // cross with [0,0,-1]
+            let sin_t = Math.hypot(crossX, crossY, crossZ);
+            let cos_t = -n1[2];
+            
+            let R_delta = [[1,0,0], [0,1,0], [0,0,1]];
+            if (sin_t > 0.001) {
+                let ax = crossX / sin_t, ay = crossY / sin_t, az = crossZ / sin_t;
+                let v = 1 - cos_t;
+                R_delta = [
+                    [ cos_t + ax*ax*v, ax*ay*v - az*sin_t, ax*az*v + ay*sin_t ],
+                    [ ay*ax*v + az*sin_t, cos_t + ay*ay*v, ay*az*v - ax*sin_t ],
+                    [ az*ax*v - ay*sin_t, az*ay*v + ax*sin_t, cos_t + az*az*v ]
+                ];
+            } else if (cos_t < 0) {
+                R_delta = [[1,0,0], [0,-1,0], [0,0,-1]]; // 180 flip
+            }
+            
+            targetMatrix = mulMM(R_delta, transformMatrix);
+            targetFov = Math.max(550, fov); // Bring it significantly closer
+            isAnimating = true;
+        }
+    }
+
+    window.GraphManager = { focusNode };
 
     document.addEventListener('DOMContentLoaded', initGraph);
 
