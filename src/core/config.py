@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # ── LLM (placeholder — not wired yet) ─────────────────────────────────────
     google_api_key: str = ""
-    llm_model: str = "gemini-2.5-pro"
+    llm_model: str = "models/gemini-2.5-flash"
     llm_temperature: float = 0.7
 
     # ── Local LLM (LM Studio — optional) ─────────────────────────────────────
