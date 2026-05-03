@@ -13,6 +13,16 @@ class MemoryManager:
         self.chroma = ChromaStore(persist_path=persist_path)
         # Neo4j store will be added in Step 5
 
+    def status(self) -> dict:
+        """Probe all memory backends and return live health info."""
+        info = {"chroma": "offline", "neo4j": "not configured"}
+        try:
+            count = self.chroma.count()
+            info["chroma"] = f"online ({count} memories)"
+        except Exception as e:
+            info["chroma"] = f"error ({type(e).__name__})"
+        return info
+
     def store(self, text: str, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
         """Store a conversation turn with metadata."""

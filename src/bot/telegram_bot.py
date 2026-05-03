@@ -32,6 +32,8 @@ from telegram.ext import (
 )
 
 from src.core.config import settings
+from src.core.agent import Agent
+from src.memory.manager import MemoryManager
 from src.bot.messages import (
     AGENT_ERROR_TEXT,
     HELP_TEXT,
@@ -213,6 +215,8 @@ class TelegramBot:
 
     def __init__(self) -> None:
         self._sessions = SessionStore(persist_path=settings.session_store_path)
+        self._memory = MemoryManager()
+        self._agent = Agent(memory=self._memory)
         self._app = (
             Application.builder()
             .token(settings.telegram_bot_token)
@@ -395,11 +399,12 @@ class TelegramBot:
         user_id = str(update.effective_user.id)
         session_id, turn_count = self._sessions.get_session(user_id)
 
+        health = self._agent.status()
         await update.message.reply_text(
             STATUS_TEXT.format(
-                agent_status="not connected",
-                memory_status="not connected",
-                graph_status="not connected",
+                agent_status=health["llm"],
+                memory_status=health["memory"]["chroma"],
+                graph_status=health["memory"]["neo4j"],
                 session_id=session_id[:8],
                 turn_count=turn_count,
             ),
@@ -429,11 +434,10 @@ class TelegramBot:
         await update.message.chat.send_action(ChatAction.TYPING)
 
         try:
-            # ── Placeholder: echo reply ──────────────────────────────────
-            # This will be replaced by the LangGraph agent in Step 4.
-            reply = self._process_message(user_id, text)
+            # Agent handles: retrieve context → generate → store to ChromaDB
+            reply = self._agent.process_message(user_id, text, session_id)
 
-            # Store both sides in the session history buffer
+            # Also keep the lightweight session history buffer in sync
             self._sessions.add_to_history(user_id, "user", text, session_id)
             self._sessions.add_to_history(user_id, "assistant", reply, session_id)
             self._sessions.advance_turn(user_id)
@@ -444,18 +448,6 @@ class TelegramBot:
             logger.exception("Message handling failed for user_id=%s", user_id)
             await update.message.reply_text(AGENT_ERROR_TEXT)
 
-    def _process_message(self, user_id: str, text: str) -> str:
-        """
-        Placeholder message processor — returns an echo response.
-
-        This is the single integration point that will be swapped out
-        for the real Agent Core. Everything else in the bot stays the same.
-        """
-        session_id, turn = self._sessions.get_session(user_id)
-        return (
-            f"🔁 Echo: {text}\n\n"
-            f"📎 Session: `{session_id[:8]}` • Turn: {turn}"
-        )
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
