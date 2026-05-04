@@ -8,12 +8,18 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from abc import ABC, abstractmethod
 
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import ToolMessage
+
 from src.core.config import settings
 from src.core.prompts import SYSTEM_PROMPT, CONTEXT_BLOCK, HISTORY_BLOCK
 from src.memory.manager import MemoryManager
 from src.core.analyzer import TaskAnalyzer
 from src.core.privacy import PrivacyFilter
 from src.core.router import llm_router, ModelSpec
+from src.core.state import AgentState
+from src.core.tools import tools
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +70,9 @@ class Agent(BaseAgent):
         self._health_cache = {}
         self._last_health_check = None
         self._health_ttl_seconds = 300  # 5 minutes
+        
+        # Build the reasoning graph
+        self.graph = self._build_graph()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -108,64 +117,37 @@ class Agent(BaseAgent):
 
     def process_message(self, user_id: str, text: str, session_id: str) -> str:
         """
-        Intelligent agent loop: redact → analyze → route → retrieve → generate → store.
+        Runs the autonomous LangGraph loop: redact → analyze → reason [→ tools → reason ...]
         """
-        # 1. Privacy Protection
-        safe_text = self.privacy.redact(text)
-        
-        # 2. Task Analysis
-        task_type = self.analyzer.classify(safe_text)
-        logger.info("Task classified as: %s", task_type)
-        
-        # 3. Routing
-        spec = self.router.get_best_model(task_type)
-        logger.info("Routing to model: %s (Provider: %s)", spec.model_id, spec.provider)
-        
-        # 4. Context Retrieval
-        health = self.status(force=False)
-        history_items = []
-        rag_items = []
+        # Initial state
+        initial_state = {
+            "messages": [HumanMessage(content=text)],
+            "task_type": "QA",
+            "is_redacted": False,
+            "session_id": session_id,
+            "headroom": 1.0
+        }
         
         try:
-            if "online" in health["memory"].get("chroma", ""):
-                history_items = self.memory.get_history(session_id, limit=settings.context_window_turns)
-                rag_items = self.memory.search(safe_text, k=settings.rag_top_k, session_id=None)
-            else:
-                logger.warning("Memory (Chroma) is offline, proceeding without context.")
-        except Exception as e:
-            logger.error("Failed to retrieve context: %s", e)
-
-        # 5. Build messages
-        messages = self._build_messages(safe_text, history_items, rag_items)
-
-        # 6. Generate
-        if "online" not in health["llm"] and spec.provider == "google":
-             # If Google is offline but we routed to it, we might want to fallback to local immediately
-             if spec.model_id != "local-slm":
-                 logger.warning("Google LLM offline, falling back to local SLM.")
-                 spec = self.router.get_best_model("local-slm")
-
-        try:
-            llm = self._get_llm_instance(spec)
-            response = llm.invoke(messages)
-            reply = response.content
+            # Execute graph
+            final_state = self.graph.invoke(initial_state)
             
-            # Track usage
-            self.router.track_usage(spec.model_id, api_key=spec.api_key)
-        except Exception as e:
-            logger.error("Generation failed with %s: %s", spec.model_id, e)
-            return "I'm sorry, I encountered an error while processing your request."
-
-        # 7. Store interaction (use original text for memory, safe_text for RAG was already used)
-        ts = datetime.now(timezone.utc).isoformat()
-        try:
+            # Extract final response
+            last_msg = final_state["messages"][-1]
+            reply = last_msg.content
+            
+            # 7. Store interaction
+            ts = datetime.now(timezone.utc).isoformat()
+            health = self.status(force=False)
             if "online" in health["memory"].get("chroma", ""):
                 self.memory.store(text, role="user", session_id=session_id, timestamp=ts)
                 self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts)
+                
+            return reply
+            
         except Exception as e:
-            logger.error("Failed to store interaction: %s", e)
-
-        return reply
+            logger.error("Agent loop failed: %s", e)
+            return "I'm sorry, I encountered an internal error while processing that."
 
     def _get_llm_instance(self, spec: ModelSpec):
         """Get or create a LangChain LLM instance for the given spec."""
@@ -203,47 +185,93 @@ class Agent(BaseAgent):
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _build_messages(
-        self,
-        user_text: str,
-        history_items: list[dict],
-        rag_items: list[dict],
-    ) -> list:
-        """Assemble the LLM message list: system + context + history + user."""
-        messages = []
+    # ── Graph Construction ───────────────────────────────────────────────────
 
-        # System prompt
+    def _build_graph(self):
+        """Construct the LangGraph state machine."""
+        workflow = StateGraph(AgentState)
+        
+        # Define nodes
+        workflow.add_node("redact", self._node_redact)
+        workflow.add_node("analyze", self._node_analyze)
+        workflow.add_node("reason", self._node_reason)
+        workflow.add_node("tools", ToolNode(tools))
+        
+        # Define edges
+        workflow.set_entry_point("redact")
+        workflow.add_edge("redact", "analyze")
+        workflow.add_edge("analyze", "reason")
+        
+        # Conditional edge for ReAct loop
+        workflow.add_conditional_edges(
+            "reason",
+            self._should_continue,
+            {
+                "continue": "tools",
+                "end": END
+            }
+        )
+        
+        workflow.add_edge("tools", "reason")
+        
+        return workflow.compile()
+
+    def _node_redact(self, state: AgentState):
+        """Filter PII before anything else."""
+        last_msg = state["messages"][-1]
+        safe_text = self.privacy.redact(last_msg.content)
+        return {
+            "messages": [HumanMessage(content=safe_text)],
+            "is_redacted": True
+        }
+
+    def _node_analyze(self, state: AgentState):
+        """Classify task type to guide routing."""
+        last_msg = state["messages"][-1]
+        task_type = self.analyzer.classify(last_msg.content)
+        return {"task_type": task_type}
+
+    def _node_reason(self, state: AgentState):
+        """Pick a model and generate reasoning/response."""
+        # Get best model based on current task type and headroom
+        spec = self.router.get_best_model(state["task_type"])
+        llm = self._get_llm_instance(spec)
+        
+        # Bind tools to the model
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # Build prompt context (RAG + History)
+        last_msg = state["messages"][-1]
+        history = self.memory.get_history(state["session_id"], limit=settings.context_window_turns)
+        rag = self.memory.search(last_msg.content, k=settings.rag_top_k)
+        
+        system_msg = self._build_system_message(history, rag)
+        full_messages = [system_msg] + list(state["messages"])
+        
+        response = llm_with_tools.invoke(full_messages)
+        
+        # Track usage
+        self.router.track_usage(spec.model_id, api_key=spec.api_key)
+        
+        return {"messages": [response]}
+
+    def _should_continue(self, state: AgentState):
+        """Decide if we need to call tools or end the turn."""
+        last_msg = state["messages"][-1]
+        if last_msg.tool_calls:
+            return "continue"
+        return "end"
+
+    def _build_system_message(self, history, rag):
+        """Assemble the system prompt for the current turn."""
         system_parts = [SYSTEM_PROMPT]
-
-        # RAG memories (cross-session semantic matches)
-        if rag_items:
-            mem_lines = []
-            for m in rag_items:
-                ts = m["metadata"].get("timestamp", "unknown time")
-                role = m["metadata"].get("role", "unknown")
-                mem_lines.append(f"[{ts}] ({role}): {m['text']}")
+        
+        if rag:
+            mem_lines = [f"[{m['metadata'].get('timestamp')}] {m['text']}" for m in rag]
             system_parts.append(CONTEXT_BLOCK.format(memories="\n".join(mem_lines)))
-
-        # Recent conversation history (current session)
-        if history_items:
-            hist_lines = []
-            for h in history_items:
-                role = h["metadata"].get("role", "unknown")
-                hist_lines.append(f"{role}: {h['text']}")
+            
+        if history:
+            hist_lines = [f"{h['metadata'].get('role')}: {h['text']}" for h in history]
             system_parts.append(HISTORY_BLOCK.format(history="\n".join(hist_lines)))
-
-        messages.append(SystemMessage(content="\n\n".join(system_parts)))
-
-        # Replay recent history as proper message objects for better LLM understanding
-        if history_items:
-            for h in history_items[-6:]:  # Last 6 turns as message objects
-                role = h["metadata"].get("role", "user")
-                if role == "user":
-                    messages.append(HumanMessage(content=h["text"]))
-                else:
-                    messages.append(AIMessage(content=h["text"]))
-
-        # Current user message
-        messages.append(HumanMessage(content=user_text))
-
-        return messages
+            
+        return SystemMessage(content="\n\n".join(system_parts))
