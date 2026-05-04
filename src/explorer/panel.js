@@ -276,7 +276,12 @@ const StatusManager = {
         this.chromaBadge = document.getElementById('status-chroma');
         this.agentBadge = document.getElementById('status-agent');
         
-        this.btn.addEventListener('click', () => this.fetchStatus());
+        this.btn.addEventListener('click', async () => {
+            await Promise.all([
+                this.fetchStatus(),
+                window.GraphManager?.reload?.()
+            ]);
+        });
         
         // Initial fetch
         this.fetchStatus();
@@ -304,6 +309,22 @@ const StatusManager = {
         this.updateBadge(this.neo4jBadge, data.neo4j, data.details?.neo4j);
         this.updateBadge(this.chromaBadge, data.chroma, data.details?.chroma);
         this.updateBadge(this.agentBadge, data.agent, `System Overall: ${data.status}`);
+        
+        // Render Quota Bars
+        const quotaList = document.getElementById('quotaList');
+        if (quotaList && data.quota) {
+            quotaList.innerHTML = data.quota.map(q => `
+                <div class="quota-item">
+                    <div class="quota-label">
+                        <span>${q.model}</span>
+                        <span class="dim">${q.headroom}%</span>
+                    </div>
+                    <div class="progress-bg">
+                        <div class="progress-bar" style="width: ${q.headroom}%"></div>
+                    </div>
+                </div>
+            `).join('');
+        }
         
         setTimeout(() => {
             svg.style.transition = 'none';

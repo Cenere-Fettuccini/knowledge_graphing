@@ -386,33 +386,33 @@
         resize();
         new ResizeObserver(resize).observe(wrap);
 
-        // ── Fetch data ──────────────────────────────────────────────────────────
-        let data = { nodes: [], edges: [], stats: null };
-        try { data = await API.getOverview(); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
+        // ── Data Loading ────────────────────────────────────────────────────────
+        async function reload() {
+            let data = { nodes: [], edges: [], stats: null };
+            try { data = await API.getOverview(); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
 
-        graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
+            graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
+            const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
+            graphData.edges = (data.edges || []).reduce((acc, e) => {
+                const si = idxByID.get(e.source ?? e.from);
+                const ti = idxByID.get(e.target ?? e.to);
+                if (si !== undefined && ti !== undefined) acc.push({ si, ti, type: e.type });
+                return acc;
+            }, []);
 
-        // Build index map for edge references (id → array index)
-        const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
+            placeNodes(graphData.nodes);
+            buildTaxonomy(graphData.nodes);
 
-        graphData.edges = (data.edges || []).reduce((acc, e) => {
-            const si = idxByID.get(e.source ?? e.from);
-            const ti = idxByID.get(e.target ?? e.to);
-            if (si !== undefined && ti !== undefined) acc.push({ si, ti, type: e.type });
-            return acc;
-        }, []);
-
-        // Assign 3D positions
-        placeNodes(graphData.nodes);
-
-        // Build taxonomy sidebar
-        buildTaxonomy(graphData.nodes);
-
-        // Stats bar
-        if (data.stats) {
-            const el = document.getElementById('topStats');
-            if (el) el.textContent = `${data.stats.nodes} Nodes · ${data.stats.edges} Connections`;
+            if (data.stats) {
+                const el = document.getElementById('topStats');
+                const n = data.stats.nodes ?? 0;
+                const e = data.stats.edges ?? 0;
+                if (el) el.textContent = `${n} Nodes · ${e} Connections`;
+            }
         }
+        window.GraphManager = { focusNode, reload };
+
+        await reload();
 
         // ── Mouse / touch events ────────────────────────────────────────────────
         wrap.addEventListener('mousedown', e => {
@@ -540,7 +540,6 @@
         }
     }
 
-    window.GraphManager = { focusNode };
 
     document.addEventListener('DOMContentLoaded', initGraph);
 

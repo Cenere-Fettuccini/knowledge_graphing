@@ -91,8 +91,8 @@ class Neo4jStore:
 
     def get_graph_overview(self, limit: int = 100) -> dict:
         """Returns nodes and edges formatted for the 3D Explorer."""
-        if not self.driver:
-            return {"nodes": [], "edges": [], "stats": {}}
+        if not self.driver and not self.verify_connection():
+            return {"nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
             
         query = """
         MATCH (n)

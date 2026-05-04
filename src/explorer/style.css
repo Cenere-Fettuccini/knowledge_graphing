@@ -638,6 +638,41 @@ li {
     /* Hide brand on very small screens to save space */
 }
 
+/* ── QUOTA BARS ────────────────────────────────────────── */
+.status-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 12px 0;
+}
+
+.quota-item {
+    margin-bottom: 10px;
+}
+
+.quota-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    margin-bottom: 4px;
+}
+
+.progress-bg {
+    height: 4px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    background: var(--color-belief);
+    transition: width 0.3s ease;
+}
+
+.light-theme .progress-bg {
+    background: rgba(0,0,0,0.05);
+}
+
 #graphCanvas canvas {
     position: absolute;
     top: 0;
