@@ -58,5 +58,24 @@ def get_current_time():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return f"The current local time is {now}"
 
+@tool
+def create_task(title: str, due_date: str = None, priority: str = "medium"):
+    """
+    Create a new task or goal for the user.
+    Example: title="Finish project", due_date="2024-05-10", priority="high"
+    """
+    logger.info(f"Tool Call: create_task -> {title}")
+    try:
+        properties = {
+            "status": "TODO",
+            "due_date": due_date,
+            "priority": priority,
+            "created_at": datetime.now().isoformat()
+        }
+        node_id = memory_manager.neo4j.add_node("Task", title, properties)
+        return f"Task created: '{title}' (ID: {node_id})"
+    except Exception as e:
+        return f"Error creating task: {str(e)}"
+
 # List of tools to be used by the agent
-tools = [search_knowledge_graph, store_knowledge, search_memories, get_current_time]
+tools = [search_knowledge_graph, store_knowledge, search_memories, get_current_time, create_task]

@@ -249,6 +249,39 @@ body {
     color: var(--fg-primary);
 }
 
+/* --- Tasks --- */
+.task-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    transition: background 0.2s;
+}
+.task-item:hover {
+    background: rgba(255,255,255,0.02);
+}
+.task-info {
+    display: flex;
+    flex-direction: column;
+}
+.task-title {
+    font-size: 0.95rem;
+    color: var(--text);
+}
+.task-meta {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+.task-status {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 4px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+}
+
 .status-badge {
     padding: 3px 8px;
     border-radius: 12px;

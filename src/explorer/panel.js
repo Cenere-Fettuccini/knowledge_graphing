@@ -341,8 +341,45 @@ const StatusManager = {
     }
 };
 
+const TaskManager = {
+    init() {
+        this.container = document.getElementById('activeTasks');
+        this.fetchTasks();
+        setInterval(() => this.fetchTasks(), 60000); // Every minute
+    },
+
+    async fetchTasks() {
+        try {
+            const res = await fetch('/api/tasks/active');
+            const tasks = await res.json();
+            this.render(tasks);
+        } catch (e) {
+            console.error("Failed to fetch tasks", e);
+        }
+    },
+
+    render(tasks) {
+        if (!this.container) return;
+        if (!tasks || tasks.length === 0) {
+            this.container.innerHTML = '<div class="dim center" style="padding: 20px;">No active tasks.</div>';
+            return;
+        }
+
+        this.container.innerHTML = tasks.map(t => `
+            <div class="task-item">
+                <div class="task-info">
+                    <span class="task-title">${t.name}</span>
+                    <span class="task-meta">${t.priority || 'medium'} · ${t.due_date || 'No date'}</span>
+                </div>
+                <div class="task-status">${t.status || 'TODO'}</div>
+            </div>
+        `).join('');
+    }
+};
+
 document.addEventListener('DOMContentLoaded', () => {
     Panel.init();
     ThemeManager.init();
     StatusManager.init();
+    TaskManager.init();
 });

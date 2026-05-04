@@ -14,6 +14,13 @@ async def get_node_detail(node_id: str):
     """Returns details for a specific node from Neo4j."""
     return memory_manager.neo4j.get_node_detail(node_id)
 
+@router.get("/tasks/active")
+async def get_active_tasks():
+    """Returns all active tasks from Neo4j."""
+    overview = memory_manager.neo4j.get_graph_overview(limit=100)
+    tasks = [n for n in overview["nodes"] if n["label"] == "Task"]
+    return tasks
+
 @router.get("/system/status")
 async def get_system_status():
     """Returns the health status of backend systems in a frontend-friendly format."""
