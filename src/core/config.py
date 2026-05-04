@@ -5,6 +5,7 @@ Every module that needs configuration imports the singleton:
     from src.core.config import settings
 """
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     allowed_user_id: str  # comma-separated list of Telegram user IDs
 
     # ── LLM ───────────────────────────────────────────────────────────────────
-    google_api_key: str = ""
+    google_api_keys: str = Field(default="", validation_alias="google_api_key")
     llm_model: str = "models/gemini-2.5-flash"
     llm_temperature: float = 0.7
 
@@ -43,11 +44,25 @@ class Settings(BaseSettings):
     # ── Derived helpers ───────────────────────────────────────────────────────
 
     @property
+    def google_api_key(self) -> str:
+        """Backward compatibility for singular key access."""
+        return self.api_keys[0] if self.api_keys else ""
+
+    @property
+    def api_keys(self) -> list[str]:
+        """Parse the comma-separated API keys into a list."""
+        return [k.strip() for k in self.google_api_keys.split(",") if k.strip()]
+
+    @property
     def allowed_user_ids(self) -> set[str]:
         """Parse the comma-separated whitelist into a set of string IDs."""
         return {uid.strip() for uid in self.allowed_user_id.split(",") if uid.strip()}
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env", 
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
 
 
 settings = Settings()
