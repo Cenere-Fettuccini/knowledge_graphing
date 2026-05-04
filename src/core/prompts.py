@@ -23,3 +23,9 @@ HISTORY_BLOCK = """\
 {history}
 </recent_conversation>
 """
+
+ENTITY_BLOCK = """\
+<knowledge_graph_entities>
+{entities}
+</knowledge_graph_entities>
+"""

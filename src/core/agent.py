@@ -20,6 +20,7 @@ from src.core.privacy import PrivacyFilter
 from src.core.router import llm_router, ModelSpec
 from src.core.state import AgentState
 from src.core.tools import tools
+from src.core.context import context_manager
 
 logger = logging.getLogger(__name__)
 
@@ -240,12 +241,19 @@ class Agent(BaseAgent):
         # Bind tools to the model
         llm_with_tools = llm.bind_tools(tools)
         
-        # Build prompt context (RAG + History)
+        # Build context using the new ContextManager
         last_msg = state["messages"][-1]
-        history = self.memory.get_history(state["session_id"], limit=settings.context_window_turns)
-        rag = self.memory.search(last_msg.content, k=settings.rag_top_k)
+        context = context_manager.assemble_context(
+            query=last_msg.content,
+            session_id=state["session_id"],
+            task_type=state["task_type"]
+        )
         
-        system_msg = self._build_system_message(history, rag)
+        system_msg = self._build_system_message(
+            context["history"], 
+            context["rag"],
+            context["entities"]
+        )
         full_messages = [system_msg] + list(state["messages"])
         
         response = llm_with_tools.invoke(full_messages)
@@ -262,10 +270,19 @@ class Agent(BaseAgent):
             return "continue"
         return "end"
 
-    def _build_system_message(self, history, rag):
+    def _build_system_message(self, history, rag, entities):
         """Assemble the system prompt for the current turn."""
+        from src.core.prompts import ENTITY_BLOCK
         system_parts = [SYSTEM_PROMPT]
         
+        if entities:
+            ent_lines = []
+            for e in entities:
+                n = e["node"]
+                conn_list = [f"{c['type']} -> {c['target']} ({c['target_label']})" for c in e["connections"]]
+                ent_lines.append(f"ENTITY: {n['name']} ({n['label']})\nFacts: {n.get('description', 'N/A')}\nRelations: {', '.join(conn_list)}")
+            system_parts.append(ENTITY_BLOCK.format(entities="\n\n".join(ent_lines)))
+
         if rag:
             mem_lines = [f"[{m['metadata'].get('timestamp')}] {m['text']}" for m in rag]
             system_parts.append(CONTEXT_BLOCK.format(memories="\n".join(mem_lines)))
