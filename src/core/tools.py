@@ -48,5 +48,15 @@ def search_memories(query: str):
     except Exception as e:
         return f"Error searching memories: {str(e)}"
 
+@tool
+def get_current_time():
+    """
+    Returns the current local date and time.
+    Use this when the user asks about the time, date, or relative events (e.g., 'tomorrow', 'next week').
+    """
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return f"The current local time is {now}"
+
 # List of tools to be used by the agent
-tools = [search_knowledge_graph, store_knowledge, search_memories]
+tools = [search_knowledge_graph, store_knowledge, search_memories, get_current_time]
