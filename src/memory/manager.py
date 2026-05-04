@@ -1,6 +1,7 @@
 """Unified facade over all memory stores — the only import other modules need."""
 
 from src.memory.stores.chroma_store import ChromaStore
+from src.memory.stores.neo4j_store import Neo4jStore
 
 
 class MemoryManager:
@@ -11,16 +12,26 @@ class MemoryManager:
 
     def __init__(self, persist_path=None):
         self.chroma = ChromaStore(persist_path=persist_path)
-        # Neo4j store will be added in Step 5
+        self.neo4j = Neo4jStore()
 
     def status(self) -> dict:
         """Probe all memory backends and return live health info."""
-        info = {"chroma": "offline", "neo4j": "not configured"}
+        info = {"chroma": "offline", "neo4j": "offline"}
+        
+        # ChromaDB check
         try:
             count = self.chroma.count()
             info["chroma"] = f"online ({count} memories)"
         except Exception as e:
             info["chroma"] = f"error ({type(e).__name__})"
+            
+        # Neo4j check
+        try:
+            count = self.neo4j.count_nodes()
+            info["neo4j"] = f"online ({count} nodes)"
+        except Exception as e:
+            info["neo4j"] = f"error ({type(e).__name__})"
+            
         return info
 
     def store(self, text: str, role: str, session_id: str,

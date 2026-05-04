@@ -10,8 +10,7 @@ This module is the *only* thing that talks to Telegram. It handles:
   - Typing indicators and error recovery
 
 The bot does NOT contain any AI logic. It delegates message processing
-to an agent interface (currently a placeholder echo). When the Agent Core
-is implemented in Step 4, only the `_process_message` method needs to change.
+to the LangGraph Agent Core.
 """
 
 import json
@@ -210,7 +209,7 @@ class TelegramBot:
     Telegram bot interface for AIManager.
 
     Handles all user interaction — commands, text messages, auth.
-    Delegates AI processing to an agent (currently placeholder echo).
+    Delegates AI processing to the LangGraph Agent Core.
     """
 
     def __init__(self) -> None:

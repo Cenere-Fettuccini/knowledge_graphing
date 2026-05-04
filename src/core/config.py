@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     allowed_user_id: str  # comma-separated list of Telegram user IDs
 
-    # ── LLM (placeholder — not wired yet) ─────────────────────────────────────
+    # ── LLM ───────────────────────────────────────────────────────────────────
     google_api_key: str = ""
     llm_model: str = "models/gemini-2.5-flash"
     llm_temperature: float = 0.7
@@ -27,16 +27,16 @@ class Settings(BaseSettings):
     # ── Session persistence ───────────────────────────────────────────────────
     session_store_path: str = "./data/sessions.json"
 
-    # ── ChromaDB (placeholder) ────────────────────────────────────────────────
+    # ── ChromaDB ──────────────────────────────────────────────────────────────
     chroma_persist_dir: str = "./data/chroma"
     chroma_collection: str = "conversations"
 
-    # ── Neo4j (placeholder) ───────────────────────────────────────────────────
+    # ── Neo4j ─────────────────────────────────────────────────────────────────
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
 
-    # ── Agent (placeholder) ───────────────────────────────────────────────────
+    # ── Agent ─────────────────────────────────────────────────────────────────
     context_window_turns: int = 20
     rag_top_k: int = 5
 
