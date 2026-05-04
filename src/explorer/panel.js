@@ -299,11 +299,11 @@ const StatusManager = {
         svg.style.transition = 'transform 0.5s ease';
         svg.style.transform = 'rotate(180deg)';
         
-        const status = await API.getSystemStatus();
+        const data = await API.getSystemStatus();
         
-        this.updateBadge(this.neo4jBadge, status.neo4j);
-        this.updateBadge(this.chromaBadge, status.chroma);
-        this.updateBadge(this.agentBadge, status.agent);
+        this.updateBadge(this.neo4jBadge, data.neo4j, data.details?.neo4j);
+        this.updateBadge(this.chromaBadge, data.chroma, data.details?.chroma);
+        this.updateBadge(this.agentBadge, data.agent, `System Overall: ${data.status}`);
         
         setTimeout(() => {
             svg.style.transition = 'none';
@@ -311,9 +311,12 @@ const StatusManager = {
         }, 500);
     },
     
-    updateBadge(element, state) {
+    updateBadge(element, state, details) {
         element.className = `status-badge ${state}`;
         element.innerText = state.toUpperCase();
+        if (details) {
+            element.title = details;
+        }
     }
 };
 

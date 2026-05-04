@@ -15,9 +15,20 @@ async def get_node_detail(node_id: str):
 
 @router.get("/system/status")
 async def get_system_status():
-    """Returns the health status of backend systems."""
-    status = memory_manager.status()
-    # We do not ping the LLM here to save API costs on the 30s frontend polling interval
-    status["agent"] = "standby"
-    return status
+    """Returns the health status of backend systems in a frontend-friendly format."""
+    # We pull from memory_manager for the dashboard to avoid heavy LLM pings
+    health = memory_manager.status()
+    
+    # We return a format that graph explorer's panel.js expects:
+    # { "neo4j": "online", "chroma": "online", "agent": "online", "messages": {...} }
+    return {
+        "status": health["status"],
+        "neo4j": "online" if "online" in health["neo4j"] else "offline",
+        "chroma": "online" if "online" in health["chroma"] else "offline",
+        "agent": "online", # API is up
+        "details": {
+            "neo4j": health["neo4j"],
+            "chroma": health["chroma"]
+        }
+    }
 

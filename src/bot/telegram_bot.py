@@ -31,8 +31,7 @@ from telegram.ext import (
 )
 
 from src.core.config import settings
-from src.core.agent import Agent
-from src.memory.manager import MemoryManager
+from src.core.agent import Agent, BaseAgent
 from src.bot.messages import (
     AGENT_ERROR_TEXT,
     HELP_TEXT,
@@ -65,10 +64,6 @@ class SessionStore:
       - An active session_id (UUID4 string)
       - A turn counter for the current session
       - A list of named "pinned" sessions
-      - An in-memory conversation history buffer
-
-    This is intentionally simple — it will be replaced by the MemoryManager
-    facade once ChromaDB and Neo4j are wired in.
     """
 
     def __init__(self, persist_path: str | None = None) -> None:
@@ -110,7 +105,6 @@ class SessionStore:
                 "active_session": str(uuid.uuid4()),
                 "turn_index": 0,
                 "pinned": [],
-                "history": [],  # list of {role, text, timestamp, session_id}
             }
             self._save()
         return self._users[user_id]
@@ -172,34 +166,7 @@ class SessionStore:
         u["turn_index"] = 0
         self._save()
 
-    # ── History buffer ────────────────────────────────────────────────────
 
-    def add_to_history(
-        self,
-        user_id: str,
-        role: str,
-        text: str,
-        session_id: str,
-    ) -> None:
-        """Append a turn to the in-memory history buffer."""
-        u = self._ensure_user(user_id)
-        u["history"].append({
-            "role": role,
-            "text": text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_id": session_id,
-        })
-        # Cap at 200 entries to prevent unbounded growth
-        if len(u["history"]) > 200:
-            u["history"] = u["history"][-200:]
-        self._save()
-
-    def get_history(self, user_id: str, n: int = 15) -> list[dict[str, str]]:
-        """Return the last *n* history entries for the current session."""
-        u = self._ensure_user(user_id)
-        active = u["active_session"]
-        session_turns = [h for h in u["history"] if h["session_id"] == active]
-        return session_turns[-n:]
 
 
 # ── Telegram Bot ──────────────────────────────────────────────────────────────
@@ -214,8 +181,9 @@ class TelegramBot:
 
     def __init__(self) -> None:
         self._sessions = SessionStore(persist_path=settings.session_store_path)
-        self._memory = MemoryManager()
-        self._agent = Agent(memory=self._memory)
+        # The bot only talks to an abstract BaseAgent.
+        # This implementation can be swapped or modified easily.
+        self._agent: BaseAgent = Agent()
         self._app = (
             Application.builder()
             .token(settings.telegram_bot_token)
@@ -299,15 +267,19 @@ class TelegramBot:
             return await self._deny(update)
 
         user_id = str(update.effective_user.id)
-        turns = self._sessions.get_history(user_id, n=15)
+        session_id, _ = self._sessions.get_session(user_id)
+        
+        # Pull from the Agent (which pulls from the real memory store)
+        turns = self._agent.get_history(session_id, limit=15)
 
         if not turns:
             await update.message.reply_text(NO_HISTORY_TEXT)
             return
 
         lines = []
-        for t in turns:
-            prefix = "You" if t["role"] == "user" else "🤖"
+        # Agent history is newest-first, we want to show oldest-first for the user
+        for t in reversed(turns):
+            prefix = "You" if t["metadata"].get("role") == "user" else "🤖"
             lines.append(f"{prefix}: {t['text']}")
         history_str = "\n".join(lines)
 
@@ -398,10 +370,10 @@ class TelegramBot:
         user_id = str(update.effective_user.id)
         session_id, turn_count = self._sessions.get_session(user_id)
 
-        health = self._agent.status()
+        health = self._agent.status(force=True)
         await update.message.reply_text(
             STATUS_TEXT.format(
-                agent_status=health["llm"],
+                agent_status=f"{health['status']} (LLM: {health['llm']})",
                 memory_status=health["memory"]["chroma"],
                 graph_status=health["memory"]["neo4j"],
                 session_id=session_id[:8],
@@ -436,9 +408,8 @@ class TelegramBot:
             # Agent handles: retrieve context → generate → store to ChromaDB
             reply = self._agent.process_message(user_id, text, session_id)
 
-            # Also keep the lightweight session history buffer in sync
-            self._sessions.add_to_history(user_id, "user", text, session_id)
-            self._sessions.add_to_history(user_id, "assistant", reply, session_id)
+            # The bot no longer needs to store its own history buffer; 
+            # the Agent and MemoryManager handle it persistently.
             self._sessions.advance_turn(user_id)
 
             await update.message.reply_text(reply)

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+from abc import ABC, abstractmethod
+
 from src.core.config import settings
 from src.core.prompts import SYSTEM_PROMPT, CONTEXT_BLOCK, HISTORY_BLOCK
 from src.memory.manager import MemoryManager
@@ -13,7 +15,31 @@ from src.memory.manager import MemoryManager
 logger = logging.getLogger(__name__)
 
 
-class Agent:
+class BaseAgent(ABC):
+    """Abstract interface for the AIManager agent."""
+
+    @abstractmethod
+    def status(self, force: bool = False) -> dict:
+        """Return health status of the agent and its subsystems."""
+        pass
+
+    @abstractmethod
+    def process_message(self, user_id: str, text: str, session_id: str) -> str:
+        """Process a message and return the response."""
+        pass
+
+    @abstractmethod
+    def get_history(self, session_id: str, limit: int = 20) -> list[dict]:
+        """Retrieve recent conversation history for a session."""
+        pass
+
+    @abstractmethod
+    def clear_session(self, session_id: str) -> None:
+        """Wipe ephemeral memory for a specific session."""
+        pass
+
+
+class Agent(BaseAgent):
     """
     Memory-aware conversational agent.
 
@@ -28,20 +54,49 @@ class Agent:
             google_api_key=settings.google_api_key,
             temperature=settings.llm_temperature,
         )
+        self._health_cache = {}
+        self._last_health_check = None
+        self._health_ttl_seconds = 300  # 5 minutes
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def status(self) -> dict:
-        """Probe all subsystems and return live health info."""
-        info = {"llm": "offline", "memory": {}}
-        # LLM
+    def status(self, force: bool = False) -> dict:
+        """Probe all subsystems and return live health info. Caches results."""
+        now = datetime.now(timezone.utc)
+        if not force and self._last_health_check:
+            delta = (now - self._last_health_check).total_seconds()
+            if delta < self._health_ttl_seconds:
+                return self._health_cache
+
+        info = {
+            "status": "online",
+            "llm": "offline",
+            "memory": {}
+        }
+        
+        # LLM Probe
         try:
-            self.llm.invoke([HumanMessage(content="ping")])
-            info["llm"] = f"online ({settings.llm_model})"
+            if force or not self._health_cache:
+                self.llm.invoke([HumanMessage(content="ping")])
+                info["llm"] = "online"
+            else:
+                info["llm"] = self._health_cache.get("llm", "online")
         except Exception as e:
             info["llm"] = f"error ({type(e).__name__})"
-        # Memory
-        info["memory"] = self.memory.status()
+            info["status"] = "degraded"
+            
+        # Memory Probe
+        mem_health = self.memory.status()
+        info["memory"] = mem_health
+        
+        if mem_health["status"] != "online":
+            info["status"] = "degraded"
+            
+        if info["llm"] != "online" and mem_health["status"] == "offline":
+            info["status"] = "offline"
+        
+        self._health_cache = info
+        self._last_health_check = now
         return info
 
     def process_message(self, user_id: str, text: str, session_id: str) -> str:
@@ -50,23 +105,50 @@ class Agent:
         Returns the assistant's response text.
         """
         # 1. Retrieve context
-        history_items = self.memory.get_history(session_id, limit=settings.context_window_turns)
-        rag_items = self.memory.search(text, k=settings.rag_top_k, session_id=None)
+        # Use cached status check to avoid slow pings on every turn
+        health = self.status(force=False)
+        
+        history_items = []
+        rag_items = []
+        
+        try:
+            if "online" in health["memory"].get("chroma", ""):
+                history_items = self.memory.get_history(session_id, limit=settings.context_window_turns)
+                rag_items = self.memory.search(text, k=settings.rag_top_k, session_id=None)
+            else:
+                logger.warning("Memory (Chroma) is offline, proceeding without context.")
+        except Exception as e:
+            logger.error("Failed to retrieve context: %s", e)
 
         # 2. Build messages
         messages = self._build_messages(text, history_items, rag_items)
 
         # 3. Generate
         logger.info("Generating response for user_id=%s session=%s", user_id, session_id[:8])
+        if "online" not in health["llm"]:
+            return "I'm sorry, but my reasoning engine (LLM) is currently offline. Please try again in a moment."
+
         response = self.llm.invoke(messages)
         reply = response.content
 
         # 4. Store both turns
         ts = datetime.now(timezone.utc).isoformat()
-        self.memory.store(text, role="user", session_id=session_id, timestamp=ts)
-        self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts)
+        try:
+            if "online" in health["memory"].get("chroma", ""):
+                self.memory.store(text, role="user", session_id=session_id, timestamp=ts)
+                self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts)
+        except Exception as e:
+            logger.error("Failed to store interaction: %s", e)
 
         return reply
+
+    def get_history(self, session_id: str, limit: int = 20) -> list[dict]:
+        """Retrieve recent turns from the memory subsystem."""
+        return self.memory.get_history(session_id, limit=limit)
+
+    def clear_session(self, session_id: str) -> None:
+        """Signal the memory manager to wipe ephemeral state for this session."""
+        self.memory.clear_ephemeral(session_id=session_id)
 
     # ── Internals ─────────────────────────────────────────────────────────────
 

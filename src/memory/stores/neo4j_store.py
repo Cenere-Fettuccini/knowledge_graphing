@@ -16,13 +16,28 @@ class Neo4jStore:
         self._uri = uri or settings.neo4j_uri
         self._user = user or settings.neo4j_user
         self._password = password or settings.neo4j_password
-        
+        self.driver = None
+        self.verify_connection()
+
+    def verify_connection(self) -> bool:
+        """Attempt to reconnect if driver is missing or disconnected."""
+        if self.driver:
+            try:
+                self.driver.verify_connectivity()
+                return True
+            except Exception:
+                logger.warning("Neo4j driver lost connectivity. Attempting reset.")
+                self.driver.close()
+                self.driver = None
+
         try:
             self.driver = GraphDatabase.driver(self._uri, auth=(self._user, self._password))
             self.driver.verify_connectivity()
+            return True
         except Exception as e:
             logger.error("Failed to connect to Neo4j at %s: %s", self._uri, e)
             self.driver = None
+            return False
 
     def close(self):
         if self.driver:
@@ -195,12 +210,13 @@ class Neo4jStore:
 
     def count_nodes(self) -> int:
         """Quick check of database size for status reporting."""
-        if not self.driver:
-            raise ConnectionError("Neo4j driver not connected")
+        if not self.driver and not self.verify_connection():
+            raise ConnectionError("Neo4j driver not connected and could not reconnect")
             
         with self.driver.session() as session:
             result = session.run("MATCH (n) RETURN count(n) AS c")
-            return result.single()["c"]
+            record = result.single()
+            return record["c"] if record else 0
 
     def clear_database(self) -> None:
         """DANGER: Wipes the entire database. Used for tests."""
