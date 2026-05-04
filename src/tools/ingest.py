@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredMarkdownLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.memory.manager import memory_manager
 from src.core.config import settings
 
