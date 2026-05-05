@@ -270,6 +270,8 @@ const ThemeManager = {
 };
 
 const StatusManager = {
+    _prevNeo4j: null,  // Track previous state for transition detection
+
     init() {
         this.btn = document.getElementById('refreshStatusBtn');
         this.neo4jBadge = document.getElementById('status-neo4j');
@@ -310,6 +312,14 @@ const StatusManager = {
         this.updateBadge(this.chromaBadge, data.chroma, data.details?.chroma);
         this.updateBadge(this.agentBadge, data.agent, `System Overall: ${data.status}`);
         
+        // Auto-reload graph when Neo4j comes back online
+        if (this._prevNeo4j && this._prevNeo4j !== 'online' && data.neo4j === 'online') {
+            console.log('[StatusManager] Neo4j came online — reloading graph data');
+            window.GraphManager?.reload?.();
+            TaskManager?.fetchTasks?.();
+        }
+        this._prevNeo4j = data.neo4j;
+
         // Render Quota Bars
         const quotaList = document.getElementById('quotaList');
         if (quotaList && data.quota) {

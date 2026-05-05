@@ -24,7 +24,8 @@ async def get_active_tasks():
 @router.get("/system/status")
 async def get_system_status():
     """Returns the health status of backend systems in a frontend-friendly format."""
-    # We pull from memory_manager for the dashboard to avoid heavy LLM pings
+    # The status endpoint is explicitly for health checks — always use fresh data
+    memory_manager._health_cache_time = 0
     health = memory_manager.status()
     
     # Build quota summary for the frontend
