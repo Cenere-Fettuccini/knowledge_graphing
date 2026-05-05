@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import List, Dict, Any
 from langchain_core.tools import tool
 from src.memory.manager import memory_manager
@@ -12,12 +13,26 @@ def search_knowledge_graph(query: str):
     Use this when you need to understand existing connections or find structured data.
     """
     logger.info(f"Tool Call: search_knowledge_graph -> {query}")
-    # For now, we perform a simple keyword search on node names
-    # In the future, this can be upgraded to full Cypher generation
     try:
-        overview = memory_manager.neo4j.get_graph_overview(limit=50)
-        # Filter nodes locally for simple search
-        results = [n for n in overview["nodes"] if query.lower() in n.get("name", "").lower()]
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+        
+        # Use Cypher CONTAINS for server-side filtering
+        cypher = """
+        MATCH (n)
+        WHERE toLower(n.name) CONTAINS toLower($query)
+        RETURN n.id AS id, n.name AS name, labels(n)[0] AS label,
+               n.description AS description
+        LIMIT 10
+        """
+        results = []
+        with memory_manager.neo4j.driver.session() as session:
+            records = session.run(cypher, query=query)
+            for r in records:
+                results.append({
+                    "id": r["id"], "name": r["name"],
+                    "label": r["label"], "description": r["description"]
+                })
         return results if results else f"No entities found matching '{query}'"
     except Exception as e:
         return f"Error searching graph: {str(e)}"
@@ -43,7 +58,7 @@ def search_memories(query: str):
     """
     logger.info(f"Tool Call: search_memories -> {query}")
     try:
-        results = memory_manager.chroma.search(query, n_results=3)
+        results = memory_manager.search(query, k=3)
         return results if results else "No similar memories found."
     except Exception as e:
         return f"Error searching memories: {str(e)}"

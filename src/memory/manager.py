@@ -1,6 +1,7 @@
 """Unified facade over all memory stores — the only import other modules need."""
 
 import logging
+import time
 from src.memory.stores.chroma_store import ChromaStore
 from src.memory.stores.neo4j_store import Neo4jStore
 
@@ -16,9 +17,18 @@ class MemoryManager:
     def __init__(self, persist_path=None):
         self.chroma = ChromaStore(persist_path=persist_path)
         self.neo4j = Neo4jStore()
+        
+        # Cached health status to avoid pinging backends on every call
+        self._health_cache = {}
+        self._health_cache_time = 0
+        self._health_ttl = 60  # seconds
 
     def status(self) -> dict:
-        """Probe all memory backends and return live health info."""
+        """Probe all memory backends and return live health info. Cached for 60s."""
+        now = time.time()
+        if self._health_cache and (now - self._health_cache_time) < self._health_ttl:
+            return self._health_cache
+        
         info = {
             "status": "online",
             "chroma": "offline",
@@ -44,14 +54,20 @@ class MemoryManager:
             
         if "online" not in info["chroma"] and "online" not in info["neo4j"]:
             info["status"] = "offline"
-            
+        
+        self._health_cache = info
+        self._health_cache_time = now
         return info
+
+    def _is_chroma_available(self) -> bool:
+        """Lightweight check using cached health status."""
+        health = self.status()
+        return "online" in health.get("chroma", "")
 
     def store(self, text: str, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
         """Store a conversation turn with metadata."""
-        health = self.status()
-        if "online" not in health["chroma"]:
+        if not self._is_chroma_available():
             logger.error("ChromaDB is offline, cannot store memory.")
             return None
 
@@ -65,13 +81,14 @@ class MemoryManager:
             return self.chroma.add_memory(text, metadata)
         except Exception as e:
             logger.error("Failed to store memory in Chroma: %s", e)
+            # Invalidate cache on failure so next call re-checks
+            self._health_cache_time = 0
             return None
 
     def search(self, query: str, k: int = 5, session_id: str | None = None,
                 include_ephemeral: bool = True):
         """Semantic search across memories with optional filters."""
-        health = self.status()
-        if "online" not in health["chroma"]:
+        if not self._is_chroma_available():
             logger.warning("ChromaDB is offline, skipping semantic search.")
             return []
 
@@ -92,12 +109,12 @@ class MemoryManager:
             return self.chroma.query_memory(query, k=k, where=where)
         except Exception as e:
             logger.error("Chroma search failed: %s", e)
+            self._health_cache_time = 0
             return []
 
     def get_history(self, session_id: str, limit: int = 20):
         """Most recent turns for a session, newest-first."""
-        health = self.status()
-        if "online" not in health["chroma"]:
+        if not self._is_chroma_available():
             logger.warning("ChromaDB is offline, cannot retrieve history.")
             return []
             
@@ -105,6 +122,7 @@ class MemoryManager:
             return self.chroma.get_recent(n=limit, session_id=session_id)
         except Exception as e:
             logger.error("Failed to retrieve history from Chroma: %s", e)
+            self._health_cache_time = 0
             return []
 
     def clear_ephemeral(self, session_id: str | None = None):

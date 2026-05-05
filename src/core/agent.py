@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import Dict
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -10,13 +11,10 @@ from abc import ABC, abstractmethod
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import ToolMessage
 
 from src.core.config import settings
 from src.core.prompts import SYSTEM_PROMPT, CONTEXT_BLOCK, HISTORY_BLOCK
 from src.memory.manager import MemoryManager
-from src.core.analyzer import TaskAnalyzer
-from src.core.privacy import PrivacyFilter
 from src.core.router import llm_router, ModelSpec
 from src.core.state import AgentState
 from src.core.tools import tools
@@ -60,9 +58,7 @@ class Agent(BaseAgent):
     def __init__(self, memory: MemoryManager | None = None):
         self.memory = memory or MemoryManager()
         
-        # Subsystems for intelligent routing
-        self.analyzer = TaskAnalyzer()
-        self.privacy = PrivacyFilter()
+        # Router for intelligent model selection
         self.router = llm_router
         
         # Cache for instantiated LLM objects to avoid re-creating them every call
@@ -91,10 +87,12 @@ class Agent(BaseAgent):
             "memory": {}
         }
         
-        # LLM Probe
+        # LLM Probe — use a lightweight ping via the router's best model
         try:
             if force or not self._health_cache:
-                self.llm.invoke([HumanMessage(content="ping")])
+                spec = self.router.get_best_model("QA")
+                llm = self._get_llm_instance(spec)
+                llm.invoke([HumanMessage(content="ping")])
                 info["llm"] = "online"
             else:
                 info["llm"] = self._health_cache.get("llm", "online")
@@ -118,7 +116,7 @@ class Agent(BaseAgent):
 
     def process_message(self, user_id: str, text: str, session_id: str) -> str:
         """
-        Runs the autonomous LangGraph loop: redact → analyze → reason [→ tools → reason ...]
+        Runs the autonomous LangGraph loop: reason [→ tools → reason ...]
         """
         # Initial state
         initial_state = {
@@ -137,7 +135,7 @@ class Agent(BaseAgent):
             last_msg = final_state["messages"][-1]
             reply = last_msg.content
             
-            # 7. Store interaction
+            # Store interaction
             ts = datetime.now(timezone.utc).isoformat()
             health = self.status(force=False)
             if "online" in health["memory"].get("chroma", ""):
@@ -192,16 +190,12 @@ class Agent(BaseAgent):
         """Construct the LangGraph state machine."""
         workflow = StateGraph(AgentState)
         
-        # Define nodes
-        workflow.add_node("redact", self._node_redact)
-        workflow.add_node("analyze", self._node_analyze)
+        # Define nodes — streamlined: reason + tools only
         workflow.add_node("reason", self._node_reason)
         workflow.add_node("tools", ToolNode(tools))
         
-        # Define edges
-        workflow.set_entry_point("redact")
-        workflow.add_edge("redact", "analyze")
-        workflow.add_edge("analyze", "reason")
+        # Define edges — enter directly into reasoning
+        workflow.set_entry_point("reason")
         
         # Conditional edge for ReAct loop
         workflow.add_conditional_edges(
@@ -217,21 +211,6 @@ class Agent(BaseAgent):
         
         return workflow.compile()
 
-    def _node_redact(self, state: AgentState):
-        """Filter PII before anything else."""
-        last_msg = state["messages"][-1]
-        safe_text = self.privacy.redact(last_msg.content)
-        return {
-            "messages": [HumanMessage(content=safe_text)],
-            "is_redacted": True
-        }
-
-    def _node_analyze(self, state: AgentState):
-        """Classify task type to guide routing."""
-        last_msg = state["messages"][-1]
-        task_type = self.analyzer.classify(last_msg.content)
-        return {"task_type": task_type}
-
     def _node_reason(self, state: AgentState):
         """Pick a model and generate reasoning/response."""
         # Get best model based on current task type and headroom
@@ -241,7 +220,7 @@ class Agent(BaseAgent):
         # Bind tools to the model
         llm_with_tools = llm.bind_tools(tools)
         
-        # Build context using the new ContextManager
+        # Build context using the ContextManager
         last_msg = state["messages"][-1]
         context = context_manager.assemble_context(
             query=last_msg.content,

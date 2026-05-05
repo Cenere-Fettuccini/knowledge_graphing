@@ -35,20 +35,11 @@ class ContextManager:
         except Exception as e:
             logger.error("RAG search failed: %s", e)
 
-        # 3. Entity Linking (Neo4j)
-        # We look for entities mentioned in the query that exist in the graph
+        # 3. Entity Linking (Neo4j) — targeted Cypher search, not full scan
         entities = []
         try:
-            # Simple keyword match for now
-            graph_data = self.memory.neo4j.get_graph_overview(limit=100)
-            mentioned_nodes = [
-                n for n in graph_data["nodes"] 
-                if n["name"].lower() in query.lower()
-            ]
-            
-            for node in mentioned_nodes:
-                details = self.memory.neo4j.get_node_detail(node["id"])
-                entities.append(details)
+            if self.memory.neo4j.driver:
+                entities = self._find_entities(query)
         except Exception as e:
             logger.error("Entity linking failed: %s", e)
 
@@ -64,5 +55,41 @@ class ContextManager:
             "entities": entities,
             "history": history
         }
+
+    def _find_entities(self, query: str) -> list:
+        """
+        Search Neo4j for entities mentioned in the query using a Cypher
+        case-insensitive CONTAINS filter instead of pulling the entire graph.
+        """
+        # Extract candidate words (3+ chars to avoid noise)
+        words = [w.strip(".,!?\"'()") for w in query.split() if len(w.strip(".,!?\"'()")) >= 3]
+        if not words:
+            return []
+
+        # Build a Cypher WHERE clause that checks node names against query words
+        conditions = " OR ".join([f"toLower(n.name) CONTAINS toLower($w{i})" for i in range(len(words))])
+        params = {f"w{i}": w for i, w in enumerate(words)}
+        
+        cypher = f"""
+        MATCH (n)
+        WHERE {conditions}
+        RETURN n.id AS id
+        LIMIT 5
+        """
+        
+        results = []
+        try:
+            with self.memory.neo4j.driver.session() as session:
+                records = session.run(cypher, **params)
+                for record in records:
+                    node_id = record["id"]
+                    if node_id:
+                        details = self.memory.neo4j.get_node_detail(node_id)
+                        if details.get("node"):
+                            results.append(details)
+        except Exception as e:
+            logger.error("Neo4j entity search failed: %s", e)
+        
+        return results
 
 context_manager = ContextManager()
