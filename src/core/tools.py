@@ -92,5 +92,91 @@ def create_task(title: str, due_date: str = None, priority: str = "medium"):
     except Exception as e:
         return f"Error creating task: {str(e)}"
 
+@tool
+def list_tasks(status_filter: str = ""):
+    """
+    List tasks from the Knowledge Graph, optionally filtered by status.
+    Valid statuses: TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED.
+    Leave empty to list all tasks.
+    """
+    logger.info(f"Tool Call: list_tasks -> filter={status_filter}")
+    try:
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+
+        if status_filter:
+            cypher = """
+            MATCH (t:Task)
+            WHERE toLower(t.status) = toLower($status)
+            RETURN t.id AS id, t.name AS title, t.status AS status,
+                   t.priority AS priority, t.due_date AS due_date
+            ORDER BY t.created_at DESC
+            """
+            params = {"status": status_filter}
+        else:
+            cypher = """
+            MATCH (t:Task)
+            RETURN t.id AS id, t.name AS title, t.status AS status,
+                   t.priority AS priority, t.due_date AS due_date
+            ORDER BY t.created_at DESC
+            """
+            params = {}
+
+        results = []
+        with memory_manager.neo4j.driver.session() as session:
+            records = session.run(cypher, **params)
+            for r in records:
+                results.append({
+                    "id": r["id"], "title": r["title"],
+                    "status": r["status"], "priority": r["priority"],
+                    "due_date": r["due_date"],
+                })
+        return results if results else "No tasks found."
+    except Exception as e:
+        return f"Error listing tasks: {str(e)}"
+
+@tool
+def update_task(task_title: str, new_status: str = "", notes: str = ""):
+    """
+    Update an existing task's status or add notes.
+    Find the task by title (partial match).
+    Valid statuses: TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED.
+    """
+    logger.info(f"Tool Call: update_task -> {task_title} status={new_status}")
+    try:
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+
+        # Build dynamic SET clause
+        set_parts = ["t.updated_at = $now"]
+        params = {"title": task_title, "now": datetime.now().isoformat()}
+        if new_status:
+            set_parts.append("t.status = $status")
+            params["status"] = new_status.upper()
+        if notes:
+            set_parts.append("t.notes = $notes")
+            params["notes"] = notes
+
+        cypher = f"""
+        MATCH (t:Task)
+        WHERE toLower(t.name) CONTAINS toLower($title)
+        SET {', '.join(set_parts)}
+        RETURN t.name AS title, t.status AS status
+        LIMIT 1
+        """
+
+        with memory_manager.neo4j.driver.session() as session:
+            result = session.run(cypher, **params)
+            record = result.single()
+            if record:
+                return f"Updated task '{record['title']}' → status: {record['status']}"
+            return f"No task found matching '{task_title}'"
+    except Exception as e:
+        return f"Error updating task: {str(e)}"
+
 # List of tools to be used by the agent
-tools = [search_knowledge_graph, store_knowledge, search_memories, get_current_time, create_task]
+tools = [
+    search_knowledge_graph, store_knowledge, search_memories,
+    get_current_time, create_task, list_tasks, update_task,
+]
+

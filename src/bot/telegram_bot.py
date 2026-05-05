@@ -390,9 +390,8 @@ class TelegramBot:
         """
         Handle a plain-text message from the user.
 
-        Currently echoes back with a placeholder response.
-        When the Agent Core is implemented (Step 4), this method will
-        delegate to agent.process_message_stream() instead.
+        Delegates to the async Agent Core, keeping a typing indicator
+        alive while the LLM processes.
         """
         if not self._is_authorized(update):
             return await self._deny(update)
@@ -401,22 +400,33 @@ class TelegramBot:
         text = update.message.text
         session_id, _ = self._sessions.get_session(user_id)
 
-        # Show "typing…" indicator while processing
-        await update.message.chat.send_action(ChatAction.TYPING)
+        # Keep typing indicator alive (Telegram cancels after 5s)
+        import asyncio
+        typing_task = asyncio.create_task(
+            self._keep_typing(update.message.chat)
+        )
 
         try:
-            # Agent handles: retrieve context → generate → store to ChromaDB
-            reply = self._agent.process_message(user_id, text, session_id)
-
-            # The bot no longer needs to store its own history buffer; 
-            # the Agent and MemoryManager handle it persistently.
+            # Async agent call — doesn't block the event loop
+            reply = await self._agent.aprocess_message(user_id, text, session_id)
             self._sessions.advance_turn(user_id)
-
             await update.message.reply_text(reply)
 
         except Exception:
             logger.exception("Message handling failed for user_id=%s", user_id)
             await update.message.reply_text(AGENT_ERROR_TEXT)
+        finally:
+            typing_task.cancel()
+
+    async def _keep_typing(self, chat) -> None:
+        """Refresh the typing indicator every 4 seconds until cancelled."""
+        import asyncio
+        try:
+            while True:
+                await chat.send_action(ChatAction.TYPING)
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
 
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
