@@ -160,9 +160,13 @@ const Panel = {
         `;
 
         if (n.label === 'Belief') {
-            html += `<p><span class="dim">Status:</span> ${n.status}</p>`;
-            html += `<p><span class="dim">Conf:</span> ${n.conf}</p>`;
-            html += `<br/><a href="#" style="color:var(--c-blue)">[VIEW_TRAIL]</a>`;
+            const confPct = Math.round((n.confidence || 0) * 100);
+            const confColor = confPct >= 70 ? 'var(--c-green, #7FA38D)' : confPct >= 40 ? 'var(--c-yellow, #BEAA7E)' : 'var(--c-red, #A37A87)';
+            html += `<p><span class="dim">Status:</span> <span class="highlight">${n.status || 'active'}</span></p>`;
+            html += `<p><span class="dim">Confidence:</span> <span style="color:${confColor};font-weight:600">${confPct}%</span></p>`;
+            html += `<div style="background:rgba(255,255,255,0.06);border-radius:3px;height:4px;margin:6px 0 2px">
+                        <div style="width:${confPct}%;height:100%;background:${confColor};border-radius:3px;transition:width .4s ease"></div>
+                      </div>`;
         } else if (n.label === 'Task') {
             html += `<p><span class="dim">Status:</span> <span class="highlight">${n.status}</span></p>`;
         }
@@ -202,26 +206,95 @@ const Panel = {
 
         await this.typeWriter(this.nodeInfo, html);
 
+        // ── Provenance / Belief Trail ────────────────────────────────────
         provList.innerHTML = '';
-        if (n.label === 'Belief' || n.label === 'Task' || n.label === 'Project') {
+        if (n.label === 'Belief') {
             provSec.style.display = 'block';
-            
-            const memories = [
-                { text: "We definitely need to implement timeblocking and proactive calendar management.", author: "Kevin", time: "just now" },
-                { text: "The knowledge graph UI looks completely zen.", author: "Kevin", time: "30 mins ago" }
-            ];
 
-            memories.forEach((m, i) => {
-                const li = document.createElement('li');
-                li.innerHTML = `"${m.text}" <br/><span style="opacity:0.6;font-size:9px;">— ${m.author}, ${m.time}</span>`;
-                provList.appendChild(li);
-                
-                // Staggered reveal
-                setTimeout(() => {
+            try {
+                const trail = await fetch(`/api/graph/belief/${nodeId}/trail`).then(r => r.json());
+
+                // Evolution chain
+                if (trail.chain && trail.chain.length > 1) {
+                    const header = document.createElement('li');
+                    header.innerHTML = `<span style="font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-dim)">Evolution Chain</span>`;
+                    header.classList.add('visible');
+                    provList.appendChild(header);
+
+                    trail.chain.forEach((b, i) => {
+                        const li = document.createElement('li');
+                        const statusIcon = b.status === 'active' ? '●' : '○';
+                        const statusColor = b.status === 'active' ? 'var(--c-green, #7FA38D)' : 'var(--fg-dim)';
+                        li.innerHTML = `
+                            <span style="color:${statusColor}">${statusIcon}</span>
+                            "${b.content}"
+                            <br/><span style="opacity:0.5;font-size:9px">${b.status} · conf ${Math.round((b.confidence || 0) * 100)}% · ${b.created_at || ''}</span>
+                        `;
+                        li.style.cursor = 'pointer';
+                        li.addEventListener('click', () => {
+                            this.loadNode(b.id);
+                            if (window.GraphManager) window.GraphManager.focusNode(b.id);
+                        });
+                        provList.appendChild(li);
+                        setTimeout(() => li.classList.add('visible'), i * 120 + 100);
+                    });
+                }
+
+                // Supporting evidence
+                if (trail.evidence?.supports?.length) {
+                    const header = document.createElement('li');
+                    header.innerHTML = `<span style="font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-green, #7FA38D)">Supporting Evidence</span>`;
+                    header.classList.add('visible');
+                    provList.appendChild(header);
+
+                    trail.evidence.supports.forEach((s, i) => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `"${s.text || s.session_id}" <br/><span style="opacity:0.5;font-size:9px">— ${s.timestamp || ''}</span>`;
+                        provList.appendChild(li);
+                        setTimeout(() => li.classList.add('visible'), i * 120 + 300);
+                    });
+                }
+
+                // Weakening evidence
+                if (trail.evidence?.weakens?.length) {
+                    const header = document.createElement('li');
+                    header.innerHTML = `<span style="font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-red, #A37A87)">Weakening Evidence</span>`;
+                    header.classList.add('visible');
+                    provList.appendChild(header);
+
+                    trail.evidence.weakens.forEach((w, i) => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `"${w.text || w.session_id}" <br/><span style="opacity:0.5;font-size:9px">— ${w.timestamp || ''}</span>`;
+                        provList.appendChild(li);
+                        setTimeout(() => li.classList.add('visible'), i * 120 + 300);
+                    });
+                }
+
+                // No evidence at all
+                if ((!trail.evidence?.supports?.length) && (!trail.evidence?.weakens?.length) && trail.chain?.length <= 1) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<span class="dim">No evidence trail yet.</span>`;
                     li.classList.add('visible');
-                }, i * 150 + 100); 
+                    provList.appendChild(li);
+                }
+            } catch (e) {
+                const li = document.createElement('li');
+                li.innerHTML = `<span class="dim">Could not load belief trail.</span>`;
+                li.classList.add('visible');
+                provList.appendChild(li);
+            }
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    provSec.classList.remove('slide-out');
+                });
             });
-            
+        } else if (n.label === 'Task' || n.label === 'Project') {
+            provSec.style.display = 'block';
+            const li = document.createElement('li');
+            li.innerHTML = `<span class="dim">Provenance tracking available for Belief nodes.</span>`;
+            li.classList.add('visible');
+            provList.appendChild(li);
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
                     provSec.classList.remove('slide-out');

@@ -174,9 +174,136 @@ def update_task(task_title: str, new_status: str = "", notes: str = ""):
     except Exception as e:
         return f"Error updating task: {str(e)}"
 
+@tool
+def save_belief(
+    content: str,
+    about_entity: str = "",
+    confidence: float = 0.8,
+    source_text: str = "",
+):
+    """
+    Store a belief or opinion in the Knowledge Graph.
+    A belief tracks how the user's thinking on a topic evolves over time.
+    
+    content: The belief statement (e.g. "Rust is worth the tradeoff for systems work")
+    about_entity: Optional entity name this belief is about (e.g. "Rust")
+    confidence: How confident the user seems (0.0 to 1.0)
+    source_text: The conversation excerpt that expressed this belief
+    """
+    logger.info(f"Tool Call: save_belief -> {content[:50]}")
+    try:
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+
+        # Resolve entity ID if provided
+        entity_id = None
+        if about_entity:
+            cypher = """
+            MATCH (e) WHERE toLower(e.name) CONTAINS toLower($name)
+            RETURN e.id AS id LIMIT 1
+            """
+            with memory_manager.neo4j.driver.session() as session:
+                record = session.run(cypher, name=about_entity).single()
+                if record:
+                    entity_id = record["id"]
+
+        belief_id = memory_manager.neo4j.upsert_belief(
+            content=content,
+            confidence=confidence,
+            about_entity_id=entity_id,
+            source_text=source_text or None,
+        )
+        return f"Belief stored (ID: {belief_id}): '{content[:60]}'"
+    except Exception as e:
+        return f"Error storing belief: {str(e)}"
+
+@tool
+def get_belief_trail(belief_query: str):
+    """
+    Search for a belief by keyword and return its full evolution chain
+    and evidence (supporting and weakening conversations).
+    Use this to understand how the user's thinking on a topic has changed.
+    """
+    logger.info(f"Tool Call: get_belief_trail -> {belief_query}")
+    try:
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+
+        # Find the most recent active belief matching the query
+        cypher = """
+        MATCH (b:Belief)
+        WHERE toLower(b.content) CONTAINS toLower($q)
+        RETURN b.id AS id, b.content AS content,
+               b.confidence AS confidence, b.status AS status
+        ORDER BY b.created_at DESC
+        LIMIT 1
+        """
+        with memory_manager.neo4j.driver.session() as session:
+            record = session.run(cypher, q=belief_query).single()
+
+        if not record:
+            return f"No beliefs found matching '{belief_query}'"
+
+        belief_id = record["id"]
+        chain = memory_manager.neo4j.get_belief_chain(belief_id)
+        evidence = memory_manager.neo4j.get_belief_evidence(belief_id)
+
+        return {
+            "current": {
+                "content": record["content"],
+                "confidence": record["confidence"],
+                "status": record["status"],
+            },
+            "evolution_chain": chain,
+            "evidence": evidence,
+        }
+    except Exception as e:
+        return f"Error retrieving belief trail: {str(e)}"
+
+@tool
+def evolve_belief_tool(old_belief_query: str, new_content: str, reason: str = ""):
+    """
+    Evolve an existing belief — create a new version that supersedes it.
+    The old belief is marked 'superseded' and linked via EVOLVED_FROM.
+    
+    old_belief_query: keyword to find the old belief
+    new_content: the new belief statement
+    reason: why the belief changed
+    """
+    logger.info(f"Tool Call: evolve_belief -> {old_belief_query} => {new_content[:40]}")
+    try:
+        if not memory_manager.neo4j.driver:
+            return "Knowledge Graph is currently offline."
+
+        # Find the existing belief
+        cypher = """
+        MATCH (b:Belief {status: 'active'})
+        WHERE toLower(b.content) CONTAINS toLower($q)
+        RETURN b.id AS id, b.content AS content
+        ORDER BY b.created_at DESC LIMIT 1
+        """
+        with memory_manager.neo4j.driver.session() as session:
+            record = session.run(cypher, q=old_belief_query).single()
+
+        if not record:
+            return f"No active belief found matching '{old_belief_query}'"
+
+        new_id = memory_manager.neo4j.evolve_belief(
+            old_belief_id=record["id"],
+            new_content=new_content,
+            reason=reason,
+        )
+        return (
+            f"Belief evolved:\n"
+            f"  OLD (superseded): '{record['content'][:60]}'\n"
+            f"  NEW (active): '{new_content[:60]}' (ID: {new_id})"
+        )
+    except Exception as e:
+        return f"Error evolving belief: {str(e)}"
+
 # List of tools to be used by the agent
 tools = [
     search_knowledge_graph, store_knowledge, search_memories,
     get_current_time, create_task, list_tasks, update_task,
+    save_belief, get_belief_trail, evolve_belief_tool,
 ]
-

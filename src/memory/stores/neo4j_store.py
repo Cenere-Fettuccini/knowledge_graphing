@@ -206,6 +206,227 @@ class Neo4jStore:
                 "connections": connections
             }
 
+    # ── Belief Provenance ──────────────────────────────────────────────────────
+
+    def upsert_belief(
+        self,
+        content: str,
+        confidence: float = 0.8,
+        about_entity_id: str = None,
+        source_session_id: str = None,
+        source_text: str = None,
+    ) -> str:
+        """
+        Create a new :Belief node with optional evidence links.
+
+        If about_entity_id is provided, creates an ABOUT relationship.
+        If source_session_id is provided, creates a :Conversation node
+        and an EXTRACTED_FROM relationship.
+
+        Returns the belief's ID.
+        """
+        if not self.driver:
+            return ""
+
+        from datetime import datetime, timezone
+        belief_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        cypher = """
+        CREATE (b:Belief {
+            id: $bid, name: $content, content: $content,
+            confidence: $conf, status: 'active', created_at: $now
+        })
+        RETURN b.id AS id
+        """
+        with self.driver.session() as session:
+            session.run(cypher, bid=belief_id, content=content, conf=confidence, now=now)
+
+            # Link to the entity it's about
+            if about_entity_id:
+                session.run("""
+                    MATCH (b:Belief {id: $bid}), (e {id: $eid})
+                    MERGE (b)-[:ABOUT]->(e)
+                """, bid=belief_id, eid=about_entity_id)
+
+            # Create a Conversation node and EXTRACTED_FROM link
+            if source_session_id and source_text:
+                conv_id = str(uuid.uuid4())
+                session.run("""
+                    MERGE (c:Conversation {session_id: $sid})
+                    ON CREATE SET c.id = $cid, c.name = $preview,
+                                  c.text = $text, c.created_at = $now
+                    WITH c
+                    MATCH (b:Belief {id: $bid})
+                    MERGE (b)-[:EXTRACTED_FROM {session_id: $sid}]->(c)
+                """, sid=source_session_id, cid=conv_id,
+                     preview=source_text[:60] + "…" if len(source_text) > 60 else source_text,
+                     text=source_text, now=now, bid=belief_id)
+
+        return belief_id
+
+    def evolve_belief(
+        self,
+        old_belief_id: str,
+        new_content: str,
+        new_confidence: float = 0.8,
+        reason: str = "",
+    ) -> str:
+        """
+        Create a new belief that supersedes an old one.
+
+        Sets old belief status to 'superseded', creates a new 'active' belief,
+        and links them via EVOLVED_FROM. Returns the new belief's ID.
+        """
+        if not self.driver:
+            return ""
+
+        from datetime import datetime, timezone
+        new_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        cypher = """
+        MATCH (old:Belief {id: $old_id})
+        SET old.status = 'superseded', old.superseded_at = $now
+
+        CREATE (new:Belief {
+            id: $new_id, name: $content, content: $content,
+            confidence: $conf, status: 'active', created_at: $now
+        })
+        CREATE (new)-[:EVOLVED_FROM {reason: $reason, timestamp: $now}]->(old)
+
+        WITH old, new
+        OPTIONAL MATCH (old)-[:ABOUT]->(e)
+        FOREACH (_ IN CASE WHEN e IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (new)-[:ABOUT]->(e)
+        )
+
+        RETURN new.id AS id
+        """
+        with self.driver.session() as session:
+            result = session.run(
+                cypher, old_id=old_belief_id, new_id=new_id,
+                content=new_content, conf=new_confidence,
+                reason=reason, now=now,
+            )
+            record = result.single()
+            return record["id"] if record else new_id
+
+    def add_belief_evidence(
+        self,
+        belief_id: str,
+        evidence_type: str,
+        session_id: str,
+        text: str,
+    ) -> None:
+        """
+        Add a SUPPORTED_BY or WEAKENED_BY link from a belief to a conversation.
+
+        evidence_type: 'supports' or 'weakens'
+        """
+        if not self.driver:
+            return
+
+        from datetime import datetime, timezone
+        rel = "SUPPORTED_BY" if evidence_type == "supports" else "WEAKENED_BY"
+        now = datetime.now(timezone.utc).isoformat()
+        conv_id = str(uuid.uuid4())
+
+        cypher = f"""
+        MERGE (c:Conversation {{session_id: $sid}})
+        ON CREATE SET c.id = $cid, c.name = $preview, c.text = $text, c.created_at = $now
+        WITH c
+        MATCH (b:Belief {{id: $bid}})
+        MERGE (b)-[:{rel} {{timestamp: $now}}]->(c)
+        """
+        with self.driver.session() as session:
+            session.run(
+                cypher, sid=session_id, cid=conv_id,
+                preview=text[:60] + "…" if len(text) > 60 else text,
+                text=text, now=now, bid=belief_id,
+            )
+
+        # Recalculate confidence
+        self._recalc_belief_confidence(belief_id)
+
+    def _recalc_belief_confidence(self, belief_id: str) -> None:
+        """Recalculate a belief's confidence based on its evidence edges."""
+        if not self.driver:
+            return
+
+        cypher = """
+        MATCH (b:Belief {id: $bid})
+        OPTIONAL MATCH (b)-[:SUPPORTED_BY]->(s)
+        OPTIONAL MATCH (b)-[:WEAKENED_BY]->(w)
+        WITH b, count(DISTINCT s) AS supports, count(DISTINCT w) AS weakens
+        SET b.confidence = CASE
+            WHEN supports + weakens = 0 THEN b.confidence
+            ELSE toFloat(supports) / (supports + weakens)
+        END
+        """
+        with self.driver.session() as session:
+            session.run(cypher, bid=belief_id)
+
+    def get_belief_chain(self, belief_id: str) -> list:
+        """
+        Walk the EVOLVED_FROM chain for a belief.
+        Returns a list from newest to oldest: [current, predecessor, ...]
+        """
+        if not self.driver:
+            return []
+
+        cypher = """
+        MATCH path = (b:Belief {id: $bid})-[:EVOLVED_FROM*0..20]->(ancestor:Belief)
+        UNWIND nodes(path) AS node
+        WITH DISTINCT node
+        RETURN node.id AS id, node.content AS content,
+               node.confidence AS confidence, node.status AS status,
+               node.created_at AS created_at
+        ORDER BY node.created_at DESC
+        """
+        results = []
+        with self.driver.session() as session:
+            records = session.run(cypher, bid=belief_id)
+            for r in records:
+                results.append({
+                    "id": r["id"], "content": r["content"],
+                    "confidence": r["confidence"], "status": r["status"],
+                    "created_at": r["created_at"],
+                })
+        return results
+
+    def get_belief_evidence(self, belief_id: str) -> dict:
+        """
+        Return all evidence conversations for a belief,
+        grouped by type (supports / weakens).
+        """
+        if not self.driver:
+            return {"supports": [], "weakens": []}
+
+        cypher = """
+        MATCH (b:Belief {id: $bid})
+        OPTIONAL MATCH (b)-[s:SUPPORTED_BY]->(sc:Conversation)
+        OPTIONAL MATCH (b)-[w:WEAKENED_BY]->(wc:Conversation)
+        RETURN collect(DISTINCT {
+                   id: sc.id, session_id: sc.session_id,
+                   text: sc.text, timestamp: s.timestamp
+               }) AS supports,
+               collect(DISTINCT {
+                   id: wc.id, session_id: wc.session_id,
+                   text: wc.text, timestamp: w.timestamp
+               }) AS weakens
+        """
+        with self.driver.session() as session:
+            record = session.run(cypher, bid=belief_id).single()
+            if not record:
+                return {"supports": [], "weakens": []}
+
+            # Filter out null entries from optional matches
+            supports = [s for s in record["supports"] if s.get("id")]
+            weakens = [w for w in record["weakens"] if w.get("id")]
+
+            return {"supports": supports, "weakens": weakens}
+
     # ── Utilities ─────────────────────────────────────────────────────────────
 
     def count_nodes(self) -> int:

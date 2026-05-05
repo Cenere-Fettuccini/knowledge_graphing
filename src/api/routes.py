@@ -21,6 +21,13 @@ async def get_active_tasks():
     tasks = [n for n in overview["nodes"] if n["label"] == "Task"]
     return tasks
 
+@router.get("/graph/belief/{belief_id}/trail")
+async def get_belief_trail(belief_id: str):
+    """Returns the full evolution chain and evidence for a belief."""
+    chain = memory_manager.neo4j.get_belief_chain(belief_id)
+    evidence = memory_manager.neo4j.get_belief_evidence(belief_id)
+    return {"chain": chain, "evidence": evidence}
+
 @router.get("/system/status")
 async def get_system_status():
     """Returns the health status of backend systems in a frontend-friendly format."""
