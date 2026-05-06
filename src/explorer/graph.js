@@ -177,15 +177,37 @@
             if (!src || !tgt) return;
             if (!isVisible(src.n) || !isVisible(tgt.n)) return;
 
+            const isSrcHov = src.n.id === hoveredId || src.n.id === activeNodeId;
+            const isTgtHov = tgt.n.id === hoveredId || tgt.n.id === activeNodeId;
+            const isHovEdge = isSrcHov || isTgtHov;
+
             const avgScale = (src.p.scale + tgt.p.scale) * 0.5;
-            const alpha = edgeAlpha * Math.min(1, avgScale * 1.4);
+            // Boost alpha and line width if connected node is hovered
+            const alpha = (isHovEdge ? 0.6 : edgeAlpha) * Math.min(1, avgScale * 1.4);
+            const lineWidth = (isHovEdge ? 1.2 : 0.5) * avgScale * dpr;
+
+            let strokeColor = `rgba(160,155,148,${alpha.toFixed(3)})`;
+            if (e.type === 'SUPPORTED_BY') strokeColor = `rgba(127,163,141,${alpha.toFixed(3)})`; // Green
+            else if (e.type === 'WEAKENED_BY') strokeColor = `rgba(163,122,135,${alpha.toFixed(3)})`; // Red
+            else if (e.type === 'EVOLVED_FROM') strokeColor = `rgba(126,145,190,${alpha.toFixed(3)})`; // Blue
+            else if (e.type === 'EXTRACTED_FROM') strokeColor = `rgba(190,170,126,${alpha.toFixed(3)})`; // Gold
 
             ctx.beginPath();
             ctx.moveTo(src.p.sx, src.p.sy);
             ctx.lineTo(tgt.p.sx, tgt.p.sy);
-            ctx.strokeStyle = `rgba(160,155,148,${alpha.toFixed(3)})`;
-            ctx.lineWidth = 0.5 * avgScale * dpr;
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = lineWidth;
             ctx.stroke();
+
+            // Edge label on hover
+            if (isHovEdge) {
+                const midX = (src.p.sx + tgt.p.sx) / 2;
+                const midY = (src.p.sy + tgt.p.sy) / 2;
+                const fontSize = Math.round(8 * dpr);
+                ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+                ctx.fillStyle = strokeColor.replace(/[\d.]+\)$/, '1)'); // Full opacity for text
+                ctx.fillText(e.type, midX, midY - 4 * dpr);
+            }
         });
 
         // ── Nodes ────────────────────────────────────────────────────────────────
