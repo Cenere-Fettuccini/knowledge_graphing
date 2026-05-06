@@ -168,12 +168,21 @@
             damping *= 0.98; // cool down
         }
 
-        // 3. Center the graph
+        // 3. Center the graph and prep animation
         let cx = 0, cy = 0, cz = 0;
         nodes.forEach(n => { cx += n.x3d; cy += n.y3d; cz += n.z3d; });
         if (nodes.length > 0) {
             cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
-            nodes.forEach(n => { n.x3d -= cx; n.y3d -= cy; n.z3d -= cz; });
+            nodes.forEach(n => { 
+                n.targetX = n.x3d - cx; 
+                n.targetY = n.y3d - cy; 
+                n.targetZ = n.z3d - cz; 
+                
+                // Initialize at a tiny fraction of target for explosion effect
+                n.x3d = n.targetX * 0.01;
+                n.y3d = n.targetY * 0.01;
+                n.z3d = n.targetZ * 0.01;
+            });
         }
     }
 
@@ -410,6 +419,29 @@
         raf = requestAnimationFrame(tick);
         if (ts - lastTs < 14) return;   // ~70fps cap
         lastTs = ts;
+        
+        // Node expansion animation
+        if (graphData.nodes.length > 0) {
+            graphData.nodes.forEach(n => {
+                if (n.targetX !== undefined) {
+                    const dx = n.targetX - n.x3d;
+                    const dy = n.targetY - n.y3d;
+                    const dz = n.targetZ - n.z3d;
+                    
+                    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || Math.abs(dz) > 0.5) {
+                        // Smoothly interpolate towards target (easing)
+                        n.x3d += dx * 0.08;
+                        n.y3d += dy * 0.08;
+                        n.z3d += dz * 0.08;
+                    } else {
+                        // Snap to final to save math
+                        n.x3d = n.targetX;
+                        n.y3d = n.targetY;
+                        n.z3d = n.targetZ;
+                    }
+                }
+            });
+        }
         
         if (isAnimating && targetMatrix) {
             // Smoothly interpolate FOV
