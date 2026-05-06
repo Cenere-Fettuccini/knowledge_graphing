@@ -69,7 +69,7 @@
 
     function placeNodes(nodes) {
         // Collect unique labels and assign cluster centers on a sphere shell
-        const labels = [...new Set(nodes.map(n => n.label))];
+        const labels = [...new Set(nodes.map(n => n.label))].sort();
         const clusterCenters = {};
         labels.forEach((lbl, i) => {
             const phi = Math.acos(1 - 2 * (i + 0.5) / labels.length);
@@ -84,15 +84,31 @@
 
         nodes.forEach((n, i) => {
             const { cx, cy, cz } = clusterCenters[n.label];
-            // Scatter within cluster
+            
+            // Generate a deterministic numeric seed from the node's unique ID
+            let seed = 0;
+            const idStr = String(n.id || i);
+            for (let j = 0; j < idStr.length; j++) {
+                seed = ((seed << 5) - seed) + idStr.charCodeAt(j);
+                seed |= 0;
+            }
+            seed = Math.abs(seed) || 1;
+            
+            // Simple PRNG function using the seed
+            function rand() {
+                let x = Math.sin(seed++) * 10000;
+                return x - Math.floor(x);
+            }
+
+            // Scatter within cluster deterministically
             const jitter = 110; // Increased jitter for a thicker volume
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const r = Math.random() * jitter;
+            const theta = rand() * Math.PI * 2;
+            const phi = Math.acos(2 * rand() - 1);
+            const r = rand() * jitter;
             n.x3d = cx + r * Math.sin(phi) * Math.cos(theta);
             n.y3d = cy + r * Math.sin(phi) * Math.sin(theta);
             n.z3d = cz + r * Math.cos(phi);
-            n.baseR = 2.8 + Math.random() * 2.2;   // canvas-space base radius (pre-scale)
+            n.baseR = 2.8 + rand() * 2.2;   // canvas-space base radius (pre-scale)
         });
     }
 
