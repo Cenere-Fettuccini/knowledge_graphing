@@ -242,8 +242,8 @@
             if (isRelated) {
                 labelsToDraw.push({
                     text: e.type,
-                    x: (src.p.sx + tgt.p.sx) / 2,
-                    y: (src.p.sy + tgt.p.sy) / 2,
+                    x: Math.round((src.p.sx + tgt.p.sx) / 2),
+                    y: Math.round((src.p.sy + tgt.p.sy) / 2),
                     color: color
                 });
             }
@@ -288,7 +288,7 @@
                 const fontSize = Math.round(10 * dpr);
                 ctx.font = `${fontSize}px Inter, sans-serif`;
                 ctx.fillStyle = isSel ? color : 'rgba(180,176,170,0.9)';
-                ctx.fillText(label, p.sx + r * 1.6 + 3 * dpr, p.sy + fontSize * 0.35);
+                ctx.fillText(label, Math.round(p.sx + r * 1.6 + 3 * dpr), Math.round(p.sy + fontSize * 0.35));
             }
         });
 
@@ -299,20 +299,25 @@
             labelsToDraw.forEach(lbl => {
                 const fontSize = Math.round(8 * dpr);
                 ctx.font = `600 ${fontSize}px Inter, sans-serif`;
-                const tw = ctx.measureText(lbl.text).width;
-                const padX = 4 * dpr, padY = 2 * dpr;
+                const tw = Math.round(ctx.measureText(lbl.text).width);
+                const padX = Math.round(4 * dpr), padY = Math.round(2 * dpr);
                 
+                const rectX = Math.round(lbl.x - tw/2 - padX);
+                const rectY = Math.round(lbl.y - fontSize/2 - padY);
+                const rectW = tw + padX*2;
+                const rectH = fontSize + padY*2;
+
                 ctx.fillStyle = 'rgba(28,26,24,0.85)';
                 ctx.beginPath();
                 if (ctx.roundRect) {
-                    ctx.roundRect(lbl.x - tw/2 - padX, lbl.y - fontSize/2 - padY, tw + padX*2, fontSize + padY*2, 3 * dpr);
+                    ctx.roundRect(rectX, rectY, rectW, rectH, 3 * dpr);
                 } else {
-                    ctx.fillRect(lbl.x - tw/2 - padX, lbl.y - fontSize/2 - padY, tw + padX*2, fontSize + padY*2);
+                    ctx.fillRect(rectX, rectY, rectW, rectH);
                 }
                 ctx.fill();
                 
                 ctx.fillStyle = lbl.color;
-                ctx.fillText(lbl.text, lbl.x, lbl.y + dpr);
+                ctx.fillText(lbl.text, lbl.x, Math.round(lbl.y + dpr));
             });
         }
     }
