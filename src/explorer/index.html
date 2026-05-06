@@ -3,165 +3,307 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AIManager | Knowledge Graph</title>
+    <title>AIManager | Knowledge Explorer</title>
+    <meta name="description" content="AIManager — Knowledge Graph Explorer, API Credit Monitoring, and System Dashboard." />
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+
+    <!-- Typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+    <!-- Design System (inherited by all pages) -->
+    <link rel="stylesheet" href="base.css" />
+    <!-- Page-specific styles -->
+    <link rel="stylesheet" href="explorer.css" />
+    <link rel="stylesheet" href="credits.css" />
+
+    <!-- External libs -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
-    <div class="app-container">
-        
-        <!-- HEADER MODULE -->
-        <header class="module module-header">
-            <div class="brand">AIManager // Explorer</div>
-            <div class="search-box">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+<div class="app-shell">
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         GLOBAL HEADER — Shared across all pages (inherited)
+         ═══════════════════════════════════════════════════════════════ -->
+    <header class="app-header" id="appHeader">
+        <div class="app-header__left">
+            <span class="app-brand">AIManager //</span>
+
+            <!-- Drum Barrel Navigator -->
+            <div class="drum-nav" id="drumNav" aria-label="Page navigator"></div>
+        </div>
+
+        <!-- Center: Global Search -->
+        <div class="app-header__center" id="headerCenter">
+            <div class="explorer-search" id="globalSearchBox">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="11" cy="11" r="8"></circle>
                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
                 <input type="text" id="searchInput" placeholder="Search memories, beliefs, tasks..." autocomplete="off" />
             </div>
-            <div style="display: flex; align-items: center;">
-                <div class="stats" id="topStats">System Ready</div>
-                <button id="themeToggle" class="theme-btn" title="Toggle Theme">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-                </button>
-            </div>
-        </header>
+        </div>
 
-        <!-- STATUS MODULE (Independent Health Checks) -->
-        <aside class="module module-status">
-            <div class="inner-section" style="border-bottom: none; display: flex; justify-content: space-between; align-items: center; padding-bottom: 4px;">
-                <h3>System Health</h3>
-                <button id="refreshStatusBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Ping Services">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-                </button>
-            </div>
-            <div class="inner-section" style="padding-top: 0;">
-                <ul class="status-list" id="statusList">
-                    <li>
-                        <span class="status-label">Neo4j Graph</span>
-                        <span class="status-badge connecting" id="status-neo4j">Connecting...</span>
-                    </li>
-                    <li>
-                        <span class="status-label">ChromaDB</span>
-                        <span class="status-badge connecting" id="status-chroma">Connecting...</span>
-                    </li>
-                    <li>
-                        <span class="status-label">Agent Core</span>
-                        <span class="status-badge connecting" id="status-agent">Connecting...</span>
-                    </li>
-                </ul>
-                <div class="status-divider"></div>
-                <div id="quotaContainer">
-                    <h4 class="dim" style="font-size: 10px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">Model Headroom</h4>
-                    <div id="quotaList"></div>
-                </div>
-            </div>
-        </aside>
+        <!-- Right side: page-specific controls injected here -->
+        <div class="app-header__right" id="headerRight">
+            <div class="app-stats" id="topStats" style="display: none;">System Ready</div>
+            
+            <button class="icon-btn" id="themeToggle" title="Toggle theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
 
-        <!-- SIDEBAR MODULE (Taxonomy & Filters) -->
-        <aside class="module module-sidebar">
-            <div class="inner-section">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin: 0;">Taxonomy & Filters</h3>
-                    <div style="display: flex; gap: 4px;">
-                        <button id="selectAllBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Select All">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-                        </button>
-                        <button id="invertFiltersBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Invert Selection">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>
+    <!-- ═══════════════════════════════════════════════════════════════════
+         PAGE CONTAINER — Views are stacked, only one active at a time
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="page-container">
+
+        <!-- ── EXPLORER PAGE ──────────────────────────────────────────── -->
+        <div class="page-view" id="page-explorer">
+            <div class="explorer-grid">
+
+                <!-- STATUS MODULE -->
+                <aside class="module ex-status">
+                    <div class="inner-section" style="border-bottom: none; display: flex; justify-content: space-between; align-items: center; padding-bottom: 4px;">
+                        <h3>System Health</h3>
+                        <button id="refreshStatusBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Ping Services">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
                         </button>
                     </div>
-                </div>
-                <ul class="filter-list" id="taxonomyList">
-                    <li><span class="dim">Loading classes...</span></li>
-                </ul>
-            </div>
-        </aside>
+                    <div class="inner-section" style="padding-top: 0;">
+                        <ul class="status-list" id="statusList">
+                            <li>
+                                <span class="status-label">Neo4j Graph</span>
+                                <span class="status-badge connecting" id="status-neo4j">Connecting...</span>
+                            </li>
+                            <li>
+                                <span class="status-label">ChromaDB</span>
+                                <span class="status-badge connecting" id="status-chroma">Connecting...</span>
+                            </li>
+                            <li>
+                                <span class="status-label">Agent Core</span>
+                                <span class="status-badge connecting" id="status-agent">Connecting...</span>
+                            </li>
+                        </ul>
+                        <div class="status-divider"></div>
+                        <div id="quotaContainer">
+                            <h4 class="dim" style="font-size: 10px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">Model Headroom</h4>
+                            <div id="quotaList"></div>
+                        </div>
+                    </div>
+                </aside>
 
-        <!-- MAIN GRAPH MODULE -->
-        <main class="module module-graph">
-            <div id="graphCanvas"></div>
-            <div class="graph-controls">
-                <button id="zoomInBtn" class="theme-btn" title="Zoom In">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                </button>
-                <button id="zoomOutBtn" class="theme-btn" title="Zoom Out">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                </button>
-                <button id="recenterBtn" class="theme-btn" title="Recenter Graph">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg>
-                </button>
+                <!-- SIDEBAR MODULE (Taxonomy & Filters) -->
+                <aside class="module ex-sidebar">
+                    <div class="inner-section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">Taxonomy & Filters</h3>
+                            <div style="display: flex; gap: 4px;">
+                                <button id="selectAllBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Select All">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                                </button>
+                                <button id="invertFiltersBtn" class="theme-btn" style="width:22px;height:22px;margin:0;" title="Invert Selection">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <ul class="filter-list" id="taxonomyList">
+                            <li><span class="dim">Loading classes...</span></li>
+                        </ul>
+                    </div>
+                </aside>
+
+                <!-- MAIN GRAPH MODULE -->
+                <main class="module ex-graph">
+                    <div id="graphCanvas"></div>
+                    <div class="graph-controls">
+                        <button id="zoomInBtn" class="theme-btn" title="Zoom In">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        </button>
+                        <button id="zoomOutBtn" class="theme-btn" title="Zoom Out">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        </button>
+                        <button id="recenterBtn" class="theme-btn" title="Recenter Graph">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg>
+                        </button>
+                    </div>
+                    <!-- DETAILS PANEL -->
+                    <aside class="module-details" id="detailPanel">
+                        <div class="inner-section">
+                            <h3>Node Inspector</h3>
+                            <div id="nodeInfo" class="node-content">
+                                <p class="dim">Select a node in the graph to view details.</p>
+                            </div>
+                        </div>
+                        <div class="inner-section" id="nodeConnections" style="display:none;">
+                            <h3>Connected Edges</h3>
+                            <ul class="edge-list" id="edgeList"></ul>
+                        </div>
+                        <div class="inner-section" id="nodeProvenance" style="display:none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                <h3 style="margin: 0;">Source Memories</h3>
+                                <span style="font-size:9px; color:var(--fg-dim);">(Step 6)</span>
+                            </div>
+                            <ul class="provenance-list" id="provenanceList"></ul>
+                        </div>
+                    </aside>
+                </main>
+
+                <!-- PLACEHOLDERS -->
+                <section class="module ex-upload placeholder-module">
+                    <h3>Data Ingestion</h3>
+                    <div class="placeholder-content" style="border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); margin-top: 10px; cursor: pointer; padding: 10px;">
+                        <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <p>Drag & drop exports to import<br/><span style="font-size: 10px; color: var(--fg-dim);">(Step 10)</span></p>
+                    </div>
+                </section>
+
+                <section class="module ex-tasks placeholder-module">
+                    <h3>Active Tasks</h3>
+                    <div class="placeholder-content" style="border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); margin-top: 10px; cursor: pointer; padding: 10px;">
+                        <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                        <p>Task Digest Empty<br/><span style="font-size: 10px; color: var(--fg-dim);">(Step 9)</span></p>
+                    </div>
+                </section>
+
+                <section class="module ex-calendar placeholder-module">
+                    <h3>Schedule & Timeblocks</h3>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; height: 100%;">
+                        <div class="placeholder-content" style="flex: 1; border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); padding: 10px; cursor: pointer;">
+                            <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            <p>No upcoming events</p>
+                        </div>
+                        <div class="placeholder-content" style="border: 1px solid var(--border-focus); border-radius: var(--radius-sm); padding: 8px; cursor: pointer; background: rgba(190, 170, 126, 0.08);">
+                            <p style="margin:0; font-size: 11px; color: var(--color-belief);"><strong>✨ AI Suggestion</strong><br/><span style="opacity: 0.8;">1 pending timeblock to review</span></p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="module ex-rumination placeholder-module">
+                    <h3>Rumination Engine</h3>
+                    <div class="placeholder-content">
+                        <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                        <p>Deep synthesis and SLM triage metrics (Step 8)</p>
+                    </div>
+                </section>
+
             </div>
-            <!-- DETAILS MODULE -->
-            <aside class="module-details" id="detailPanel">
-                <div class="inner-section">
-                    <h3>Node Inspector</h3>
-                    <div id="nodeInfo" class="node-content">
-                        <p class="dim">Select a node in the graph to view details.</p>
+        </div>
+
+        <!-- ── CREDITS PAGE ───────────────────────────────────────────── -->
+        <div class="page-view" id="page-credits">
+            <div class="credits-layout">
+
+                <!-- SIDEBAR -->
+                <aside class="credits-sidebar" id="creditsSidebar">
+                    <div class="sidebar-item active" data-group="all">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        All Models
+                    </div>
+                    <div class="sidebar-sep"></div>
+                    <div id="creditsDynamicGroups"></div>
+                </aside>
+
+                <!-- MAIN CONTENT -->
+                <div class="credits-main">
+                    <div class="credits-content">
+
+                        <!-- Title -->
+                        <div class="page-title">
+                            <h1>API Credit Limits</h1>
+                            <p>Real-time usage tracking across all configured LLM providers.</p>
+                            <div class="ts-badge">
+                                <span class="dot"></span>
+                                <span id="creditsTsLabel">Fetching data...</span>
+                            </div>
+                        </div>
+
+                        <!-- Summary -->
+                        <div class="section-label">Overview</div>
+                        <div class="summary-banner" id="creditsSummaryBanner">
+                            <div class="summary-tile skeleton skel-card" style="height:70px"></div>
+                            <div class="summary-tile skeleton skel-card" style="height:70px"></div>
+                            <div class="summary-tile skeleton skel-card" style="height:70px"></div>
+                        </div>
+
+                        <!-- Toolbar -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; margin-top: 16px;">
+                            <span class="refresh-label" id="creditsNextRefreshLabel"></span>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="icon-btn" id="creditsRefreshBtn" title="Refresh now">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="23 4 23 10 17 10"></polyline>
+                                        <polyline points="1 20 1 14 7 14"></polyline>
+                                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                    </svg>
+                                </button>
+                                <button class="btn btn-ghost" id="creditsOpenPasteBtn" style="display:inline-flex;align-items:center;gap:6px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+                                    Import from AI Studio
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Cards Container -->
+                        <div id="creditsCardsContainer">
+                            <div class="section-label" style="margin-top: 18px;">Per-Model Breakdown</div>
+                            <div class="cards-grid">
+                                <div class="skeleton skel-card"></div>
+                                <div class="skeleton skel-card"></div>
+                                <div class="skeleton skel-card"></div>
+                            </div>
+                        </div>
+
+                        <!-- Mismatch Log -->
+                        <div class="section-label" style="margin-top: 32px;">Rate Limit Events <span style="font-size:9px;color:var(--fg-dim);text-transform:none;letter-spacing:0;margin-left:6px;">(429s logged — indicates actual limit may differ)</span></div>
+                        <div id="creditsMismatchList"><p class="dim" style="font-size:12px;">No rate limit events recorded.</p></div>
+
                     </div>
                 </div>
-                <div class="inner-section" id="nodeConnections" style="display:none;">
-                    <h3>Connected Edges</h3>
-                    <ul class="edge-list" id="edgeList"></ul>
-                </div>
-                <div class="inner-section" id="nodeProvenance" style="display:none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                        <h3 style="margin: 0;">Source Memories</h3>
-                        <span style="font-size:9px; color:var(--fg-dim);">(Step 6)</span>
-                    </div>
-                    <ul class="provenance-list" id="provenanceList"></ul>
-                </div>
-            </aside>
-        </main>
 
-        <!-- FUTURE PLACEHOLDER: BULK UPLOAD -->
-        <section class="module module-upload placeholder-module">
-            <h3>Data Ingestion</h3>
-            <div class="placeholder-content" style="border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); margin-top: 10px; cursor: pointer; padding: 10px;">
-                <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p>Drag & drop exports to import<br/><span style="font-size: 10px; color: var(--fg-dim);">(Step 10)</span></p>
             </div>
-        </section>
+        </div>
 
-        <!-- FUTURE PLACEHOLDER: TASKS -->
-        <section class="module module-tasks placeholder-module">
-            <h3>Active Tasks</h3>
-            <div class="placeholder-content" style="border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); margin-top: 10px; cursor: pointer; padding: 10px;">
-                <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
-                <p>Task Digest Empty<br/><span style="font-size: 10px; color: var(--fg-dim);">(Step 9)</span></p>
-            </div>
-        </section>
+    </div><!-- /page-container -->
 
-        <!-- FUTURE PLACEHOLDER: CALENDAR -->
-        <section class="module module-calendar placeholder-module">
-            <h3>Schedule & Timeblocks</h3>
-            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; height: 100%;">
-                <div class="placeholder-content" style="flex: 1; border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); padding: 10px; cursor: pointer;">
-                    <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                    <p>No upcoming events</p>
-                </div>
-                <div class="placeholder-content" style="border: 1px solid var(--border-focus); border-radius: var(--radius-sm); padding: 8px; cursor: pointer; background: rgba(190, 170, 126, 0.08);">
-                    <p style="margin:0; font-size: 11px; color: var(--color-belief);"><strong>✨ AI Suggestion</strong><br/><span style="opacity: 0.8;">1 pending timeblock to review</span></p>
-                </div>
-            </div>
-        </section>
+</div><!-- /app-shell -->
 
-        <!-- FUTURE PLACEHOLDER: RUMINATION -->
-        <section class="module module-rumination placeholder-module">
-            <h3>Rumination Engine</h3>
-            <div class="placeholder-content">
-                <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                <p>Deep synthesis and SLM triage metrics (Step 8)</p>
-            </div>
-        </section>
-
+<!-- PASTE MODAL (Credits) -->
+<div class="modal-overlay" id="creditsPasteModal">
+    <div class="modal">
+        <h2>Import Limits from AI Studio</h2>
+        <p class="hint">
+            Go to <strong>aistudio.google.com/rate-limit</strong>, select all the table text (Ctrl+A on the table), copy it, and paste below.<br/>
+            Limits will be parsed and saved immediately — no restart needed.
+        </p>
+        <textarea id="creditsPasteInput" placeholder="Paste the full rate limits table here..."></textarea>
+        <div class="import-status" id="creditsImportStatus"></div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" id="creditsClosePasteBtn">Cancel</button>
+            <button class="btn btn-primary" id="creditsSubmitPasteBtn">Parse &amp; Import</button>
+        </div>
     </div>
+</div>
 
-    <script src="api.js"></script>
-    <script src="panel.js"></script>
-    <script src="graph.js"></script>
+<!-- ═══════════════════════════════════════════════════════════════════
+     SCRIPT LOADING ORDER:
+     1. api.js        — API client + ColorManager (shared)
+     2. app.js        — SPA router, drum navigator, theme engine (shell)
+     3. explorer-page.js — Explorer page module (registers with router)
+     4. credits-page.js  — Credits page module (registers with router)
+     5. panel.js      — Explorer detail panel + status manager
+     6. graph.js      — Explorer 3D graph canvas
+     ═══════════════════════════════════════════════════════════════ -->
+<script src="api.js"></script>
+<script src="app.js"></script>
+<script src="explorer-page.js"></script>
+<script src="credits-page.js"></script>
+<script src="panel.js"></script>
+<script src="graph.js"></script>
+
 </body>
 </html>

@@ -255,28 +255,33 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     transition: background 0.2s;
 }
+
 .task-item:hover {
-    background: rgba(255,255,255,0.02);
+    background: rgba(255, 255, 255, 0.02);
 }
+
 .task-info {
     display: flex;
     flex-direction: column;
 }
+
 .task-title {
     font-size: 0.95rem;
     color: var(--text);
 }
+
 .task-meta {
     font-size: 0.8rem;
     color: var(--text-dim);
 }
+
 .task-status {
     font-size: 0.75rem;
     padding: 2px 8px;
-    background: rgba(255,255,255,0.1);
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
     color: var(--text-dim);
     text-transform: uppercase;
@@ -358,6 +363,12 @@ body {
 .stats {
     color: var(--fg-dim);
     font-size: 12px;
+}
+
+#creditsNavLink:hover {
+    color: var(--fg-primary) !important;
+    border-color: var(--border-focus) !important;
+    background: var(--bg-hover) !important;
 }
 
 /* ── INNER MODULE STYLING ──────────────────────────────── */
@@ -545,7 +556,7 @@ li {
     margin-bottom: 10px;
     font-size: 13px;
     line-height: 1.5;
-    
+
     /* Animation state */
     opacity: 0;
     transform: translateX(20px);
@@ -555,7 +566,6 @@ li {
 .provenance-list li.visible {
     opacity: 1;
     transform: translateX(0);
-}
     font-size: 11px;
     color: var(--fg-dim);
     line-height: 1.4;
@@ -691,7 +701,7 @@ li {
 
 .progress-bg {
     height: 4px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(255, 255, 255, 0.05);
     border-radius: 2px;
     overflow: hidden;
 }
@@ -703,7 +713,7 @@ li {
 }
 
 .light-theme .progress-bg {
-    background: rgba(0,0,0,0.05);
+    background: rgba(0, 0, 0, 0.05);
 }
 
 #graphCanvas canvas {

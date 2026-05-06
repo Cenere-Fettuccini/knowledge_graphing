@@ -764,7 +764,10 @@
 
         // Search
         document.getElementById('searchInput')?.addEventListener('input', e => {
-            searchQuery = e.target.value;
+            if (PageRouter.getActive() === 'explorer') {
+                searchQuery = e.target.value;
+                window.explorerSearchQuery = searchQuery;
+            }
         });
 
         // Graph controls
