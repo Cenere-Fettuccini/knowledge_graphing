@@ -149,11 +149,7 @@
                 activeEdgeFilters.add(type);
                 const li = document.createElement('li');
                 
-                let color = '#a09b94';
-                if (type === "SUPPORTED_BY") color = '#7FA38D';
-                else if (type === "WEAKENED_BY") color = '#A37A87';
-                else if (type === "EVOLVED_FROM") color = '#7E91BE';
-                else if (type === "EXTRACTED_FROM") color = '#BEAA7E';
+                const color = window.ColorManager.getColor(type);
                 
                 li.innerHTML = `
             <label class="filter-item">
@@ -228,27 +224,27 @@
 
             const avgScale = (src.p.scale + tgt.p.scale) * 0.5;
             let alpha = edgeAlpha * Math.min(1, avgScale * 1.4);
-            if (isRelated) alpha = Math.min(1, alpha * 3);
+            // Boost alpha more when related, and base alpha for all edges slightly
+            if (isRelated) alpha = Math.min(1, alpha * 4.0);
+            else alpha = Math.min(1, alpha * 1.5); 
 
-            let r = 160, g = 155, b = 148; // default
-            if (e.type === "SUPPORTED_BY") { r = 127; g = 163; b = 141; }
-            else if (e.type === "WEAKENED_BY") { r = 163; g = 122; b = 135; }
-            else if (e.type === "EVOLVED_FROM") { r = 126; g = 145; b = 190; }
-            else if (e.type === "EXTRACTED_FROM") { r = 190; g = 170; b = 126; }
+            const color = window.ColorManager.getColor(e.type);
 
+            ctx.globalAlpha = alpha;
             ctx.beginPath();
             ctx.moveTo(src.p.sx, src.p.sy);
             ctx.lineTo(tgt.p.sx, tgt.p.sy);
-            ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+            ctx.strokeStyle = color;
             ctx.lineWidth = (isRelated ? 1.5 : 0.5) * avgScale * dpr;
             ctx.stroke();
+            ctx.globalAlpha = 1.0;
 
             if (isRelated) {
                 labelsToDraw.push({
                     text: e.type,
                     x: (src.p.sx + tgt.p.sx) / 2,
                     y: (src.p.sy + tgt.p.sy) / 2,
-                    color: `rgb(${r},${g},${b})`
+                    color: color
                 });
             }
         });
