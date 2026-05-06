@@ -15,6 +15,7 @@
 
     let graphData = { nodes: [], edges: [] };
     let activeFilters = new Set();
+    let activeEdgeFilters = new Set();
     let searchQuery = "";
     let activeNodeId = null;
     let hoveredId = null;
@@ -97,11 +98,13 @@
 
     // ── Taxonomy sidebar ───────────────────────────────────────────────────────
 
-    function buildTaxonomy(nodes) {
+    function buildTaxonomy(nodes, edges) {
         const labels = [...new Set(nodes.map(n => n.label))];
         const list = document.getElementById('taxonomyList');
         if (!list) return;
         list.innerHTML = '';
+        activeFilters.clear();
+        activeEdgeFilters.clear();
 
         labels.forEach(label => {
             const color = window.ColorManager.getColor(label);
@@ -119,34 +122,76 @@
         // Wire filter interactions
         list.querySelectorAll('.filter-item').forEach(item => {
             const cb = item.querySelector('.filter-cb');
-            cb.addEventListener('change', e => {
-                if (e.target.checked) activeFilters.add(e.target.value);
-                else activeFilters.delete(e.target.value);
-            });
-            item.addEventListener('dblclick', () => {
-                window.getSelection().removeAllRanges();
-                const val = cb.value;
-                activeFilters.clear();
-                activeFilters.add(val);
-                list.querySelectorAll('.filter-cb').forEach(c => {
-                    c.checked = c.value === val;
+            if (cb) {
+                cb.addEventListener('change', e => {
+                    if (e.target.checked) activeFilters.add(e.target.value);
+                    else activeFilters.delete(e.target.value);
                 });
-            });
+                item.addEventListener('dblclick', () => {
+                    window.getSelection().removeAllRanges();
+                    const val = cb.value;
+                    activeFilters.clear();
+                    activeFilters.add(val);
+                    list.querySelectorAll('.filter-cb').forEach(c => {
+                        c.checked = c.value === val;
+                    });
+                });
+            }
         });
 
-        document.getElementById('selectAllBtn')?.addEventListener('click', () => {
-            list.querySelectorAll('.filter-cb').forEach(c => {
-                c.checked = true;
-                activeFilters.add(c.value);
+        const edgeTypes = [...new Set(edges.map(e => e.type))];
+        if (edgeTypes.length > 0) {
+            const separator = document.createElement('li');
+            separator.innerHTML = '<div style="margin: 12px 0 6px; font-size: 10px; font-weight: 600; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.05em;">Relationships</div>';
+            list.appendChild(separator);
+            
+            edgeTypes.forEach(type => {
+                activeEdgeFilters.add(type);
+                const li = document.createElement('li');
+                
+                let color = '#a09b94';
+                if (type === "SUPPORTED_BY") color = '#7FA38D';
+                else if (type === "WEAKENED_BY") color = '#A37A87';
+                else if (type === "EVOLVED_FROM") color = '#7E91BE';
+                else if (type === "EXTRACTED_FROM") color = '#BEAA7E';
+                
+                li.innerHTML = `
+            <label class="filter-item">
+              <input type="checkbox" class="edge-filter-cb" value="${type}" checked>
+              <span class="color-box" style="--cb-color:${color}; width: 8px; height: 2px; border-radius: 0;"></span>
+              <span class="filter-name">${type}</span>
+            </label>`;
+                list.appendChild(li);
             });
-        });
-        document.getElementById('invertFiltersBtn')?.addEventListener('click', () => {
-            list.querySelectorAll('.filter-cb').forEach(c => {
-                c.checked = !c.checked;
-                if (c.checked) activeFilters.add(c.value);
-                else activeFilters.delete(c.value);
+            
+            list.querySelectorAll('.edge-filter-cb').forEach(cb => {
+                cb.addEventListener('change', e => {
+                    if (e.target.checked) activeEdgeFilters.add(e.target.value);
+                    else activeEdgeFilters.delete(e.target.value);
+                });
             });
-        });
+        }
+
+        const selectAllBtn = document.getElementById('selectAllBtn');
+        if (selectAllBtn) {
+            selectAllBtn.onclick = () => {
+                list.querySelectorAll('.filter-cb').forEach(c => { c.checked = true; activeFilters.add(c.value); });
+                list.querySelectorAll('.edge-filter-cb').forEach(c => { c.checked = true; activeEdgeFilters.add(c.value); });
+            };
+        }
+        const invertBtn = document.getElementById('invertFiltersBtn');
+        if (invertBtn) {
+            invertBtn.onclick = () => {
+                list.querySelectorAll('.filter-cb').forEach(c => {
+                    c.checked = !c.checked;
+                    if (c.checked) activeFilters.add(c.value); else activeFilters.delete(c.value);
+                });
+                list.querySelectorAll('.edge-filter-cb').forEach(c => {
+                    c.checked = !c.checked;
+                    if (c.checked) activeEdgeFilters.add(c.value); else activeEdgeFilters.delete(c.value);
+                });
+            };
+        }
     }
 
     // ── Visibility helpers ─────────────────────────────────────────────────────
@@ -172,41 +217,39 @@
         const sorted = [...projected].sort((a, b) => b.p.z - a.p.z);
 
         // ── Edges ────────────────────────────────────────────────────────────────
+        const labelsToDraw = [];
         graphData.edges.forEach(e => {
+            if (!activeEdgeFilters.has(e.type)) return;
             const src = projected[e.si], tgt = projected[e.ti];
             if (!src || !tgt) return;
             if (!isVisible(src.n) || !isVisible(tgt.n)) return;
 
-            const isSrcHov = src.n.id === hoveredId || src.n.id === activeNodeId;
-            const isTgtHov = tgt.n.id === hoveredId || tgt.n.id === activeNodeId;
-            const isHovEdge = isSrcHov || isTgtHov;
+            const isRelated = (src.n.id === hoveredId || tgt.n.id === hoveredId || src.n.id === activeNodeId || tgt.n.id === activeNodeId);
 
             const avgScale = (src.p.scale + tgt.p.scale) * 0.5;
-            // Boost alpha and line width if connected node is hovered
-            const alpha = (isHovEdge ? 0.6 : edgeAlpha) * Math.min(1, avgScale * 1.4);
-            const lineWidth = (isHovEdge ? 1.2 : 0.5) * avgScale * dpr;
+            let alpha = edgeAlpha * Math.min(1, avgScale * 1.4);
+            if (isRelated) alpha = Math.min(1, alpha * 3);
 
-            let strokeColor = `rgba(160,155,148,${alpha.toFixed(3)})`;
-            if (e.type === 'SUPPORTED_BY') strokeColor = `rgba(127,163,141,${alpha.toFixed(3)})`; // Green
-            else if (e.type === 'WEAKENED_BY') strokeColor = `rgba(163,122,135,${alpha.toFixed(3)})`; // Red
-            else if (e.type === 'EVOLVED_FROM') strokeColor = `rgba(126,145,190,${alpha.toFixed(3)})`; // Blue
-            else if (e.type === 'EXTRACTED_FROM') strokeColor = `rgba(190,170,126,${alpha.toFixed(3)})`; // Gold
+            let r = 160, g = 155, b = 148; // default
+            if (e.type === "SUPPORTED_BY") { r = 127; g = 163; b = 141; }
+            else if (e.type === "WEAKENED_BY") { r = 163; g = 122; b = 135; }
+            else if (e.type === "EVOLVED_FROM") { r = 126; g = 145; b = 190; }
+            else if (e.type === "EXTRACTED_FROM") { r = 190; g = 170; b = 126; }
 
             ctx.beginPath();
             ctx.moveTo(src.p.sx, src.p.sy);
             ctx.lineTo(tgt.p.sx, tgt.p.sy);
-            ctx.strokeStyle = strokeColor;
-            ctx.lineWidth = lineWidth;
+            ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+            ctx.lineWidth = (isRelated ? 1.5 : 0.5) * avgScale * dpr;
             ctx.stroke();
 
-            // Edge label on hover
-            if (isHovEdge) {
-                const midX = (src.p.sx + tgt.p.sx) / 2;
-                const midY = (src.p.sy + tgt.p.sy) / 2;
-                const fontSize = Math.round(8 * dpr);
-                ctx.font = `500 ${fontSize}px Inter, sans-serif`;
-                ctx.fillStyle = strokeColor.replace(/[\d.]+\)$/, '1)'); // Full opacity for text
-                ctx.fillText(e.type, midX, midY - 4 * dpr);
+            if (isRelated) {
+                labelsToDraw.push({
+                    text: e.type,
+                    x: (src.p.sx + tgt.p.sx) / 2,
+                    y: (src.p.sy + tgt.p.sy) / 2,
+                    color: `rgb(${r},${g},${b})`
+                });
             }
         });
 
@@ -252,6 +295,30 @@
                 ctx.fillText(label, p.sx + r * 1.6 + 3 * dpr, p.sy + fontSize * 0.35);
             }
         });
+
+        // ── Edge Labels (on top of nodes) ────────────────────────────────────────
+        if (labelsToDraw.length > 0) {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            labelsToDraw.forEach(lbl => {
+                const fontSize = Math.round(8 * dpr);
+                ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+                const tw = ctx.measureText(lbl.text).width;
+                const padX = 4 * dpr, padY = 2 * dpr;
+                
+                ctx.fillStyle = 'rgba(28,26,24,0.85)';
+                ctx.beginPath();
+                if (ctx.roundRect) {
+                    ctx.roundRect(lbl.x - tw/2 - padX, lbl.y - fontSize/2 - padY, tw + padX*2, fontSize + padY*2, 3 * dpr);
+                } else {
+                    ctx.fillRect(lbl.x - tw/2 - padX, lbl.y - fontSize/2 - padY, tw + padX*2, fontSize + padY*2);
+                }
+                ctx.fill();
+                
+                ctx.fillStyle = lbl.color;
+                ctx.fillText(lbl.text, lbl.x, lbl.y + dpr);
+            });
+        }
     }
 
     // ── Animation loop ────────────────────────────────────────────────────────
@@ -423,7 +490,7 @@
             }, []);
 
             placeNodes(graphData.nodes);
-            buildTaxonomy(graphData.nodes);
+            buildTaxonomy(graphData.nodes, graphData.edges);
 
             if (data.stats) {
                 const el = document.getElementById('topStats');
