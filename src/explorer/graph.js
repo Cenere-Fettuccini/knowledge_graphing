@@ -168,21 +168,69 @@
             damping *= 0.98; // cool down
         }
 
-        // 3. Center the graph and prep animation
+        // 3. Center the graph and prep branching animation
         let cx = 0, cy = 0, cz = 0;
         nodes.forEach(n => { cx += n.x3d; cy += n.y3d; cz += n.z3d; });
         if (nodes.length > 0) {
             cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
-            nodes.forEach(n => { 
+            
+            // Build adjacency for BFS
+            const adj = new Map();
+            nodes.forEach(n => adj.set(n._idx, []));
+            edges.forEach(e => {
+                if (adj.has(e.si)) adj.get(e.si).push(e.ti);
+                if (adj.has(e.ti)) adj.get(e.ti).push(e.si);
+            });
+
+            // Find root (User or AIManager, else highest degree)
+            let rootIdx = 0;
+            let root = nodes.find(n => n.label === 'User') || nodes.find(n => n.label === 'AIManager');
+            if (root) {
+                rootIdx = root._idx;
+            } else {
+                let maxDeg = -1;
+                adj.forEach((neighbors, i) => {
+                    if (neighbors.length > maxDeg) { maxDeg = neighbors.length; rootIdx = i; }
+                });
+            }
+
+            // BFS to assign parent nodes for branching animation
+            nodes.forEach(n => { n.depth = -1; n.parentId = -1; });
+            nodes[rootIdx].depth = 0;
+            nodes[rootIdx].parentId = rootIdx;
+            
+            const queue = [rootIdx];
+            while (queue.length > 0) {
+                const curr = queue.shift();
+                adj.get(curr).forEach(neighbor => {
+                    if (nodes[neighbor].depth === -1) {
+                        nodes[neighbor].depth = nodes[curr].depth + 1;
+                        nodes[neighbor].parentId = curr;
+                        queue.push(neighbor);
+                    }
+                });
+            }
+
+            nodes.forEach((n, i) => { 
+                if (n.depth === -1) {
+                    n.depth = 1;
+                    n.parentId = rootIdx; // tie disconnected nodes to root
+                }
+                
                 n.targetX = n.x3d - cx; 
                 n.targetY = n.y3d - cy; 
                 n.targetZ = n.z3d - cz; 
                 
-                // Initialize at a tiny fraction of target for explosion effect
-                n.x3d = n.targetX * 0.01;
-                n.y3d = n.targetY * 0.01;
-                n.z3d = n.targetZ * 0.01;
+                // Initialize exactly at final positions for branching edge animation
+                n.x3d = n.targetX;
+                n.y3d = n.targetY;
+                n.z3d = n.targetZ;
+                
+                n.animScale = 0; // 0 = invisible, 1 = fully popped
+                n.edgeProgress = 0; // branch growth from parent (0 to 1)
             });
+            nodes[rootIdx].animScale = 1; // Root pops instantly
+            nodes[rootIdx].edgeProgress = 1;
         }
     }
 
@@ -320,16 +368,33 @@
 
             const color = window.ColorManager.getColor(e.type);
 
+            // Check animation states
+            let drawSrcX = src.p.sx, drawSrcY = src.p.sy;
+            let drawTgtX = tgt.p.sx, drawTgtY = tgt.p.sy;
+
+            if (src.n.animScale < 1 || tgt.n.animScale < 1) {
+                // If it's the BFS parent-child edge, draw partial branch
+                if (tgt.n.parentId === src.n._idx && src.n.animScale >= 1) {
+                    drawTgtX = src.p.sx + (tgt.p.sx - src.p.sx) * tgt.n.edgeProgress;
+                    drawTgtY = src.p.sy + (tgt.p.sy - src.p.sy) * tgt.n.edgeProgress;
+                } else if (src.n.parentId === tgt.n._idx && tgt.n.animScale >= 1) {
+                    drawSrcX = tgt.p.sx + (src.p.sx - tgt.p.sx) * src.n.edgeProgress;
+                    drawSrcY = tgt.p.sy + (src.p.sy - tgt.p.sy) * src.n.edgeProgress;
+                } else {
+                    return; // Cross-edges wait until both nodes are popped
+                }
+            }
+
             ctx.globalAlpha = alpha;
             ctx.beginPath();
-            ctx.moveTo(src.p.sx, src.p.sy);
-            ctx.lineTo(tgt.p.sx, tgt.p.sy);
+            ctx.moveTo(drawSrcX, drawSrcY);
+            ctx.lineTo(drawTgtX, drawTgtY);
             ctx.strokeStyle = color;
             ctx.lineWidth = (isRelated ? 1.5 : 0.5) * avgScale * dpr;
             ctx.stroke();
             ctx.globalAlpha = 1.0;
 
-            if (isRelated) {
+            if (isRelated && src.n.animScale >= 1 && tgt.n.animScale >= 1) {
                 labelsToDraw.push({
                     text: e.type,
                     x: Math.round((src.p.sx + tgt.p.sx) / 2),
@@ -342,10 +407,11 @@
         // ── Nodes ────────────────────────────────────────────────────────────────
         sorted.forEach(({ p, n }) => {
             if (!isVisible(n)) return;
+            if (n.animScale === 0) return; // skip drawing if not popped yet
 
             const isHov = n.id === hoveredId;
             const isSel = n.id === activeNodeId;
-            const r = n.baseR * p.scale * dpr;
+            const r = n.baseR * p.scale * dpr * n.animScale; // Apply pop animation scale
             const color = window.ColorManager.getColor(n.label);
 
             // Outer ring for selected
@@ -420,25 +486,24 @@
         if (ts - lastTs < 14) return;   // ~70fps cap
         lastTs = ts;
         
-        // Node expansion animation
+        // Node branching animation (branch growth -> node pop)
         if (graphData.nodes.length > 0) {
             graphData.nodes.forEach(n => {
-                if (n.targetX !== undefined) {
-                    const dx = n.targetX - n.x3d;
-                    const dy = n.targetY - n.y3d;
-                    const dz = n.targetZ - n.z3d;
-                    
-                    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || Math.abs(dz) > 0.5) {
-                        // Smoothly interpolate towards target (easing)
-                        n.x3d += dx * 0.08;
-                        n.y3d += dy * 0.08;
-                        n.z3d += dz * 0.08;
-                    } else {
-                        // Snap to final to save math
-                        n.x3d = n.targetX;
-                        n.y3d = n.targetY;
-                        n.z3d = n.targetZ;
+                if (n.parentId !== undefined && n.parentId !== n._idx) {
+                    const p = graphData.nodes[n.parentId];
+                    // If parent is fully popped, start growing the edge to this node
+                    if (p.animScale >= 1.0) {
+                        if (n.edgeProgress < 1.0) {
+                            n.edgeProgress = Math.min(1.0, n.edgeProgress + 0.05); // branch grows
+                        } else if (n.animScale < 1.0) {
+                            // branch reached tip, pop the node
+                            n.animScale = Math.min(1.0, n.animScale + 0.15); // quick pop
+                        }
                     }
+                } else if (n.animScale < 1.0) {
+                    // Root or disconnected nodes pop instantly
+                    n.animScale = Math.min(1.0, n.animScale + 0.15);
+                    n.edgeProgress = 1.0;
                 }
             });
         }
