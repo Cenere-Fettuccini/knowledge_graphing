@@ -65,27 +65,11 @@
         return { sx: W / 2 + x * finalScale, sy: H / 2 + y * finalScale, scale: finalScale, z };
     }
 
-    // ── Node placement — spherical + cluster by label ──────────────────────────
+    // ── Node placement — Force-Directed 3D Semantic Layout ──────────────────────────
 
-    function placeNodes(nodes) {
-        // Collect unique labels and assign cluster centers on a sphere shell
-        const labels = [...new Set(nodes.map(n => n.label))].sort();
-        const clusterCenters = {};
-        labels.forEach((lbl, i) => {
-            const phi = Math.acos(1 - 2 * (i + 0.5) / labels.length);
-            const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-            const R = 180; // Increased base radius for more depth
-            clusterCenters[lbl] = {
-                cx: R * Math.sin(phi) * Math.cos(theta),
-                cy: R * Math.sin(phi) * Math.sin(theta),
-                cz: R * Math.cos(phi),
-            };
-        });
-
+    function placeNodes(nodes, edges) {
+        // 1. Initial deterministic placement (random scatter in small volume)
         nodes.forEach((n, i) => {
-            const { cx, cy, cz } = clusterCenters[n.label];
-            
-            // Generate a deterministic numeric seed from the node's unique ID
             let seed = 0;
             const idStr = String(n.id || i);
             for (let j = 0; j < idStr.length; j++) {
@@ -93,23 +77,104 @@
                 seed |= 0;
             }
             seed = Math.abs(seed) || 1;
-            
-            // Simple PRNG function using the seed
             function rand() {
                 let x = Math.sin(seed++) * 10000;
                 return x - Math.floor(x);
             }
 
-            // Scatter within cluster deterministically
-            const jitter = 110; // Increased jitter for a thicker volume
-            const theta = rand() * Math.PI * 2;
-            const phi = Math.acos(2 * rand() - 1);
-            const r = rand() * jitter;
-            n.x3d = cx + r * Math.sin(phi) * Math.cos(theta);
-            n.y3d = cy + r * Math.sin(phi) * Math.sin(theta);
-            n.z3d = cz + r * Math.cos(phi);
-            n.baseR = 2.8 + rand() * 2.2;   // canvas-space base radius (pre-scale)
+            n.x3d = (rand() - 0.5) * 150;
+            n.y3d = (rand() - 0.5) * 150;
+            n.z3d = (rand() - 0.5) * 150;
+            n.vx = 0; n.vy = 0; n.vz = 0;
+            n.baseR = 2.8 + rand() * 2.2;
         });
+
+        if (!edges || edges.length === 0) return;
+
+        // 2. Pre-calculate force layout (fast background simulation)
+        const iterations = 150;
+        const repulseStrength = 6000;
+        const linkStrength = 0.05;
+        const gravity = 0.01;
+        let damping = 0.85;
+
+        for (let iter = 0; iter < iterations; iter++) {
+            // Repulsion (N^2)
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const n1 = nodes[i];
+                    const n2 = nodes[j];
+                    let dx = n1.x3d - n2.x3d;
+                    let dy = n1.y3d - n2.y3d;
+                    let dz = n1.z3d - n2.z3d;
+                    let distSq = dx*dx + dy*dy + dz*dz;
+                    if (distSq === 0) { dx = 0.1; dy = 0.1; dz = 0.1; distSq = 0.03; }
+                    
+                    if (distSq < 40000) { // optimization: ignore far nodes
+                        const force = repulseStrength / distSq;
+                        const fx = dx * force;
+                        const fy = dy * force;
+                        const fz = dz * force;
+                        n1.vx += fx; n1.vy += fy; n1.vz += fz;
+                        n2.vx -= fx; n2.vy -= fy; n2.vz -= fz;
+                    }
+                }
+            }
+
+            // Attraction (Edges)
+            edges.forEach(e => {
+                const n1 = nodes[e.si];
+                const n2 = nodes[e.ti];
+                if (!n1 || !n2) return;
+                
+                let dx = n2.x3d - n1.x3d;
+                let dy = n2.y3d - n1.y3d;
+                let dz = n2.z3d - n1.z3d;
+                
+                // Weight by edge type
+                let strength = linkStrength;
+                if (e.type === 'ABOUT' || e.type === 'WORKS_ON') strength *= 1.5;
+                if (e.type === 'SUPPORTED_BY' || e.type === 'WEAKENED_BY' || e.type === 'EXTRACTED_FROM') strength *= 1.2;
+
+                const fx = dx * strength;
+                const fy = dy * strength;
+                const fz = dz * strength;
+                
+                n1.vx += fx; n1.vy += fy; n1.vz += fz;
+                n2.vx -= fx; n2.vy -= fy; n2.vz -= fz;
+            });
+
+            // Gravity & Position Update
+            nodes.forEach(n => {
+                // Semantic Gravity: Pull core entities to exact center strongly
+                let nodeGravity = gravity;
+                if (n.label === 'User' || n.label === 'AIManager') nodeGravity = 0.08;
+
+                n.vx -= n.x3d * nodeGravity;
+                n.vy -= n.y3d * nodeGravity;
+                n.vz -= n.z3d * nodeGravity;
+
+                // Apply velocity with damping
+                n.vx *= damping;
+                n.vy *= damping;
+                n.vz *= damping;
+
+                // Move node
+                n.x3d += n.vx;
+                n.y3d += n.vy;
+                n.z3d += n.vz;
+            });
+            
+            damping *= 0.98; // cool down
+        }
+
+        // 3. Center the graph
+        let cx = 0, cy = 0, cz = 0;
+        nodes.forEach(n => { cx += n.x3d; cy += n.y3d; cz += n.z3d; });
+        if (nodes.length > 0) {
+            cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
+            nodes.forEach(n => { n.x3d -= cx; n.y3d -= cy; n.z3d -= cz; });
+        }
     }
 
     // ── Taxonomy sidebar ───────────────────────────────────────────────────────
@@ -506,7 +571,7 @@
                 return acc;
             }, []);
 
-            placeNodes(graphData.nodes);
+            placeNodes(graphData.nodes, graphData.edges);
             buildTaxonomy(graphData.nodes, graphData.edges);
 
             if (data.stats) {
