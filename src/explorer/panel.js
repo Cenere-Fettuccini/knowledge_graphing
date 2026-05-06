@@ -158,6 +158,13 @@ const Panel = {
                 <div class="node-id">${n.id}</div>
             </div>
         `;
+        html += `
+            <div style="margin: 10px 0 14px;">
+                <button id="talkFromNodeBtn" class="btn btn-ghost" style="padding: 6px 12px;">
+                    Open in Chat
+                </button>
+            </div>
+        `;
 
         if (n.label === 'Belief') {
             const confPct = Math.round((n.confidence || 0) * 100);
@@ -205,6 +212,14 @@ const Panel = {
         }
 
         await this.typeWriter(this.nodeInfo, html);
+
+        document.getElementById('talkFromNodeBtn')?.addEventListener('click', () => {
+            window.ChatPage?.openFromGraph?.({
+                id: n.id,
+                name: n.name,
+                label: n.label,
+            });
+        });
 
         // ── Provenance / Belief Trail ────────────────────────────────────
         provList.innerHTML = '';

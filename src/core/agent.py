@@ -106,31 +106,51 @@ class Agent(BaseAgent):
         self._last_health_check = now
         return info
 
-    def process_message(self, user_id: str, text: str, session_id: str) -> str:
+    def process_message(
+        self,
+        user_id: str,
+        text: str,
+        session_id: str,
+        *,
+        prompt_text: str | None = None,
+        store_text: str | None = None,
+    ) -> str:
         """Synchronous entry point — runs the LangGraph loop."""
-        initial_state = self._build_initial_state(text, session_id)
+        effective_prompt = prompt_text or text
+        persisted_text = store_text or text
+        initial_state = self._build_initial_state(effective_prompt, session_id)
         try:
             final_state = self.graph.invoke(initial_state)
             reply = final_state["messages"][-1].content
-            self._store_interaction(text, reply, session_id)
+            self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
             logger.error("Agent loop failed: %s", e)
             # Still store the user's message even on failure
-            self._store_interaction(text, None, session_id)
+            self._store_interaction(persisted_text, None, session_id)
             return "I'm sorry, I encountered an internal error while processing that."
 
-    async def aprocess_message(self, user_id: str, text: str, session_id: str) -> str:
+    async def aprocess_message(
+        self,
+        user_id: str,
+        text: str,
+        session_id: str,
+        *,
+        prompt_text: str | None = None,
+        store_text: str | None = None,
+    ) -> str:
         """Async entry point — doesn't block the event loop."""
-        initial_state = self._build_initial_state(text, session_id)
+        effective_prompt = prompt_text or text
+        persisted_text = store_text or text
+        initial_state = self._build_initial_state(effective_prompt, session_id)
         try:
             final_state = await self.graph.ainvoke(initial_state)
             reply = final_state["messages"][-1].content
-            self._store_interaction(text, reply, session_id)
+            self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
             logger.error("Agent loop failed: %s", e)
-            self._store_interaction(text, None, session_id)
+            self._store_interaction(persisted_text, None, session_id)
             return "I'm sorry, I encountered an internal error while processing that."
 
     def _build_initial_state(self, text: str, session_id: str) -> dict:

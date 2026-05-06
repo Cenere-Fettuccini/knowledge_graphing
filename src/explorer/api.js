@@ -33,6 +33,62 @@ const API = {
             console.error("API Error: getSystemStatus", e);
             return { neo4j: "offline", chroma: "offline", agent: "offline" };
         }
+    },
+
+    async getChatSessions() {
+        try {
+            const res = await fetch('/api/chat/sessions');
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error("API Error: getChatSessions", e);
+            return { sessions: [] };
+        }
+    },
+
+    async getChatSession(sessionId) {
+        try {
+            const res = await fetch(`/api/chat/session/${sessionId}`);
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error("API Error: getChatSession", e);
+            return { session_id: sessionId, messages: [] };
+        }
+    },
+
+    async createChatSession(label = "browser") {
+        try {
+            const res = await fetch('/api/chat/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label })
+            });
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error("API Error: createChatSession", e);
+            return { session_id: `browser_${Date.now()}` };
+        }
+    },
+
+    async sendChatMessage(sessionId, message, anchorNodeId = null) {
+        try {
+            const res = await fetch('/api/chat/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    message,
+                    anchor_node_id: anchorNodeId
+                })
+            });
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error("API Error: sendChatMessage", e);
+            return { ok: false, error: e.message || 'Request failed' };
+        }
     }
 };
 

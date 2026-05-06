@@ -1,12 +1,35 @@
 import time
+import uuid
+from collections import defaultdict
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body
 from src.memory.manager import memory_manager
 from src.core.router import llm_router
+from src.core.agent import Agent
 from src.core.limits_store import (
     import_from_paste, load_limits, load_mismatch_log, get_limit_for_model
 )
 
 router = APIRouter()
+web_agent = Agent(memory=memory_manager)
+
+
+def _session_sort_key(item: dict) -> tuple[int, str]:
+    ts = item.get("last_timestamp") or ""
+    try:
+        return (1, datetime.fromisoformat(ts.replace("Z", "+00:00")).isoformat())
+    except Exception:
+        return (0, ts)
+
+
+def _build_session_preview(memories: list[dict]) -> str:
+    for memory in memories:
+        if memory.get("metadata", {}).get("role") == "user" and memory.get("text"):
+            return memory["text"][:80]
+    if memories:
+        return memories[0].get("text", "")[:80]
+    return "Empty conversation"
 
 @router.get("/graph/overview")
 async def get_overview():
@@ -17,6 +40,124 @@ async def get_overview():
 async def get_node_detail(node_id: str):
     """Returns details for a specific node from Neo4j."""
     return memory_manager.neo4j.get_node_detail(node_id)
+
+
+@router.get("/chat/sessions")
+async def get_chat_sessions():
+    """List known conversation sessions from episodic memory."""
+    if not memory_manager._is_chroma_available():
+        return {"sessions": []}
+
+    try:
+        results = memory_manager.chroma.collection.get(limit=500)
+    except Exception:
+        return {"sessions": []}
+
+    docs = results.get("documents") or []
+    metas = results.get("metadatas") or []
+
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for idx, text in enumerate(docs):
+        metadata = metas[idx] or {}
+        session_id = metadata.get("session_id")
+        if not session_id:
+            continue
+        grouped[session_id].append({
+            "text": text,
+            "metadata": metadata,
+        })
+
+    sessions = []
+    for session_id, memories in grouped.items():
+        memories.sort(key=lambda m: m.get("metadata", {}).get("timestamp", ""), reverse=True)
+        sessions.append({
+            "session_id": session_id,
+            "turn_count": len(memories),
+            "last_timestamp": memories[0].get("metadata", {}).get("timestamp"),
+            "preview": _build_session_preview(memories),
+        })
+
+    sessions.sort(key=_session_sort_key, reverse=True)
+    return {"sessions": sessions}
+
+
+@router.get("/chat/session/{session_id}")
+async def get_chat_session(session_id: str):
+    """Return the stored history for a browser or Telegram conversation session."""
+    history = memory_manager.get_history(session_id, limit=100)
+    ordered = list(reversed(history))
+    return {
+        "session_id": session_id,
+        "messages": [
+            {
+                "id": item.get("id"),
+                "role": item.get("metadata", {}).get("role", "assistant"),
+                "text": item.get("text", ""),
+                "timestamp": item.get("metadata", {}).get("timestamp"),
+            }
+            for item in ordered
+        ]
+    }
+
+
+@router.post("/chat/session")
+async def create_chat_session(body: dict = Body(default={})):
+    """Create a new browser chat session ID."""
+    label = body.get("label", "browser")
+    session_id = f"{label}_{uuid.uuid4().hex[:10]}"
+    return {"session_id": session_id}
+
+
+@router.post("/chat/message")
+async def post_chat_message(body: dict = Body(...)):
+    """Send a browser chat message through the existing agent."""
+    session_id = body.get("session_id")
+    text = (body.get("message") or "").strip()
+    anchor_node_id = body.get("anchor_node_id")
+
+    if not session_id:
+        return {"ok": False, "error": "Missing session_id"}
+    if not text:
+        return {"ok": False, "error": "Empty message"}
+
+    effective_text = text
+    anchor = None
+
+    if anchor_node_id:
+        detail = memory_manager.neo4j.get_node_detail(anchor_node_id)
+        node = detail.get("node") if detail else None
+        if node:
+            connections = detail.get("connections", [])[:8]
+            relation_summary = ", ".join(
+                f"{c['type']} -> {c['target']}" for c in connections
+            ) or "No direct connections listed."
+            anchor = {
+                "id": node.get("id"),
+                "label": node.get("label"),
+                "name": node.get("name"),
+            }
+            effective_text = (
+                "Use this graph node as the anchor for the conversation.\n"
+                f"Node: {node.get('name')} ({node.get('label')})\n"
+                f"Details: {node}\n"
+                f"Connections: {relation_summary}\n\n"
+                f"User request: {text}"
+            )
+
+    reply = await web_agent.aprocess_message(
+        "web_user",
+        text,
+        session_id,
+        prompt_text=effective_text,
+        store_text=text,
+    )
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "reply": reply,
+        "anchor": anchor,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 @router.get("/tasks/active")
 async def get_active_tasks():

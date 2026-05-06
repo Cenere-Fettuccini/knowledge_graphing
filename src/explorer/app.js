@@ -25,8 +25,8 @@ const PageRouter = {
         this._pages.push(pageDef);
     },
 
-    getPages()   { return this._pages; },
-    getActive()  { return this._activeId; },
+    getPages() { return this._pages; },
+    getActive() { return this._activeId; },
     getActiveModule() { return this._activeModule; },
 
     /** Navigate to a page by id */
@@ -42,7 +42,7 @@ const PageRouter = {
 
         // Tear down previous
         if (prev && typeof prev.destroy === 'function') {
-            try { prev.destroy(); } catch(e) { console.error('[Router] destroy error', e); }
+            try { prev.destroy(); } catch (e) { console.error('[Router] destroy error', e); }
         }
         document.querySelectorAll('.page-view').forEach(el => {
             el.classList.remove('is-active', 'is-entering');
@@ -63,7 +63,7 @@ const PageRouter = {
 
         // Initialize the page
         if (typeof next.init === 'function') {
-            try { await next.init(); } catch(e) { console.error('[Router] init error', e); }
+            try { await next.init(); } catch (e) { console.error('[Router] init error', e); }
         }
 
         // Update URL hash silently
@@ -102,13 +102,14 @@ const DrumNavigator = {
     _raf: null,
     _settled: true,
     _onNavigate: null,     // callback(index)
+    _lastWheelTime: 0,
 
     // Physics tuning
-    FRICTION:     0.92,    // velocity decay per frame (lower = more resistance)
-    SNAP_SPRING:  0.12,    // spring stiffness toward snap point
-    SNAP_DAMPING: 0.72,    // damping on the spring
+    FRICTION: 0.85,    // velocity decay per frame (lower = more resistance)
+    SNAP_SPRING: 0.12,    // spring stiffness toward snap point
+    SNAP_DAMPING: 0.65,    // damping on the spring
     SETTLE_THRESHOLD: 0.3, // velocity below which we consider settled
-    DRAG_SENSITIVITY: 1.0, // multiplier on drag deltas
+    DRAG_SENSITIVITY: 0.40, // multiplier on drag deltas
 
     init(containerEl, items, onNavigate) {
         this._items = items;
@@ -137,13 +138,13 @@ const DrumNavigator = {
         });
 
         // Bind input events
-        containerEl.addEventListener('mousedown',  e => this._onPointerDown(e));
-        containerEl.addEventListener('touchstart',  e => this._onPointerDown(e), { passive: false });
-        window.addEventListener('mousemove',   e => this._onPointerMove(e));
-        window.addEventListener('touchmove',   e => this._onPointerMove(e), { passive: false });
-        window.addEventListener('mouseup',     e => this._onPointerUp(e));
-        window.addEventListener('touchend',    e => this._onPointerUp(e));
-        containerEl.addEventListener('wheel',       e => this._onWheel(e), { passive: false });
+        containerEl.addEventListener('mousedown', e => this._onPointerDown(e));
+        containerEl.addEventListener('touchstart', e => this._onPointerDown(e), { passive: false });
+        window.addEventListener('mousemove', e => this._onPointerMove(e));
+        window.addEventListener('touchmove', e => this._onPointerMove(e), { passive: false });
+        window.addEventListener('mouseup', e => this._onPointerUp(e));
+        window.addEventListener('touchend', e => this._onPointerUp(e));
+        containerEl.addEventListener('wheel', e => this._onWheel(e), { passive: false });
 
         // Start at first page
         this._position = 0;
@@ -233,18 +234,26 @@ const DrumNavigator = {
 
         document.querySelectorAll('.drum-nav').forEach(n => n.classList.remove('active'));
 
-        // Calculate release velocity from recent drag samples
+        let rawIndex = this._targetIndex;
+
+        // Calculate drag momentum to snap to next/prev exactly one slot
         if (this._dragVelocities.length > 0) {
             let totalDy = 0, totalDt = 0;
             this._dragVelocities.forEach(v => { totalDy += v.dy; totalDt += v.dt; });
-            this._velocity = (totalDy / totalDt) * 16; // normalize to per-frame
+            const avgVel = (totalDy / totalDt) * 16;
+
+            if (avgVel > 2) {
+                rawIndex = this._targetIndex + 1;
+            } else if (avgVel < -2) {
+                rawIndex = this._targetIndex - 1;
+            } else {
+                rawIndex = Math.round(this._position / this._itemH);
+            }
         } else {
-            this._velocity = 0;
+            rawIndex = Math.round(this._position / this._itemH);
         }
 
-        // Determine which index we're closest to (or will be after inertia)
-        const projected = this._position + this._velocity * 5; // project ~5 frames
-        const rawIndex = Math.round(projected / this._itemH);
+        this._velocity = 0; // Disable inertial rolling, snap rigidly
         this._targetIndex = Math.max(0, Math.min(this._items.length - 1, rawIndex));
 
         this._settled = false;
@@ -253,6 +262,10 @@ const DrumNavigator = {
 
     _onWheel(e) {
         e.preventDefault();
+        const now = performance.now();
+        if (now - this._lastWheelTime < 500) return; // Cooldown for discrete clicks
+        this._lastWheelTime = now;
+
         const delta = e.deltaY > 0 ? 1 : -1;
         const nextIndex = Math.max(0, Math.min(
             this._items.length - 1,
@@ -340,7 +353,7 @@ const DrumNavigator = {
             const angle = (i - currentIndex) * 18; // degrees of tilt
             const opacity = Math.max(0.15, 1 - dist * 0.45);
             const scale = Math.max(0.82, 1 - dist * 0.08);
-            
+
             el.style.opacity = opacity;
             el.style.transform = `scale(${scale}) perspective(200px) rotateX(${angle}deg)`;
         }
