@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # ── LLM ───────────────────────────────────────────────────────────────────
     google_api_keys: str = Field(default="", validation_alias="google_api_key")
+    google_project_scopes: str = ""
     llm_model: str = "models/gemini-2.5-flash"
     llm_temperature: float = 0.7
 
@@ -52,6 +53,34 @@ class Settings(BaseSettings):
     def api_keys(self) -> list[str]:
         """Parse the comma-separated API keys into a list."""
         return [k.strip() for k in self.google_api_keys.split(",") if k.strip()]
+
+    @property
+    def project_scopes(self) -> list[str]:
+        """
+        Parse comma-separated project scopes for Gemini API keys.
+
+        If omitted, all keys are assumed to share one project-scoped quota pool.
+        """
+        keys = self.api_keys
+        if not keys:
+            return []
+
+        raw_scopes = [scope.strip() for scope in self.google_project_scopes.split(",") if scope.strip()]
+        if not raw_scopes:
+            return ["default"] * len(keys)
+        if len(raw_scopes) == 1:
+            return raw_scopes * len(keys)
+        if len(raw_scopes) < len(keys):
+            return raw_scopes + ([raw_scopes[-1]] * (len(keys) - len(raw_scopes)))
+        return raw_scopes[:len(keys)]
+
+    @property
+    def google_key_configs(self) -> list[dict[str, str]]:
+        """Return per-key configs paired with their project-scoped quota bucket."""
+        return [
+            {"api_key": api_key, "project_scope": project_scope}
+            for api_key, project_scope in zip(self.api_keys, self.project_scopes)
+        ]
 
     @property
     def allowed_user_ids(self) -> set[str]:

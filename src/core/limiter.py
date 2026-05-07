@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UsageState:
-    """Serializable usage state for a specific API key + model."""
+    """Serializable usage state for a specific project scope + model."""
     used_rpm: List[float] = field(default_factory=list) # timestamps
     used_rpd: List[float] = field(default_factory=list) # timestamps
     used_tpm: List[Dict[str, Any]] = field(default_factory=list) # {ts: float, tokens: int}
@@ -21,7 +21,7 @@ class InternalRateLimiter:
 
     def __init__(self, persist_path: str = "./data/usage_tracking.json"):
         self.persist_path = Path(persist_path)
-        self.states: Dict[str, UsageState] = {} # key: "model:api_key"
+        self.states: Dict[str, UsageState] = {} # key: "model:project_scope"
         self._load()
 
     def _load(self):
@@ -44,15 +44,18 @@ class InternalRateLimiter:
         except Exception as e:
             logger.error("Failed to save usage state: %s", e)
 
-    def _get_state(self, model_id: str, api_key: str) -> UsageState:
-        key = f"{model_id}:{api_key}"
+    def _make_key(self, model_id: str, project_scope: str) -> str:
+        return f"{model_id}:{project_scope or 'default'}"
+
+    def _get_state(self, model_id: str, project_scope: str) -> UsageState:
+        key = self._make_key(model_id, project_scope)
         if key not in self.states:
             self.states[key] = UsageState()
         return self.states[key]
 
-    def track(self, model_id: str, api_key: str, tokens: int = 0):
+    def track(self, model_id: str, project_scope: str, tokens: int = 0):
         """Record a call and its token usage."""
-        state = self._get_state(model_id, api_key)
+        state = self._get_state(model_id, project_scope)
         now = time.time()
         
         state.used_rpm.append(now)
@@ -62,10 +65,31 @@ class InternalRateLimiter:
             
         self._save()
 
-    def get_headroom(self, model_id: str, api_key: str, 
+    def set_usage_snapshot(
+        self,
+        model_id: str,
+        project_scope: str,
+        rpm_used: int = 0,
+        tpm_used: int = 0,
+        rpd_used: int = 0,
+        ts: float | None = None,
+    ) -> None:
+        """Replace tracked usage with a point-in-time snapshot from AI Studio."""
+        state = self._get_state(model_id, project_scope)
+        now = ts if ts is not None else time.time()
+
+        state.used_rpm = [now] * max(0, rpm_used)
+        state.used_rpd = [now] * max(0, rpd_used)
+        state.used_tpm = [{"ts": now, "tokens": max(0, tpm_used)}] if tpm_used > 0 else []
+
+    def save(self) -> None:
+        """Persist current in-memory usage state."""
+        self._save()
+
+    def get_headroom(self, model_id: str, project_scope: str,
                      rpm_limit: int, rpd_limit: int, tpm_limit: int) -> float:
         """Calculate fraction of limits remaining (0.0 to 1.0)."""
-        state = self._get_state(model_id, api_key)
+        state = self._get_state(model_id, project_scope)
         now = time.time()
         
         # Prune old data

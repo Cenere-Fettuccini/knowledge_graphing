@@ -1,5 +1,6 @@
 """Unified facade over all memory stores — the only import other modules need."""
 
+import json
 import logging
 import time
 from src.memory.stores.chroma_store import ChromaStore
@@ -64,7 +65,35 @@ class MemoryManager:
         health = self.status()
         return "online" in health.get("chroma", "")
 
-    def store(self, text: str, role: str, session_id: str,
+    def _coerce_text(self, value) -> str:
+        """Normalize LangChain-style structured content into plain text."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text)
+                        continue
+                coerced = self._coerce_text(item)
+                if coerced.strip():
+                    parts.append(coerced)
+            return "\n".join(parts).strip()
+        if isinstance(value, dict):
+            text = value.get("text")
+            if isinstance(text, str):
+                return text
+            return json.dumps(value, ensure_ascii=True, sort_keys=True)
+        return str(value)
+
+    def store(self, text, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
         """Store a conversation turn with metadata."""
         if not self._is_chroma_available():
@@ -77,8 +106,12 @@ class MemoryManager:
             "is_ephemeral": is_ephemeral,
             **extra,
         }
+        normalized_text = self._coerce_text(text)
+        if not normalized_text.strip():
+            logger.warning("Skipping empty memory write for session %s", session_id)
+            return None
         try:
-            return self.chroma.add_memory(text, metadata)
+            return self.chroma.add_memory(normalized_text, metadata)
         except Exception as e:
             logger.error("Failed to store memory in Chroma: %s", e)
             # Invalidate cache on failure so next call re-checks

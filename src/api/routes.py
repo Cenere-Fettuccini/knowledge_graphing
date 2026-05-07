@@ -221,11 +221,12 @@ async def get_system_status():
     quota = []
     for model in llm_router.models:
         headroom = llm_router.limiter.get_headroom(
-            model.model_id, model.api_key, 
+            model.model_id, model.project_scope,
             model.rpm_limit, model.rpd_limit, model.tpm_limit
         )
         quota.append({
             "model": model.model_id.split("/")[-1],
+            "project_scope": model.project_scope,
             "headroom": round(headroom * 100, 1),
             "rpm_limit": model.rpm_limit,
             "rpd_limit": model.rpd_limit
@@ -254,7 +255,7 @@ async def get_credits():
     for model in llm_router.models:
         short_id = model.model_id.split("/")[-1]
         tracked_ids.add(short_id)
-        state = llm_router.limiter._get_state(model.model_id, model.api_key)
+        state = llm_router.limiter._get_state(model.model_id, model.project_scope)
 
         # Prune stale windows in-memory (mirrors limiter logic, non-mutating read)
         rpm_used = len([t for t in state.used_rpm if now - t < 60])
@@ -262,17 +263,17 @@ async def get_credits():
         tpm_used = sum(e["tokens"] for e in state.used_tpm if now - e["ts"] < 60)
 
         headroom = llm_router.limiter.get_headroom(
-            model.model_id, model.api_key,
+            model.model_id, model.project_scope,
             model.rpm_limit, model.rpd_limit, model.tpm_limit
         )
 
-        masked_key = f"****{model.api_key[-4:]}" if len(model.api_key) > 4 else "Unauthenticated"
-        group_name = "Local Models" if model.provider == "local" else f"{model.provider.capitalize()} API ({masked_key})"
+        group_name = "Local Models" if model.provider == "local" else f"{model.provider.capitalize()} Project ({model.project_scope})"
 
         models_data.append({
             "model": short_id,
             "model_id": model.model_id,
             "provider": model.provider,
+            "project_scope": model.project_scope,
             "group": group_name,
             # headroom is always real measured data — never a default
             "headroom": round(headroom * 100, 1),
@@ -311,10 +312,14 @@ async def import_limits(body: dict = Body(...)):
     raw_text = body.get("text", "")
     if not raw_text.strip():
         return {"ok": False, "error": "No text provided", "matched": []}
-    updated, matched = import_from_paste(raw_text)
-    # Hot-reload router so new limits are used immediately (no restart needed)
-    llm_router.reload_limits()
-    return {"ok": True, "matched": matched, "total_models": len(updated)}
+    try:
+        updated, matched = import_from_paste(raw_text)
+        # Hot-reload router so new limits are used immediately (no restart needed)
+        llm_router.reload_limits()
+        return {"ok": True, "matched": matched, "total_models": len(updated)}
+    except Exception as e:
+        logger.exception("Failed to import AI Studio limits")
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "matched": []}
 
 
 @router.get("/credits/mismatches")

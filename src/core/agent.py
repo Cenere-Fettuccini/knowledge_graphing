@@ -121,7 +121,7 @@ class Agent(BaseAgent):
         initial_state = self._build_initial_state(effective_prompt, session_id)
         try:
             final_state = self.graph.invoke(initial_state)
-            reply = final_state["messages"][-1].content
+            reply = self._coerce_message_text(final_state["messages"][-1].content)
             self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
@@ -145,7 +145,7 @@ class Agent(BaseAgent):
         initial_state = self._build_initial_state(effective_prompt, session_id)
         try:
             final_state = await self.graph.ainvoke(initial_state)
-            reply = final_state["messages"][-1].content
+            reply = self._coerce_message_text(final_state["messages"][-1].content)
             self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
@@ -170,6 +170,10 @@ class Agent(BaseAgent):
             self.memory.store(user_text, role="user", session_id=session_id, timestamp=ts)
             if reply:
                 self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts)
+
+    def _coerce_message_text(self, content) -> str:
+        """Convert LangChain message content into plain text for callers and memory."""
+        return self.memory._coerce_text(content)
 
     def _get_llm_instance(self, spec: ModelSpec):
         """Get or create a LangChain LLM instance for the given spec."""
@@ -246,9 +250,9 @@ class Agent(BaseAgent):
 
                 if is_429:
                     logger.warning("Model %s hit 429 quota/rate limit.", spec.model_id)
-                    self.router.track_429(spec.model_id, api_key=spec.api_key)
+                    self.router.track_429(spec.model_id, project_scope=spec.project_scope)
                     # Temporarily exhaust the internal limits so get_best_model picks a different one next loop
-                    self.router.limiter.track(spec.model_id, spec.api_key, tokens=spec.tpm_limit * 10)
+                    self.router.limiter.track(spec.model_id, spec.project_scope, tokens=spec.tpm_limit * 10)
 
                 if attempt == MAX_RETRIES - 1:
                     raise
@@ -263,7 +267,7 @@ class Agent(BaseAgent):
         # Track actual token usage
         if response and used_spec:
             tokens = self._extract_token_count(response)
-            self.router.track_usage(used_spec.model_id, api_key=used_spec.api_key, tokens=tokens)
+            self.router.track_usage(used_spec.model_id, project_scope=used_spec.project_scope, tokens=tokens)
 
         return {"messages": [response]}
 

@@ -13,6 +13,7 @@ class ModelSpec:
     model_id: str
     provider: str  # "google", "local", etc.
     api_key: str = ""
+    project_scope: str = "default"
     # Scores (0.0 to 1.0) for different task types
     capabilities: Dict[str, float] = field(default_factory=lambda: {
         "QA": 0.5,
@@ -38,22 +39,31 @@ class LLMRouter:
         """Populate models based on available API keys.
         Loads dynamic models from limits_override.json, or falls back to defaults.
         """
-        keys = settings.api_keys
+        key_configs = settings.google_key_configs
         overrides = load_limits()
+        registered_google_specs: set[tuple[str, str]] = set()
         
         if not overrides:
             # Fallback defaults if no limits have been imported
-            for key in keys:
-                self.models.append(self._make_spec(
-                    model_id="models/gemini-2.5-pro", api_key=key,
+            for key_config in key_configs:
+                key = key_config["api_key"]
+                project_scope = key_config["project_scope"]
+                spec = self._make_spec(
+                    model_id="models/gemini-2.5-pro", api_key=key, project_scope=project_scope,
                     capabilities={"QA": 0.9, "EXTRACTION": 1.0, "SUMMARIZATION": 0.8, "CODE": 0.9, "REASONING": 1.0},
                     default_rpm=5, default_rpd=25, default_tpm=32_000,
-                ))
-                self.models.append(self._make_spec(
-                    model_id="models/gemini-2.5-flash", api_key=key,
+                    seen_specs=registered_google_specs,
+                )
+                if spec:
+                    self.models.append(spec)
+                spec = self._make_spec(
+                    model_id="models/gemini-2.5-flash", api_key=key, project_scope=project_scope,
                     capabilities={"QA": 0.7, "EXTRACTION": 0.6, "SUMMARIZATION": 0.9, "CODE": 0.6, "REASONING": 0.6},
                     default_rpm=5, default_rpd=20, default_tpm=250_000,
-                ))
+                    seen_specs=registered_google_specs,
+                )
+                if spec:
+                    self.models.append(spec)
         else:
             # Dynamically register every model imported from AI Studio
             for short_id, limits in overrides.items():
@@ -75,13 +85,19 @@ class LLMRouter:
                 else:
                     caps = {"QA": 0.7, "EXTRACTION": 0.6, "SUMMARIZATION": 0.9, "CODE": 0.6, "REASONING": 0.6}
                 
-                for key in keys:
-                    self.models.append(self._make_spec(
+                for key_config in key_configs:
+                    key = key_config["api_key"]
+                    project_scope = key_config["project_scope"]
+                    spec = self._make_spec(
                         model_id=f"models/{short_id}",
                         api_key=key,
+                        project_scope=project_scope,
                         capabilities=caps,
-                        default_rpm=1, default_rpd=1, default_tpm=1000 # Make defaults low so overrides apply
-                    ))
+                        default_rpm=1, default_rpd=1, default_tpm=1000, # Make defaults low so overrides apply
+                        seen_specs=registered_google_specs,
+                    )
+                    if spec:
+                        self.models.append(spec)
 
         # Local fallback — always available, no limits
         self.models.append(ModelSpec(
@@ -91,9 +107,15 @@ class LLMRouter:
             rpm_limit=9999, rpd_limit=9999, tpm_limit=9_999_999,
         ))
 
-    def _make_spec(self, model_id: str, api_key: str, capabilities: dict,
-                   default_rpm: int, default_rpd: int, default_tpm: int) -> ModelSpec:
+    def _make_spec(self, model_id: str, api_key: str, project_scope: str, capabilities: dict,
+                   default_rpm: int, default_rpd: int, default_tpm: int,
+                   seen_specs: set[tuple[str, str]]) -> Optional[ModelSpec]:
         """Build a ModelSpec, preferring stored limits over hardcoded defaults."""
+        spec_key = (model_id, project_scope or "default")
+        if spec_key in seen_specs:
+            return None
+        seen_specs.add(spec_key)
+
         stored = get_limit_for_model(model_id)
         rpm = stored.get('rpm_limit') if stored and stored.get('rpm_limit') is not None else default_rpm
         rpd = stored.get('rpd_limit') if stored and stored.get('rpd_limit') is not None else default_rpd
@@ -102,7 +124,7 @@ class LLMRouter:
             logger.info("[LimitsStore] %s: rpm=%s rpd=%s tpm=%s (from override)",
                         model_id.split('/')[-1], rpm, rpd, tpm)
         return ModelSpec(
-            model_id=model_id, provider="google", api_key=api_key,
+            model_id=model_id, provider="google", api_key=api_key, project_scope=project_scope or "default",
             capabilities=capabilities,
             rpm_limit=rpm,
             rpd_limit=rpd,
@@ -118,7 +140,7 @@ class LLMRouter:
             capability = model.capabilities.get(task_type, 0.5)
             headroom = self.limiter.get_headroom(
                 model.model_id, 
-                model.api_key,
+                model.project_scope,
                 model.rpm_limit,
                 model.rpd_limit,
                 model.tpm_limit
@@ -131,16 +153,16 @@ class LLMRouter:
                 
         return best_model
 
-    def track_usage(self, model_id: str, api_key: str = "", tokens: int = 0):
+    def track_usage(self, model_id: str, project_scope: str = "default", tokens: int = 0):
         """Signal the limiter to record usage."""
-        self.limiter.track(model_id, api_key, tokens=tokens)
+        self.limiter.track(model_id, project_scope, tokens=tokens)
 
-    def track_429(self, model_id: str, api_key: str = "") -> None:
+    def track_429(self, model_id: str, project_scope: str = "default") -> None:
         """Record a 429 event with current usage snapshot for mismatch analysis."""
-        spec = next((m for m in self.models if m.model_id == model_id), None)
+        spec = next((m for m in self.models if m.model_id == model_id and m.project_scope == project_scope), None)
         if not spec:
             return
-        state = self.limiter._get_state(model_id, api_key)
+        state = self.limiter._get_state(model_id, project_scope)
         now = time.time()
         rpm_used = len([t for t in state.used_rpm if now - t < 60])
         tpm_used = sum(e["tokens"] for e in state.used_tpm if now - e["ts"] < 60)

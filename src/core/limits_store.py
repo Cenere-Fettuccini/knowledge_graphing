@@ -11,10 +11,16 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
+from src.core.config import settings
+from src.core.limiter import InternalRateLimiter
+
 logger = logging.getLogger(__name__)
 
 LIMITS_PATH = Path("./data/limits_override.json")
 MISMATCHES_PATH = Path("./data/limit_mismatches.json")
+MODEL_CATALOG_PATH = Path("./data/gemini_model_catalog.json")
 
 
 # ── Number helpers ────────────────────────────────────────────────────────────
@@ -54,8 +60,17 @@ _SECTION_PREFIXES = ('Rate limits by model', 'Peak usage per model', 'Tools')
 
 
 def _is_value(s: str) -> bool:
-    return bool(re.match(r'^\d[\d,\.]*\s*/\s*[\d,\.KkMm]', s, re.I)) or \
-           bool(re.match(r'^\d+\s*/\s*Unlimited', s, re.I))
+    s = s.strip()
+    if s == '-':
+        return False
+    parts = [part.strip() for part in s.split('/')]
+    if len(parts) != 2:
+        return False
+
+    left, right = parts
+    left_ok = _parse_num(left) is not None
+    right_ok = right.lower() == 'unlimited' or _parse_num(right) is not None
+    return left_ok and right_ok
 
 
 def _is_category(s: str) -> bool:
@@ -67,7 +82,13 @@ def parse_aistudio_paste(text: str) -> dict:
     Parse raw paste from the AI Studio rate limits page table.
 
     Returns a dict:
-      { "Model Display Name": {category, rpm_limit, tpm_limit, rpd_limit} }
+      {
+        "Model Display Name": {
+            category,
+            rpm_limit, tpm_limit, rpd_limit,
+            rpm_used, tpm_used, rpd_used
+        }
+      }
     """
     results = {}
 
@@ -89,100 +110,180 @@ def parse_aistudio_paste(text: str) -> dict:
             continue
         lines.append(ln)
 
-    # State machine: find model → find category → collect 0-3 value lines
+    def frac(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+        if value is None or value == '-':
+            return None, None
+        return _parse_fraction(value)
+
+    # Consume rows shaped like:
+    #   model_name
+    #   category
+    #   rpm_slot
+    #   tpm_slot
+    #   rpd_slot
+    #
+    # Metric slots may be '-' for missing values, but we always consume exactly
+    # three slots once a category is found. This prevents usage cells from being
+    # misread as the next model name.
     i = 0
-    current_model = None
-    current_category = None
-    # slots: how many of [RPM, TPM, RPD] are dashes (skip from head)
-    leading_dashes = 0
-
     while i < len(lines):
-        line = lines[i]
+        model_name = lines[i]
 
-        # Value or lone dash
-        if _is_value(line) or line == '-':
-            if current_model:
-                # Collect up to 3 consecutive value/dash lines
-                vals = []
-                j = i
-                while j < len(lines) and len(vals) < 3:
-                    v = lines[j]
-                    if _is_value(v) or v == '-':
-                        vals.append(v)
-                        j += 1
-                    else:
-                        break
-
-                # Map leading_dashes to slot positions
-                # e.g. leading_dashes=2 → RPM=None, TPM=None, RPD=vals[0]
-                slots = ['-'] * leading_dashes + vals
-                slots = (slots + [None, None, None])[:3]
-
-                def frac(s):
-                    if s is None or s == '-':
-                        return None, None
-                    return _parse_fraction(s)
-
-                _, rpm_limit = frac(slots[0])
-                _, tpm_limit = frac(slots[1])
-                _, rpd_limit = frac(slots[2])
-
-                results[current_model] = {
-                    'category': current_category or 'Unknown',
-                    'rpm_limit': rpm_limit,
-                    'tpm_limit': tpm_limit,
-                    'rpd_limit': rpd_limit,
-                }
-                current_model = None
-                current_category = None
-                leading_dashes = 0
-                i = j
-            else:
-                i += 1
+        # Skip anything that cannot start a model row.
+        if _is_category(model_name) or _is_value(model_name) or model_name == '-':
+            i += 1
             continue
 
-        # Category line
-        if _is_category(line):
-            current_category = line
-            # Count leading dashes in remaining tokens of the same original line
-            # (already split by tab, they appear as separate '-' entries right after)
-            # Count how many immediately following lines are bare '-'
-            leading_dashes = 0
-            k = i + 1
-            while k < len(lines) and lines[k] == '-':
-                leading_dashes += 1
-                k += 1
-            i = k  # skip those dash tokens
+        if i + 1 >= len(lines):
+            break
+
+        category = lines[i + 1]
+        if not _is_category(category):
+            i += 1
             continue
 
-        # Otherwise treat as a model name
-        current_model = line
-        current_category = None
-        leading_dashes = 0
-        i += 1
+        slots = []
+        j = i + 2
+        while j < len(lines) and len(slots) < 3:
+            token = lines[j]
+            if _is_value(token) or token == '-':
+                slots.append(token)
+                j += 1
+                continue
+            break
+
+        slots = (slots + [None, None, None])[:3]
+        rpm_used, rpm_limit = frac(slots[0])
+        tpm_used, tpm_limit = frac(slots[1])
+        rpd_used, rpd_limit = frac(slots[2])
+
+        results[model_name] = {
+            'category': category,
+            'rpm_used': rpm_used,
+            'rpm_limit': rpm_limit,
+            'tpm_used': tpm_used,
+            'tpm_limit': tpm_limit,
+            'rpd_used': rpd_used,
+            'rpd_limit': rpd_limit,
+        }
+
+        i = j
 
     return results
 
 
-# ── Model ID fuzzy matcher ────────────────────────────────────────────────────
+# ── Model ID resolver ─────────────────────────────────────────────────────────
 
-# Map display name fragments → canonical model_id suffixes used in router.py
-_DISPLAY_TO_ID = {
-    'Gemini 2.5 Flash Lite': 'gemini-2.5-flash-lite',
-    'Gemini 2.5 Flash': 'gemini-2.5-flash',
-    'Gemini 2.5 Pro': 'gemini-2.5-pro',
-    'Gemini 3.1 Flash Lite': 'gemini-3.1-flash-lite',
-    'Gemini 3.1 Pro': 'gemini-3.1-pro',
-    'Gemini 3 Flash': 'gemini-3-flash',
-    'Gemini 2 Flash Lite': 'gemini-2.0-flash-lite',
-    'Gemini 2 Flash': 'gemini-2.0-flash',
-    'Gemma 3 27B': 'gemma-3-27b-it',
-    'Gemma 3 12B': 'gemma-3-12b-it',
-    'Gemma 3 4B': 'gemma-3-4b-it',
-    'Gemma 3 1B': 'gemma-3-1b-it',
-    'Gemma 4 26B': 'gemma-4-26b',
-    'Gemma 4 31B': 'gemma-4-31b',
-}
+
+def _normalize_model_name(value: str) -> str:
+    """Normalize model labels so display names and IDs can be compared safely."""
+    normalized = value.lower().strip()
+    normalized = normalized.replace("-lite", " lite").replace("-", " ")
+    normalized = normalized.replace("flashlite", "flash lite")
+    normalized = normalized.replace("3n", "3 n")
+    normalized = normalized.replace("previewtts", "preview tts")
+    normalized = re.sub(r'[^a-z0-9\. ]+', ' ', normalized)
+    normalized = normalized.replace("2.0", "2")
+    normalized = re.sub(r'\s+', ' ', normalized)
+    return normalized.strip()
+
+
+def _load_model_catalog() -> dict:
+    if not MODEL_CATALOG_PATH.exists():
+        return {}
+    try:
+        return json.loads(MODEL_CATALOG_PATH.read_text(encoding='utf-8'))
+    except Exception as e:
+        logger.warning("Could not load gemini model catalog: %s", e)
+        return {}
+
+
+def _save_model_catalog(data: dict) -> None:
+    MODEL_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MODEL_CATALOG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+
+
+def refresh_model_catalog(api_key: Optional[str] = None) -> dict:
+    """
+    Fetch the Gemini model catalog and cache it locally.
+
+    Uses the REST models.list endpoint so display names can be matched to the
+    same base model IDs that generation requests should use.
+    """
+    key = api_key or settings.google_api_key
+    if not key:
+        return _load_model_catalog()
+
+    models = []
+    page_token = None
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            while True:
+                params = {"key": key, "pageSize": 1000}
+                if page_token:
+                    params["pageToken"] = page_token
+                response = client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params=params,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                models.extend(payload.get("models", []))
+                page_token = payload.get("nextPageToken")
+                if not page_token:
+                    break
+    except Exception as e:
+        logger.warning("Could not refresh Gemini model catalog: %s", e)
+        return _load_model_catalog()
+
+    catalog = {
+        "fetched_at": time.time(),
+        "models": models,
+    }
+    _save_model_catalog(catalog)
+    return catalog
+
+
+def _resolve_short_id(display_name: str, catalog: Optional[dict] = None) -> str:
+    """
+    Resolve an AI Studio display name to the short model ID used by requests.
+
+    Prefers the live Gemini model catalog, then falls back to curated aliases,
+    then finally to a slugified best-effort ID.
+    """
+    catalog = catalog or {}
+    normalized_display = _normalize_model_name(display_name)
+
+    normalized_display_no_preview = re.sub(r'\bpreview\b', '', normalized_display).strip()
+
+    exact_matches = []
+    fuzzy_matches = []
+    for model in catalog.get("models", []):
+        model_display = model.get("displayName") or ""
+        normalized_model_display = _normalize_model_name(model_display)
+        normalized_model_no_preview = re.sub(r'\bpreview\b', '', normalized_model_display).strip()
+
+        if normalized_model_display == normalized_display:
+            exact_matches.append(model)
+            continue
+
+        if normalized_model_no_preview == normalized_display_no_preview:
+            fuzzy_matches.append(model)
+
+    for candidates in (exact_matches, fuzzy_matches):
+        for model in candidates:
+            base_model_id = model.get("baseModelId")
+            model_name = model.get("name", "")
+            if base_model_id:
+                return base_model_id
+            if model_name.startswith("models/"):
+                return model_name.split("/", 1)[1]
+
+    slug = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')
+    if slug.startswith("gemini-2-0-"):
+        slug = slug.replace("gemini-2-0-", "gemini-2-", 1)
+    return slug
 
 
 def get_limit_for_model(model_id: str) -> Optional[dict]:
@@ -217,6 +318,38 @@ def save_limits(data: dict) -> None:
     LIMITS_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
 
 
+def _seed_usage_tracking(imported_usage: dict[str, dict]) -> None:
+    """
+    Seed usage_tracking.json from AI Studio's current usage snapshot.
+
+    AI Studio usage is project-scoped, so we only seed automatically when the
+    configured Gemini keys all resolve to a single unique project scope.
+    """
+    unique_scopes = {cfg["project_scope"] for cfg in settings.google_key_configs} or {"default"}
+    if len(unique_scopes) != 1:
+        logger.warning(
+            "Skipping usage snapshot seeding because multiple project scopes are configured: %s",
+            sorted(unique_scopes),
+        )
+        return
+
+    project_scope = next(iter(unique_scopes))
+    limiter = InternalRateLimiter()
+    now = time.time()
+
+    for short_id, usage in imported_usage.items():
+        limiter.set_usage_snapshot(
+            model_id=f"models/{short_id}",
+            project_scope=project_scope,
+            rpm_used=usage.get("rpm_used") or 0,
+            tpm_used=usage.get("tpm_used") or 0,
+            rpd_used=usage.get("rpd_used") or 0,
+            ts=now,
+        )
+
+    limiter.save()
+
+
 def import_from_paste(text: str) -> tuple[dict, list[str]]:
     """
     Parse AI Studio paste text and merge into limits_override.json.
@@ -224,14 +357,21 @@ def import_from_paste(text: str) -> tuple[dict, list[str]]:
     """
     parsed = parse_aistudio_paste(text)
     existing = load_limits()
+    existing = {
+        model_id: entry
+        for model_id, entry in existing.items()
+        if entry.get('category') != 'Unknown'
+    }
     matched = []
+    imported_usage = {}
+    catalog = refresh_model_catalog()
 
     for display_name, limits in parsed.items():
-        # Try direct mapping first
-        short_id = _DISPLAY_TO_ID.get(display_name)
-        if not short_id:
-            slug = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')
-            short_id = slug
+        if limits.get('category') == 'Unknown':
+            logger.info("Skipping AI Studio row with unknown category: %s", display_name)
+            continue
+
+        short_id = _resolve_short_id(display_name, catalog)
 
         # Exclude models with 0 requests limit by deleting them if they exist
         if limits['rpm_limit'] == 0 or limits['rpd_limit'] == 0:
@@ -253,8 +393,15 @@ def import_from_paste(text: str) -> tuple[dict, list[str]]:
         if entry:
             existing[short_id] = entry
             matched.append(short_id)
+            imported_usage[short_id] = {
+                'rpm_used': limits.get('rpm_used') or 0,
+                'tpm_used': limits.get('tpm_used') or 0,
+                'rpd_used': limits.get('rpd_used') or 0,
+            }
 
     save_limits(existing)
+    if imported_usage:
+        _seed_usage_tracking(imported_usage)
     logger.info("Imported limits for %d models: %s", len(matched), matched)
     return existing, matched
 
