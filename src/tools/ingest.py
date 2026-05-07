@@ -1,12 +1,11 @@
 import os
 import logging
-from typing import List
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredMarkdownLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.memory.manager import memory_manager
-from src.core.config import settings
+from src.core.logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 class KnowledgeIngestor:
@@ -65,7 +64,7 @@ class KnowledgeIngestor:
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python -m src.tools.ingest <directory_path>")
+        logger.error("Usage: python -m src.tools.ingest <directory_path>")
     else:
         ingestor = KnowledgeIngestor()
         ingestor.ingest_directory(sys.argv[1])

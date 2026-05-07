@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from collections import defaultdict
@@ -8,9 +9,10 @@ from src.memory.manager import memory_manager
 from src.core.router import llm_router
 from src.core.agent import Agent
 from src.core.limits_store import (
-    import_from_paste, load_limits, load_mismatch_log, get_limit_for_model
+    import_from_paste, load_limits, load_mismatch_log
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 web_agent = Agent(memory=memory_manager)
 

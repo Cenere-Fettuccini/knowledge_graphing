@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # ── Agent ─────────────────────────────────────────────────────────────────
     context_window_turns: int = 20
     rag_top_k: int = 5
+    log_level: str = "INFO"
 
     # ── Derived helpers ───────────────────────────────────────────────────────
 

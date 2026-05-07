@@ -9,19 +9,12 @@ written back into the knowledge graph as new core beliefs.
 
 import asyncio
 import logging
-import sys
 
-from src.core.config import settings
+from src.core.logging_config import setup_logging
 from src.rumination.deep_pass import DeepSynthesisEngine
 from src.memory.manager import MemoryManager
 
-# Setup basic logging for the worker
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-
+setup_logging()
 logger = logging.getLogger("late_night_thoughts")
 
 async def run_late_night_thoughts():

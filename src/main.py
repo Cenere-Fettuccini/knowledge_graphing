@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from src.api.routes import router as api_router
+from src.core.logging_config import setup_logging
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIManager Knowledge Explorer")
