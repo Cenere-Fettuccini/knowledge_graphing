@@ -332,6 +332,21 @@
                 </div>
             </div>
 
+            <div class="modal-overlay" id="chatDeleteModal" aria-hidden="true">
+                <div class="modal chat-delete-modal" role="dialog" aria-modal="true" aria-labelledby="chatDeleteModalTitle">
+                    <h2 id="chatDeleteModalTitle">Delete Conversation?</h2>
+                    <p class="hint" id="chatDeleteModalMessage">
+                        This will permanently remove the selected conversation from the session list.
+                    </p>
+                    <div class="modal-actions">
+                        <button class="btn btn-ghost" id="chatDeleteCancelBtn" type="button">Cancel</button>
+                        <button class="btn btn-primary chat-delete-modal__confirm" id="chatDeleteConfirmBtn" type="button">
+                            Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="page-view" id="page-credits">
                 <div class="credits-layout">
 

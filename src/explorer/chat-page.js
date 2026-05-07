@@ -10,6 +10,8 @@
         searchQuery: '',
         anchor: null,
         sending: false,
+        pendingDeleteSessionId: null,
+        deletingSessionId: null,
     };
 
     function fmtDate(iso) {
@@ -37,6 +39,69 @@
     function setStatus(text) {
         const el = document.getElementById('chatSessionStatus');
         if (el) el.textContent = text;
+    }
+
+    function getPendingDeleteSession() {
+        return state.sessions.find(session => session.session_id === state.pendingDeleteSessionId) || null;
+    }
+
+    function syncDeleteModal() {
+        const modal = document.getElementById('chatDeleteModal');
+        const message = document.getElementById('chatDeleteModalMessage');
+        const confirmBtn = document.getElementById('chatDeleteConfirmBtn');
+        if (!modal || !message || !confirmBtn) return;
+
+        const session = getPendingDeleteSession();
+        const isOpen = !!state.pendingDeleteSessionId;
+        const isDeleting = !!state.deletingSessionId;
+        modal.classList.toggle('open', isOpen);
+        modal.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+
+        if (session) {
+            message.textContent = `Delete "${sessionTitle(session)}"? This permanently removes the conversation from the session list.`;
+        } else {
+            message.textContent = 'This will permanently remove the selected conversation from the session list.';
+        }
+
+        confirmBtn.disabled = isDeleting;
+        confirmBtn.textContent = isDeleting ? 'Deleting...' : 'Delete';
+    }
+
+    function openDeleteModal(sessionId) {
+        state.pendingDeleteSessionId = sessionId;
+        syncDeleteModal();
+    }
+
+    function closeDeleteModal() {
+        state.pendingDeleteSessionId = null;
+        state.deletingSessionId = null;
+        syncDeleteModal();
+    }
+
+    async function confirmDeleteSession() {
+        const sessionId = state.pendingDeleteSessionId;
+        if (!sessionId || state.deletingSessionId) return;
+
+        state.deletingSessionId = sessionId;
+        syncDeleteModal();
+        setStatus('Deleting session...');
+
+        const result = await API.deleteChatSession(sessionId);
+        if (result.ok) {
+            if (state.activeSessionId === sessionId) {
+                state.activeSessionId = null;
+                state.activeSessionTitle = '';
+                state.messages = [];
+                renderMessages();
+            }
+            closeDeleteModal();
+            await refreshSessions();
+            setStatus('Session deleted');
+        } else {
+            state.deletingSessionId = null;
+            syncDeleteModal();
+            setStatus('Failed to delete session');
+        }
     }
 
     function persistAnchor(anchor) {
@@ -121,22 +186,7 @@
             if (deleteBtn) {
                 deleteBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    if (!confirm('Are you sure you want to delete this conversation?')) return;
-                    
-                    setStatus('Deleting session...');
-                    const result = await API.deleteChatSession(sessionId);
-                    if (result.ok) {
-                        if (state.activeSessionId === sessionId) {
-                            state.activeSessionId = null;
-                            state.activeSessionTitle = '';
-                            state.messages = [];
-                            renderMessages();
-                        }
-                        await refreshSessions();
-                        setStatus('Session deleted');
-                    } else {
-                        setStatus('Failed to delete session');
-                    }
+                    openDeleteModal(sessionId);
                 });
             }
         });
@@ -339,6 +389,20 @@
             persistAnchor(null);
             renderAnchor();
             setStatus('Graph anchor cleared');
+        });
+        document.getElementById('chatDeleteCancelBtn')?.addEventListener('click', closeDeleteModal);
+        document.getElementById('chatDeleteConfirmBtn')?.addEventListener('click', () => {
+            void confirmDeleteSession();
+        });
+        document.getElementById('chatDeleteModal')?.addEventListener('click', event => {
+            if (event.target?.id === 'chatDeleteModal' && !state.deletingSessionId) {
+                closeDeleteModal();
+            }
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && state.pendingDeleteSessionId && !state.deletingSessionId) {
+                closeDeleteModal();
+            }
         });
 
         const input = document.getElementById('chatMessageInput');

@@ -136,6 +136,15 @@ async def create_chat_session(body: dict = Body(default={})):
     return {"session_id": session_id}
 
 
+@router.delete("/chat/session/{session_id}")
+async def delete_chat_session(session_id: str):
+    """Delete all stored memories for a browser or Telegram conversation session."""
+    ok = memory_manager.delete_session(session_id)
+    if ok:
+        return {"ok": True, "session_id": session_id}
+    return {"ok": False, "session_id": session_id, "error": "Failed to delete session"}
+
+
 @router.post("/chat/message")
 async def post_chat_message(body: dict = Body(...)):
     """Send a browser chat message through the existing agent."""

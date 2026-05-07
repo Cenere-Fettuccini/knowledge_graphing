@@ -483,6 +483,24 @@
     40% { transform: scale(1); opacity: 1; }
 }
 
+.chat-session-item__delete:disabled {
+    opacity: 0.4;
+    cursor: wait;
+}
+
+.chat-delete-modal {
+    max-width: 420px;
+}
+
+.chat-delete-modal__confirm {
+    background: var(--c-red);
+    color: var(--fg-primary);
+}
+
+.chat-delete-modal__confirm:hover {
+    opacity: 0.9;
+}
+
 @media (max-width: 900px) {
     .chat-layout {
         grid-template-columns: 1fr;
