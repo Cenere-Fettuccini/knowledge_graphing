@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIManager | Financial Manager</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background:
+                radial-gradient(circle at top left, rgba(126, 145, 190, 0.3), transparent 34%),
+                linear-gradient(135deg, #f4f1e8, #eef2f5);
+            color: #1e2a31;
+            font-family: "Segoe UI", Arial, sans-serif;
+        }
+        main {
+            width: min(760px, calc(100% - 32px));
+            padding: 32px;
+            border-radius: 28px;
+            background: rgba(255, 255, 255, 0.82);
+            box-shadow: 0 20px 60px rgba(30, 42, 49, 0.12);
+        }
+        h1 { margin-top: 0; font-size: 42px; }
+        p { line-height: 1.7; color: #52626d; }
+        a { color: #516f8f; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Financial Manager</h1>
+        <p>
+            This app has its own isolated section and is ready for app-specific finance workflows.
+            It can later be wired to the shared agent through a finance-scoped tool profile.
+        </p>
+        <p><a href="/">Back to platform shell</a></p>
+    </main>
+</body>
+</html>
