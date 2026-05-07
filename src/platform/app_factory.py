@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +44,11 @@ def create_platform_app() -> FastAPI:
 
     app.include_router(build_shell_router(registry))
     app.include_router(legacy_api_router, prefix="/api")
+    app.mount(
+        "/shell-assets",
+        StaticFiles(directory=str(Path(__file__).resolve().parents[1] / "explorer")),
+        name="shell-assets",
+    )
 
     for app_def in registry.list_apps():
         if app_def.api_router and app_def.api_prefix:

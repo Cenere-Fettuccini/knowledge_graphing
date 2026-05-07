@@ -12,7 +12,7 @@ def get_explorer_app() -> AppDefinition:
         name="Explorer",
         description="Knowledge graph, credits, and conversational graph exploration.",
         route_prefix="/apps/explorer",
-        static_dir=Path(__file__).resolve().parents[2] / "explorer",
+        static_dir=Path(__file__).resolve().parents[2] / "frontend" / "shell",
         api_prefix="/api/explorer",
         api_router=explorer_api_router,
         icon="Graph",
