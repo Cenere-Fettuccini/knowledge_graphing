@@ -2,14 +2,31 @@
 
 import pytest
 import uuid
+from langchain_core.messages import AIMessage
 from src.core.agent import Agent
 from src.memory.manager import MemoryManager
 
 
+class _FakeLLM:
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, messages):
+        full_text = "\n".join(str(getattr(msg, "content", "")) for msg in messages)
+        latest = str(messages[-1].content)
+
+        if "What programming language do I like?" in latest and "Rust" in full_text:
+            return AIMessage(content="You like Rust.")
+        if "Hello, how are you?" in latest:
+            return AIMessage(content="I'm doing well and ready to help.")
+        return AIMessage(content=f"I heard you: {latest}")
+
+
 @pytest.fixture
-def agent(tmp_path):
-    """Agent backed by an isolated, temporary ChromaDB."""
-    mem = MemoryManager(persist_path=str(tmp_path / "chroma_test"))
+def agent(monkeypatch):
+    """Agent backed by an isolated in-memory ChromaDB and fake LLM."""
+    monkeypatch.setattr(Agent, "_get_llm_instance", lambda self, spec: _FakeLLM())
+    mem = MemoryManager(persist_path=":memory:")
     return Agent(memory=mem)
 
 

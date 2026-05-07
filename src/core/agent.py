@@ -20,7 +20,7 @@ from src.memory.manager import MemoryManager
 from src.core.router import llm_router, ModelSpec
 from src.core.state import AgentState
 from src.core.tools import tools
-from src.core.context import context_manager
+from src.core.context import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class Agent(BaseAgent):
 
     def __init__(self, memory: MemoryManager | None = None):
         self.memory = memory or MemoryManager()
+        self.context_manager = ContextManager(self.memory)
         self.router = llm_router
         self._llm_cache: Dict[str, ChatGoogleGenerativeAI] = {}
         self._health_cache = {}
@@ -222,7 +223,7 @@ class Agent(BaseAgent):
     def _node_reason(self, state: AgentState):
         """Pick a model, invoke with retry + backoff, track token usage."""
         last_msg = state["messages"][-1]
-        context = context_manager.assemble_context(
+        context = self.context_manager.assemble_context(
             query=last_msg.content,
             session_id=state["session_id"],
             task_type=state["task_type"],

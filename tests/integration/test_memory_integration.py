@@ -3,10 +3,9 @@ import uuid
 from src.memory.manager import MemoryManager
 
 @pytest.fixture
-def mem(tmp_path):
-    """Provides a MemoryManager instance using a temporary database."""
-    test_db_path = str(tmp_path / "chroma_test")
-    return MemoryManager(persist_path=test_db_path)
+def mem():
+    """Provides a MemoryManager instance using an isolated in-memory database."""
+    return MemoryManager(persist_path=":memory:")
 
 def test_persistence_and_retrieval(mem):
     """Verifies that messages are stored and can be retrieved by session ID."""

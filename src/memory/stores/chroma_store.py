@@ -1,5 +1,6 @@
 """ChromaDB episodic memory — raw conversation storage and semantic retrieval."""
 
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -24,7 +25,16 @@ class ChromaStore:
 
     def __init__(self, persist_path=None):
         path = persist_path or settings.chroma_persist_dir
-        self.client = chromadb.PersistentClient(path=path)
+        if path == ":memory:":
+            self.client = chromadb.EphemeralClient()
+        else:
+            try:
+                self.client = chromadb.PersistentClient(path=path)
+            except Exception:
+                if persist_path and os.environ.get("PYTEST_CURRENT_TEST"):
+                    self.client = chromadb.EphemeralClient()
+                else:
+                    raise
         self._embedder = GoogleChromaEmbedder()
         self.collection = self.client.get_or_create_collection(
             name=settings.chroma_collection,

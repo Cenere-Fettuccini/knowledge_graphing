@@ -11,8 +11,8 @@ class ContextManager:
     Combines Episodic (Chroma), Relational (Neo4j), and Session History.
     """
 
-    def __init__(self):
-        self.memory = memory_manager
+    def __init__(self, memory=None):
+        self.memory = memory or memory_manager
 
     def assemble_context(self, query: str, session_id: str, task_type: str) -> Dict[str, Any]:
         """
