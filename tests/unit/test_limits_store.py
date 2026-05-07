@@ -1,5 +1,5 @@
 from src.core import limits_store
-from src.core.limits_store import _resolve_short_id
+from src.core.limits_store import _resolve_short_id, is_text_output_category
 
 
 def test_resolve_short_id_prefers_live_catalog_base_model_id():
@@ -32,6 +32,12 @@ def test_resolve_short_id_handles_preview_label_differences():
 
 def test_resolve_short_id_slugifies_unknown_models():
     assert _resolve_short_id("Gemini Robotics ER 1.6 Preview", {}) == "gemini-robotics-er-1-6-preview"
+
+
+def test_is_text_output_category_only_accepts_text_out_models():
+    assert is_text_output_category("Text-out models") is True
+    assert is_text_output_category("Other models") is False
+    assert is_text_output_category("Multi-modal generative models") is False
 
 
 def test_import_from_paste_skips_unknown_category_rows(monkeypatch):

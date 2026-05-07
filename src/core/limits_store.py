@@ -57,6 +57,7 @@ def _parse_fraction(s: str) -> tuple[Optional[int], Optional[int]]:
 _SKIP_EXACT = {'Model', 'Category', 'RPM', 'TPM', 'RPD', 'Charts', 'Tools'}
 _CATEGORY_KEYWORDS = ['models', 'Live API', 'Agents', 'grounding']
 _SECTION_PREFIXES = ('Rate limits by model', 'Peak usage per model', 'Tools')
+_TEXT_OUTPUT_CATEGORY = 'text-out models'
 
 
 def _is_value(s: str) -> bool:
@@ -75,6 +76,11 @@ def _is_value(s: str) -> bool:
 
 def _is_category(s: str) -> bool:
     return any(kw in s for kw in _CATEGORY_KEYWORDS)
+
+
+def is_text_output_category(category: str | None) -> bool:
+    """Return True only for AI Studio categories safe for text chat generation."""
+    return (category or "").strip().lower() == _TEXT_OUTPUT_CATEGORY
 
 
 def parse_aistudio_paste(text: str) -> dict:
