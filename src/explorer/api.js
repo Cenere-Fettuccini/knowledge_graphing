@@ -72,6 +72,17 @@ const API = {
         }
     },
 
+    async deleteChatSession(sessionId) {
+        try {
+            const res = await fetch(`/api/chat/session/${sessionId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error("API Error: deleteChatSession", e);
+            return { ok: false, error: e.message || 'Request failed' };
+        }
+    },
+
     async sendChatMessage(sessionId, message, anchorNodeId = null) {
         try {
             const res = await fetch('/api/chat/message', {

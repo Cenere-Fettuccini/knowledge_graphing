@@ -229,11 +229,15 @@ def import_from_paste(text: str) -> tuple[dict, list[str]]:
     for display_name, limits in parsed.items():
         # Try direct mapping first
         short_id = _DISPLAY_TO_ID.get(display_name)
-
-        # Fallback: fuzzy match by converting display name to slug
         if not short_id:
             slug = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')
             short_id = slug
+
+        # Exclude models with 0 requests limit by deleting them if they exist
+        if limits['rpm_limit'] == 0 or limits['rpd_limit'] == 0:
+            if short_id in existing:
+                del existing[short_id]
+            continue
 
         entry = {}
         if limits['rpm_limit'] is not None:

@@ -57,8 +57,15 @@ class LLMRouter:
         else:
             # Dynamically register every model imported from AI Studio
             for short_id, limits in overrides.items():
-                is_pro = "pro" in short_id.lower()
-                is_lite = "lite" in short_id.lower()
+                lower_id = short_id.lower()
+                
+                # Exclude models not meant for text generation via generateContent
+                exclusions = ['embedding', 'imagen', 'tts', 'audio', 'veo', 'lyria', 'nano-banana', 'robotics', 'live']
+                if any(ex in lower_id for ex in exclusions):
+                    continue
+
+                is_pro = "pro" in lower_id
+                is_lite = "lite" in lower_id
                 
                 # Derive capabilities heuristically
                 if is_pro:
@@ -88,18 +95,18 @@ class LLMRouter:
                    default_rpm: int, default_rpd: int, default_tpm: int) -> ModelSpec:
         """Build a ModelSpec, preferring stored limits over hardcoded defaults."""
         stored = get_limit_for_model(model_id)
-        rpm = stored.get('rpm_limit', default_rpm) if stored else default_rpm
-        rpd = stored.get('rpd_limit', default_rpd) if stored else default_rpd
-        tpm = stored.get('tpm_limit', default_tpm) if stored else default_tpm
+        rpm = stored.get('rpm_limit') if stored and stored.get('rpm_limit') is not None else default_rpm
+        rpd = stored.get('rpd_limit') if stored and stored.get('rpd_limit') is not None else default_rpd
+        tpm = stored.get('tpm_limit') if stored and stored.get('tpm_limit') is not None else default_tpm
         if stored:
             logger.info("[LimitsStore] %s: rpm=%s rpd=%s tpm=%s (from override)",
                         model_id.split('/')[-1], rpm, rpd, tpm)
         return ModelSpec(
             model_id=model_id, provider="google", api_key=api_key,
             capabilities=capabilities,
-            rpm_limit=rpm or default_rpm,
-            rpd_limit=rpd or default_rpd,
-            tpm_limit=tpm or default_tpm,
+            rpm_limit=rpm,
+            rpd_limit=rpd,
+            tpm_limit=tpm,
         )
 
     def get_best_model(self, task_type: str) -> ModelSpec:

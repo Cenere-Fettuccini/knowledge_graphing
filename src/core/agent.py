@@ -217,10 +217,6 @@ class Agent(BaseAgent):
 
     def _node_reason(self, state: AgentState):
         """Pick a model, invoke with retry + backoff, track token usage."""
-        spec = self.router.get_best_model(state["task_type"])
-        llm = self._get_llm_instance(spec)
-        llm_with_tools = llm.bind_tools(tools)
-
         last_msg = state["messages"][-1]
         context = context_manager.assemble_context(
             query=last_msg.content,
@@ -232,29 +228,44 @@ class Agent(BaseAgent):
         )
         full_messages = [system_msg] + list(state["messages"])
 
-        # Invoke with retry
-        response = self._invoke_with_retry(llm_with_tools, full_messages)
+        response = None
+        used_spec = None
 
-        # Track actual token usage
-        tokens = self._extract_token_count(response)
-        self.router.track_usage(spec.model_id, api_key=spec.api_key, tokens=tokens)
-
-        return {"messages": [response]}
-
-    def _invoke_with_retry(self, llm, messages):
-        """Call the LLM with exponential backoff on transient failures."""
         for attempt in range(MAX_RETRIES):
+            spec = self.router.get_best_model(state["task_type"])
+            llm = self._get_llm_instance(spec)
+            llm_with_tools = llm.bind_tools(tools)
+
             try:
-                return llm.invoke(messages)
+                response = llm_with_tools.invoke(full_messages)
+                used_spec = spec
+                break
             except Exception as e:
+                error_str = str(e)
+                is_429 = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+
+                if is_429:
+                    logger.warning("Model %s hit 429 quota/rate limit.", spec.model_id)
+                    self.router.track_429(spec.model_id, api_key=spec.api_key)
+                    # Temporarily exhaust the internal limits so get_best_model picks a different one next loop
+                    self.router.limiter.track(spec.model_id, spec.api_key, tokens=spec.tpm_limit * 10)
+
                 if attempt == MAX_RETRIES - 1:
                     raise
+
                 wait = RETRY_BACKOFF_BASE ** (attempt + 1)
                 logger.warning(
-                    "LLM call failed (attempt %d/%d): %s — retrying in %ds",
-                    attempt + 1, MAX_RETRIES, e, wait,
+                    "LLM call failed (attempt %d/%d) with model %s: %s — retrying in %ds",
+                    attempt + 1, MAX_RETRIES, spec.model_id, e, wait,
                 )
                 time.sleep(wait)
+
+        # Track actual token usage
+        if response and used_spec:
+            tokens = self._extract_token_count(response)
+            self.router.track_usage(used_spec.model_id, api_key=used_spec.api_key, tokens=tokens)
+
+        return {"messages": [response]}
 
     @staticmethod
     def _extract_token_count(response) -> int:

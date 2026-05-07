@@ -18,29 +18,71 @@
     let _initialized = false;
 
     // ── Colour helpers ──────────────────────────────────────────────────────
+
+    /**
+     * headroomColor — colour for a measured headroom value.
+     * null = no data (untracked), handled separately upstream.
+     */
     function headroomColor(pct) {
+        if (pct === null || pct === undefined) return 'var(--fg-dim)';
         if (pct >= 60) return 'var(--c-green)';
         if (pct >= 25) return 'var(--c-yellow)';
+        // pct === 0 is exhausted, not "fine" — explicit red
         return 'var(--c-red)';
     }
 
+    /**
+     * usedColor — colour for a usage bar (how much is consumed).
+     * null = no data, show muted.
+     */
     function usedColor(usedPct) {
+        if (usedPct === null || usedPct === undefined) return 'var(--fg-muted)';
         if (usedPct <= 40) return 'var(--c-green)';
         if (usedPct <= 75) return 'var(--c-yellow)';
         return 'var(--c-red)';
     }
 
+    /**
+     * fmtNum — format a number with K/M suffixes.
+     * Explicitly renders 0 as "0", never hides it.
+     * null renders as "—".
+     */
     function fmtNum(n) {
+        if (n === null || n === undefined) return '—';
+        if (n === 0) return '0';
         if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
         if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
         return String(n);
     }
 
     // ── Ring SVG helper ─────────────────────────────────────────────────────
+
+    /**
+     * buildRing — renders the circular headroom gauge.
+     *
+     * null  → grey dashed ring with "N/A" — no live data (untracked model)
+     * 0     → full red ring showing "0%" — exhausted
+     * 1–100 → normal colour-coded ring
+     */
     function buildRing(pct, color) {
         const r = 26;
         const circ = 2 * Math.PI * r;
-        const offset = circ * (1 - pct / 100);
+
+        // No live data at all — untracked model
+        if (pct === null || pct === undefined) {
+            return `
+                <div class="ring-wrap">
+                    <svg viewBox="0 0 64 64">
+                        <circle class="ring-track" cx="32" cy="32" r="${r}" stroke-dasharray="4 4"/>
+                    </svg>
+                    <div class="ring-pct" style="color:var(--fg-dim);font-size:9px">N/A</div>
+                </div>`;
+        }
+
+        // Clamp to [0, 100], preserve exact 0 (exhausted)
+        const safePct = Math.max(0, Math.min(100, pct));
+        const offset = circ * (1 - safePct / 100);
+
         return `
             <div class="ring-wrap">
                 <svg viewBox="0 0 64 64">
@@ -53,42 +95,110 @@
                         style="transition: stroke-dashoffset 0.8s cubic-bezier(0.16,1,0.3,1)"
                     />
                 </svg>
-                <div class="ring-pct">${Math.round(pct)}%</div>
+                <div class="ring-pct" style="color:${color}">${Math.round(safePct)}%</div>
             </div>`;
     }
 
     // ── Stat row helper ─────────────────────────────────────────────────────
+
+    /**
+     * buildStatRow — renders a single RPM / RPD / TPM row.
+     *
+     * used === null  → "—" with grey bar (no data)
+     * used === 0     → "0" with green bar (truly nothing consumed yet)
+     * limit === 0    → show limit as "0" not blank
+     */
     function buildStatRow(label, used, limit) {
-        const usedPct = limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+        const hasData = used !== null && used !== undefined;
+        const usedPct = (hasData && limit > 0) ? Math.min((used / limit) * 100, 100) : null;
         const color = usedColor(usedPct);
+
+        const usedDisplay = hasData ? fmtNum(used) : '—';
+        const limitDisplay = fmtNum(limit);   // limit === 0 shows "0"
+
+        const barWidth = (usedPct !== null) ? `${usedPct.toFixed(1)}%` : '0%';
+        const barColor = hasData ? color : 'var(--border-main)';
+        const barStyle = hasData
+            ? `width:${barWidth}; background:${barColor}`
+            : `width:100%; background: repeating-linear-gradient(90deg, var(--border-main) 0px, var(--border-main) 4px, transparent 4px, transparent 8px)`;
+
         return `
             <div class="stat-row">
                 <div class="stat-meta">
                     <span class="stat-label">${label}</span>
                     <span class="stat-value">
-                        <span class="used" style="color:${color}">${fmtNum(used)}</span>
-                        <span class="limit"> / ${fmtNum(limit)}</span>
+                        <span class="used" style="color:${hasData ? color : 'var(--fg-muted)'}">${usedDisplay}</span>
+                        <span class="limit"> / ${limitDisplay}</span>
                     </span>
                 </div>
                 <div class="bar-bg">
-                    <div class="bar-fill" style="width:${usedPct.toFixed(1)}%; background:${color}"></div>
+                    <div class="bar-fill" style="${barStyle}"></div>
                 </div>
             </div>`;
     }
 
+    // ── Capability pills helper ──────────────────────────────────────────────
+
+    /**
+     * buildCapabilityPills — renders small scored pills for each task type.
+     * Shows all tasks the model is configured for, scored 0.0–1.0.
+     */
+    function buildCapabilityPills(capabilities) {
+        if (!capabilities || Object.keys(capabilities).length === 0) return '';
+
+        const labelMap = {
+            QA: 'Q&A',
+            REASONING: 'Reasoning',
+            EXTRACTION: 'Extraction',
+            SUMMARIZATION: 'Summarization',
+            CODE: 'Code',
+        };
+
+        const sorted = Object.entries(capabilities).sort((a, b) => b[1] - a[1]);
+
+        const pills = sorted.map(([task, score]) => {
+            const pct = Math.round(score * 100);
+            let scoreColor = 'var(--fg-muted)';
+            if (pct >= 80) scoreColor = 'var(--c-green)';
+            else if (pct >= 55) scoreColor = 'var(--c-yellow)';
+            else if (pct >= 30) scoreColor = 'var(--fg-dim)';
+
+            return `<span class="cap-pill" title="${pct}% ${task}">
+                <span class="cap-pill__label">${labelMap[task] || task}</span>
+                <span class="cap-pill__score" style="color:${scoreColor}">${pct}%</span>
+            </span>`;
+        }).join('');
+
+        return `<div class="cap-pills">${pills}</div>`;
+    }
+
     const PROVIDER_COLORS = {
         google: 'var(--c-blue)',
-        local:  'var(--c-green)',
+        local: 'var(--c-green)',
     };
 
     // ── Render functions ────────────────────────────────────────────────────
     function renderSummary(models) {
         const el = document.getElementById('creditsSummaryBanner');
         if (!el) return;
+
         const totalModels = models.length;
-        const cloudModels = models.filter(m => m.provider !== 'local').length;
-        const minHeadroom = Math.min(...models.map(m => m.headroom));
-        const totalRpdUsed = models.reduce((acc, m) => acc + m.rpd.used, 0);
+        const trackedModels = models.filter(m => m.headroom !== null).length;
+        const untrackedModels = totalModels - trackedModels;
+
+        // Only compute min headroom from models that have live data
+        const trackedHeadrooms = models.map(m => m.headroom).filter(h => h !== null);
+        const minHeadroom = trackedHeadrooms.length > 0
+            ? Math.min(...trackedHeadrooms)
+            : null;
+
+        const totalRpdUsed = models.reduce((acc, m) => {
+            return acc + (m.rpd.used !== null ? m.rpd.used : 0);
+        }, 0);
+
+        const minDisplay = minHeadroom === null
+            ? '<span style="color:var(--fg-dim)">—</span>'
+            : `<span style="color:${headroomColor(minHeadroom)}">${minHeadroom}%</span>`;
 
         el.innerHTML = `
             <div class="summary-tile">
@@ -96,17 +206,22 @@
                 <div class="tile-label">Models tracked</div>
             </div>
             <div class="summary-tile">
-                <div class="tile-val">${cloudModels}</div>
-                <div class="tile-label">Cloud APIs</div>
+                <div class="tile-val">${trackedModels}</div>
+                <div class="tile-label">Live monitored</div>
             </div>
             <div class="summary-tile">
-                <div class="tile-val" style="color:${headroomColor(minHeadroom)}">${minHeadroom}%</div>
-                <div class="tile-label">Min headroom</div>
+                <div class="tile-val">${minDisplay}</div>
+                <div class="tile-label">Min headroom (live)</div>
             </div>
             <div class="summary-tile">
                 <div class="tile-val">${fmtNum(totalRpdUsed)}</div>
                 <div class="tile-label">Reqs today (total)</div>
-            </div>`;
+            </div>
+            ${untrackedModels > 0 ? `
+            <div class="summary-tile summary-tile--muted">
+                <div class="tile-val" style="color:var(--fg-dim)">${untrackedModels}</div>
+                <div class="tile-label">Limits only (no live data)</div>
+            </div>` : ''}`;
     }
 
     function renderSidebar(models) {
@@ -126,7 +241,6 @@
             </div>
         `).join('');
 
-        // Attach listeners to ALL sidebar items
         document.querySelectorAll('#page-credits .sidebar-item').forEach(item => {
             item.onclick = () => {
                 document.querySelectorAll('#page-credits .sidebar-item').forEach(i => i.classList.remove('active'));
@@ -152,10 +266,11 @@
 
         if (searchQuery) {
             const q = searchQuery.toLowerCase();
-            filteredModels = filteredModels.filter(m => 
-                (m.model && m.model.toLowerCase().includes(q)) || 
+            filteredModels = filteredModels.filter(m =>
+                (m.model && m.model.toLowerCase().includes(q)) ||
                 (m.provider && m.provider.toLowerCase().includes(q)) ||
-                (m.group && m.group.toLowerCase().includes(q))
+                (m.group && m.group.toLowerCase().includes(q)) ||
+                (m.function && m.function.toLowerCase().includes(q))
             );
         }
 
@@ -174,24 +289,45 @@
             html += groupModels.map(m => {
                 const accentColor = PROVIDER_COLORS[m.provider] || 'var(--c-green)';
                 const hColor = headroomColor(m.headroom);
+                const isUntracked = m.headroom === null;
+
+                // Exhausted badge — shown when headroom is exactly 0
+                const exhaustedBadge = (m.headroom === 0)
+                    ? `<span class="exhausted-badge">EXHAUSTED</span>`
+                    : '';
+
+                // Untracked badge — shown when model has no live usage data
+                const untrackedBadge = isUntracked
+                    ? `<span class="untracked-badge">LIMITS ONLY</span>`
+                    : '';
+
                 return `
-                    <div class="model-card" style="--card-accent: ${accentColor}">
+                    <div class="model-card ${isUntracked ? 'model-card--untracked' : ''}" style="--card-accent: ${accentColor}">
                         <div class="card-head">
-                            <div>
+                            <div class="card-head__info">
                                 <div class="model-name">${m.model}</div>
+                                <div class="model-function">
+                                    ${m.function || 'General'}
+                                    ${exhaustedBadge}
+                                    ${untrackedBadge}
+                                </div>
                                 <div class="model-provider">${m.provider}</div>
                             </div>
                             ${buildRing(m.headroom, hColor)}
                         </div>
+                        ${buildCapabilityPills(m.capabilities)}
                         <div class="card-divider"></div>
                         <div class="stat-rows">
                             ${buildStatRow('Req / Min (RPM)', m.rpm.used, m.rpm.limit)}
                             ${buildStatRow('Req / Day (RPD)', m.rpd.used, m.rpd.limit)}
                             ${buildStatRow('Tokens / Min (TPM)', m.tpm.used, m.tpm.limit)}
                         </div>
-                        <div style="margin-top:12px; font-size:10px; color:var(--fg-dim);">
-                            Headroom: <span style="color:${hColor}; font-weight:600">${m.headroom}%</span>
-                            &nbsp;·&nbsp; Ring = available capacity
+                        <div class="card-footer">
+                            ${isUntracked
+                        ? `<span style="color:var(--fg-muted)">No live usage data — limits stored only</span>`
+                        : `Headroom: <span style="color:${hColor}; font-weight:600">${m.headroom}%</span>
+                                   &nbsp;·&nbsp; Ring = available capacity`
+                    }
                         </div>
                     </div>`;
             }).join('');
@@ -286,10 +422,13 @@
 
                 const flag = (used, stored, override) => {
                     const limit = override ?? stored;
-                    if (!limit) return '';
+                    // used === 0 must display as "0/N", not be hidden
+                    if (used === null || used === undefined) return '<span style="color:var(--fg-muted)">—</span>';
+                    if (!limit) return `<span>${fmtNum(used)}</span>`;
                     const pct = Math.round((used / limit) * 100);
                     const color = pct >= 90 ? 'var(--c-red)' : pct >= 60 ? 'var(--c-yellow)' : 'var(--c-green)';
-                    return `<span style="color:${color};font-weight:600">${used}/${limit}</span><span style="font-size:9px;color:var(--fg-dim)"> (${pct}%)</span>`;
+                    // Show "0/N (0%)" explicitly — not hidden
+                    return `<span style="color:${color};font-weight:600">${fmtNum(used)}/${fmtNum(limit)}</span><span style="font-size:9px;color:var(--fg-dim)"> (${pct}%)</span>`;
                 };
                 return `
                 <div class="mismatch-card">
@@ -361,7 +500,7 @@
                     fetchCredits();
                     fetchMismatches();
                 });
-                
+
                 document.getElementById('searchInput')?.addEventListener('input', e => {
                     if (PageRouter.getActive() === 'credits') {
                         searchQuery = e.target.value;
@@ -371,10 +510,10 @@
 
                 _initialized = true;
             }
-            
+
             const searchInput = document.getElementById('searchInput');
             if (searchInput) {
-                searchInput.placeholder = "Search models, providers, limits...";
+                searchInput.placeholder = "Search models, functions, providers...";
                 searchInput.value = searchQuery;
             }
 

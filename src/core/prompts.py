@@ -14,7 +14,7 @@ CORE GUIDELINES:
 CONTEXT_BLOCK = """\
 <relevant_memories>
 {memories}
-{ ... }
+...
 </relevant_memories>
 """
 
