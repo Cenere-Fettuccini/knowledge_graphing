@@ -17,5 +17,5 @@ def get_explorer_app() -> AppDefinition:
         api_router=explorer_api_router,
         icon="Graph",
         status="active",
-        legacy_route_prefixes=("/explorer",),
+        legacy_route_prefixes=("/explorer", "/credits", "/chat", "/financial", "/routine"),
     )

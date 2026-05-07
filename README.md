@@ -2,8 +2,8 @@
 
 Run the platform locally with:
 
-```powershell
-venv\Scripts\python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --reload
+```bash
+venv/Scripts/python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Then open:

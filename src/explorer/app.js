@@ -20,14 +20,39 @@ const PageRouter = {
     _pages: [],        // { id, label, init(), destroy() }
     _activeId: null,
     _activeModule: null,
+    _preferredOrder: ['credits', 'chat', 'explorer', 'financial', 'routine'],
+    _defaultPageId: 'explorer',
+    _pathByPageId: {
+        credits: '/credits',
+        chat: '/chat',
+        explorer: '/explorer',
+        financial: '/financial',
+        routine: '/routine',
+    },
 
     register(pageDef) {
         this._pages.push(pageDef);
     },
 
-    getPages() { return this._pages; },
+    getPages() {
+        const order = new Map(this._preferredOrder.map((id, index) => [id, index]));
+        return [...this._pages].sort((a, b) => {
+            const aRank = order.has(a.id) ? order.get(a.id) : Number.MAX_SAFE_INTEGER;
+            const bRank = order.has(b.id) ? order.get(b.id) : Number.MAX_SAFE_INTEGER;
+            if (aRank !== bRank) return aRank - bRank;
+            return a.label.localeCompare(b.label);
+        });
+    },
     getActive() { return this._activeId; },
     getActiveModule() { return this._activeModule; },
+    getPathForPage(id) {
+        return this._pathByPageId[id] || `/${id}`;
+    },
+    getPageIdForPath(pathname) {
+        const normalized = (pathname || '/').replace(/\/+$/, '') || '/';
+        const entry = Object.entries(this._pathByPageId).find(([, path]) => path === normalized);
+        return entry ? entry[0] : null;
+    },
 
     /** Navigate to a page by id */
     async navigateTo(id) {
@@ -67,7 +92,7 @@ const PageRouter = {
         }
 
         // Update URL hash silently
-        history.replaceState(null, '', `#${id}`);
+        history.replaceState(null, '', this.getPathForPage(id));
         document.title = `AIManager | ${next.label}`;
     },
 
@@ -413,10 +438,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (page) PageRouter.navigateTo(page.id);
         });
 
-        // Determine initial page from hash
-        const hash = location.hash.slice(1);
-        const initialIndex = pages.findIndex(p => p.id === hash);
-        const startIndex = initialIndex >= 0 ? initialIndex : 0;
+        // Determine initial page from pathname
+        const pathPageId = PageRouter.getPageIdForPath(location.pathname);
+        const pathIndex = pages.findIndex(p => p.id === pathPageId);
+        const defaultIndex = pages.findIndex(p => p.id === PageRouter._defaultPageId);
+        const startIndex = pathIndex >= 0
+            ? pathIndex
+            : (defaultIndex >= 0 ? defaultIndex : 0);
 
         DrumNavigator.setIndex(startIndex);
         PageRouter.navigateTo(pages[startIndex].id);
