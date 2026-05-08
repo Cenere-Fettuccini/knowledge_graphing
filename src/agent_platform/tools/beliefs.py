@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from langchain_core.tools import tool
-
 from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import memory_manager
 
 
-@tool
 def save_belief(
     content: str,
     about_entity: str = "",
@@ -45,7 +42,6 @@ def save_belief(
         return f"Error storing belief: {str(e)}"
 
 
-@tool
 def get_belief_trail(belief_query: str):
     """
     Search for a belief by keyword and return its full evolution chain
@@ -87,7 +83,6 @@ def get_belief_trail(belief_query: str):
         return f"Error retrieving belief trail: {str(e)}"
 
 
-@tool
 def evolve_belief_tool(old_belief_query: str, new_content: str, reason: str = ""):
     """
     Evolve an existing belief by creating a new version that supersedes it.

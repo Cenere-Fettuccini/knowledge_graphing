@@ -19,3 +19,8 @@ venv\Scripts\python -m pytest -q
 
 Default pytest collection is intentionally limited to `tests/` so archival
 files under `backup/` do not affect normal verification.
+
+To turn on the telegram bot use
+```bash
+venv/Scripts/python run_bot.py
+```

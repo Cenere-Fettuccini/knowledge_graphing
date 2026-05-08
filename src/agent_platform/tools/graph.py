@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from langchain_core.tools import tool
-
 from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import memory_manager
 
 
-@tool
 def search_knowledge_graph(query: str):
     """
     Search the Knowledge Graph (Neo4j) for specific entities, relationships, or facts.
@@ -40,7 +37,6 @@ def search_knowledge_graph(query: str):
         return f"Error searching graph: {str(e)}"
 
 
-@tool
 def store_knowledge(entity_name: str, entity_label: str, fact: str):
     """
     Store a new fact or entity in the Knowledge Graph.

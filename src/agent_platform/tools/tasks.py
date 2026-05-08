@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from langchain_core.tools import tool
-
 from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import memory_manager
 
 
-@tool
 def create_task(title: str, due_date: str = None, priority: str = "medium"):
     """
     Create a new task or goal for the user.
@@ -28,7 +25,6 @@ def create_task(title: str, due_date: str = None, priority: str = "medium"):
         return f"Error creating task: {str(e)}"
 
 
-@tool
 def list_tasks(status_filter: str = ""):
     """
     List tasks from the Knowledge Graph, optionally filtered by status.
@@ -75,7 +71,6 @@ def list_tasks(status_filter: str = ""):
         return f"Error listing tasks: {str(e)}"
 
 
-@tool
 def update_task(task_title: str, new_status: str = "", notes: str = ""):
     """
     Update an existing task's status or add notes.
