@@ -29,4 +29,4 @@ async def get_belief_trail(belief_id: str):
 
 @router.get("/system/status")
 async def get_system_status():
-    return services.get_system_status()
+    return await services.get_system_status()

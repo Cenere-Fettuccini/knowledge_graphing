@@ -56,6 +56,14 @@ class AgentService:
             memory=health["memory"],
         )
 
+    async def astatus(self, force: bool = False) -> AgentStatus:
+        health = await self._agent.astatus(force=force)
+        return AgentStatus(
+            status=health["status"],
+            llm=health["llm"],
+            memory=health["memory"],
+        )
+
     def get_history(self, session_id: str, limit: int = 20) -> list[dict]:
         return self._agent.get_history(session_id, limit=limit)
 

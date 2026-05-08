@@ -24,7 +24,7 @@ def get_belief_trail(belief_id: str) -> dict:
     return {"chain": chain, "evidence": evidence}
 
 
-def get_system_status() -> dict:
+async def get_system_status() -> dict:
     memory_manager._health_cache_time = 0
     health = memory_manager.status()
 
@@ -45,7 +45,7 @@ def get_system_status() -> dict:
             "rpd_limit": model.rpd_limit,
         })
 
-    agent_status = agent_service.status(force=True)
+    agent_status = await agent_service.astatus(force=True)
     return {
         "status": health["status"],
         "neo4j": "online" if "online" in health["neo4j"] else "offline",

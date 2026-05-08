@@ -46,6 +46,10 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
+    async def astatus(self, force: bool = False) -> dict:
+        pass
+
+    @abstractmethod
     def process_message(self, user_id: str, text: str, session_id: str) -> str:
         pass
 
@@ -77,14 +81,47 @@ class Agent(BaseAgent):
 
     def status(self, force: bool = False) -> dict:
         """Probe all subsystems and return live health info. Caches results."""
+        return self._status_impl(force=force, use_async_probe=False)
+
+    async def astatus(self, force: bool = False) -> dict:
+        """Async-safe health probe for event-loop contexts."""
+        return await self._status_impl(force=force, use_async_probe=True)
+
+    def _should_use_cached_health(self, force: bool) -> bool:
         now = datetime.now(timezone.utc)
         if not force and self._last_health_check:
             delta = (now - self._last_health_check).total_seconds()
             if delta < self._health_ttl_seconds:
-                return self._health_cache
+                return True
+        return False
 
-        info = {"status": "online", "llm": "offline", "memory": {}}
+    def _build_base_health_info(self) -> dict:
+        return {"status": "online", "llm": "offline", "memory": {}}
 
+    def _finalize_health_info(self, info: dict) -> dict:
+        mem_health = self.memory.status()
+        info["memory"] = mem_health
+        if mem_health["status"] != "online":
+            info["status"] = "degraded"
+        if info["llm"] != "online" and mem_health["status"] == "offline":
+            info["status"] = "offline"
+
+        self._health_cache = info
+        self._last_health_check = datetime.now(timezone.utc)
+        return info
+
+    def _status_impl(self, force: bool, use_async_probe: bool):
+        """Shared status implementation for sync and async callers."""
+        if self._should_use_cached_health(force):
+            return self._health_cache
+
+        info = self._build_base_health_info()
+
+        if use_async_probe:
+            return self._status_impl_async(info)
+        return self._status_impl_sync(info)
+
+    def _status_impl_sync(self, info: dict) -> dict:
         try:
             spec = self.router.get_best_model("QA")
             deps = AgentRunDeps(
@@ -100,16 +137,25 @@ class Agent(BaseAgent):
             info["llm"] = f"error ({type(e).__name__})"
             info["status"] = "degraded"
 
-        mem_health = self.memory.status()
-        info["memory"] = mem_health
-        if mem_health["status"] != "online":
-            info["status"] = "degraded"
-        if info["llm"] != "online" and mem_health["status"] == "offline":
-            info["status"] = "offline"
+        return self._finalize_health_info(info)
 
-        self._health_cache = info
-        self._last_health_check = now
-        return info
+    async def _status_impl_async(self, info: dict) -> dict:
+        try:
+            spec = self.router.get_best_model("QA")
+            deps = AgentRunDeps(
+                query="ping",
+                session_id="health-check",
+                task_type="QA",
+                context_manager=self.context_manager,
+            )
+            reply, _tokens = await self._run_with_spec_async(spec, "ping", deps)
+            if reply.strip().lower():
+                info["llm"] = "online"
+        except Exception as e:
+            info["llm"] = f"error ({type(e).__name__})"
+            info["status"] = "degraded"
+
+        return self._finalize_health_info(info)
 
     def process_message(
         self,
@@ -152,11 +198,11 @@ class Agent(BaseAgent):
 
         try:
             reply = await self._execute_with_retries_async(effective_prompt, deps)
-            self._store_interaction(persisted_text, reply, session_id)
+            await self._astore_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
             logger.error("Agent loop failed: %s", e)
-            self._store_interaction(persisted_text, None, session_id)
+            await self._astore_interaction(persisted_text, None, session_id)
             return "I'm sorry, I encountered an internal error while processing that."
 
     def get_history(self, session_id: str, limit: int = 20) -> list[dict]:
@@ -325,6 +371,15 @@ class Agent(BaseAgent):
         """Store the conversation turn in ChromaDB."""
         ts = datetime.now(timezone.utc).isoformat()
         health = self.status(force=False)
+        if "online" in health["memory"].get("chroma", ""):
+            self.memory.store(user_text, role="user", session_id=session_id, timestamp=ts)
+            if reply:
+                self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts)
+
+    async def _astore_interaction(self, user_text: str, reply: str | None, session_id: str):
+        """Async-safe variant for storing the conversation turn in ChromaDB."""
+        ts = datetime.now(timezone.utc).isoformat()
+        health = await self.astatus(force=False)
         if "online" in health["memory"].get("chroma", ""):
             self.memory.store(user_text, role="user", session_id=session_id, timestamp=ts)
             if reply:
