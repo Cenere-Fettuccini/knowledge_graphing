@@ -226,6 +226,14 @@ const Panel = {
             html += `<div style="background:rgba(255,255,255,0.06);border-radius:3px;height:4px;margin:6px 0 2px">
                         <div style="width:${confPct}%;height:100%;background:${confColor};border-radius:3px;transition:width .4s ease"></div>
                       </div>`;
+            if (n.content) {
+                html += `<p><span class="dim">Claim:</span> ${n.content}</p>`;
+            }
+        } else if (n.label === 'Entity') {
+            html += `<p><span class="dim">Type:</span> <span class="highlight">${n.entity_type || 'Topic'}</span></p>`;
+            if (n.description) {
+                html += `<p><span class="dim">Description:</span> ${n.description}</p>`;
+            }
         } else if (n.label === 'Task') {
             html += `<p><span class="dim">Status:</span> <span class="highlight">${n.status}</span></p>`;
         }
