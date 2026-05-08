@@ -1,12 +1,14 @@
-"""PydanticAI-backed agent core for AIManager."""
+"""Idiomatic PydanticAI-backed agent core for AIManager."""
 
 import logging
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict
 
 from pydantic_ai import Agent as PydanticAgent
+from pydantic_ai import RunContext
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -24,6 +26,16 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds: 2, 4, 8
+
+
+@dataclass(slots=True)
+class AgentRunDeps:
+    """Per-run dependencies exposed to native PydanticAI hooks."""
+
+    query: str
+    session_id: str
+    task_type: str
+    context_manager: ContextManager
 
 
 class BaseAgent(ABC):
@@ -52,7 +64,7 @@ class BaseAgent(ABC):
 
 
 class Agent(BaseAgent):
-    """Memory-aware conversational agent backed by PydanticAI."""
+    """Memory-aware conversational agent implemented with native PydanticAI patterns."""
 
     def __init__(self, memory: MemoryManager | None = None):
         self.memory = memory or MemoryManager()
@@ -75,11 +87,13 @@ class Agent(BaseAgent):
 
         try:
             spec = self.router.get_best_model("QA")
-            reply, _tokens = self._run_with_spec_sync(
-                spec,
-                user_prompt="ping",
-                instructions="Reply with exactly the word pong.",
+            deps = AgentRunDeps(
+                query="ping",
+                session_id="health-check",
+                task_type="QA",
+                context_manager=self.context_manager,
             )
+            reply, _tokens = self._run_with_spec_sync(spec, "ping", deps)
             if reply.strip().lower():
                 info["llm"] = "online"
         except Exception as e:
@@ -110,9 +124,10 @@ class Agent(BaseAgent):
         del user_id
         effective_prompt = prompt_text or text
         persisted_text = store_text or text
+        deps = self._build_run_deps(effective_prompt, session_id, task_type="QA")
 
         try:
-            reply = self._generate_reply_sync(effective_prompt, session_id)
+            reply = self._execute_with_retries_sync(effective_prompt, deps)
             self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
@@ -133,9 +148,10 @@ class Agent(BaseAgent):
         del user_id
         effective_prompt = prompt_text or text
         persisted_text = store_text or text
+        deps = self._build_run_deps(effective_prompt, session_id, task_type="QA")
 
         try:
-            reply = await self._generate_reply_async(effective_prompt, session_id)
+            reply = await self._execute_with_retries_async(effective_prompt, deps)
             self._store_interaction(persisted_text, reply, session_id)
             return reply
         except Exception as e:
@@ -149,30 +165,30 @@ class Agent(BaseAgent):
     def clear_session(self, session_id: str) -> None:
         self.memory.clear_ephemeral(session_id=session_id)
 
-    def _generate_reply_sync(self, text: str, session_id: str) -> str:
-        instructions = self._build_system_prompt(text, session_id, task_type="QA")
-        return self._execute_with_retries_sync(text, instructions, task_type="QA")
+    def _build_run_deps(self, query: str, session_id: str, task_type: str) -> AgentRunDeps:
+        return AgentRunDeps(
+            query=query,
+            session_id=session_id,
+            task_type=task_type,
+            context_manager=self.context_manager,
+        )
 
-    async def _generate_reply_async(self, text: str, session_id: str) -> str:
-        instructions = self._build_system_prompt(text, session_id, task_type="QA")
-        return await self._execute_with_retries_async(text, instructions, task_type="QA")
-
-    def _execute_with_retries_sync(self, user_prompt: str, instructions: str, task_type: str) -> str:
+    def _execute_with_retries_sync(self, user_prompt: str, deps: AgentRunDeps) -> str:
         for attempt in range(MAX_RETRIES):
-            spec = self.router.get_best_model(task_type)
+            spec = self.router.get_best_model(deps.task_type)
             try:
-                reply, tokens = self._run_with_spec_sync(spec, user_prompt, instructions)
+                reply, tokens = self._run_with_spec_sync(spec, user_prompt, deps)
                 self.router.track_usage(spec.model_id, project_scope=spec.project_scope, tokens=tokens)
                 return reply
             except Exception as e:
                 self._handle_model_failure(spec, e, attempt)
         raise RuntimeError("LLM run failed after retries")
 
-    async def _execute_with_retries_async(self, user_prompt: str, instructions: str, task_type: str) -> str:
+    async def _execute_with_retries_async(self, user_prompt: str, deps: AgentRunDeps) -> str:
         for attempt in range(MAX_RETRIES):
-            spec = self.router.get_best_model(task_type)
+            spec = self.router.get_best_model(deps.task_type)
             try:
-                reply, tokens = await self._run_with_spec_async(spec, user_prompt, instructions)
+                reply, tokens = await self._run_with_spec_async(spec, user_prompt, deps)
                 self.router.track_usage(spec.model_id, project_scope=spec.project_scope, tokens=tokens)
                 return reply
             except Exception as e:
@@ -202,20 +218,20 @@ class Agent(BaseAgent):
         )
         time.sleep(wait)
 
-    def _run_with_spec_sync(self, spec: ModelSpec, user_prompt: str, instructions: str) -> tuple[str, int]:
+    def _run_with_spec_sync(self, spec: ModelSpec, user_prompt: str, deps: AgentRunDeps) -> tuple[str, int]:
         agent = self._get_agent_instance(spec)
         result = agent.run_sync(
             user_prompt,
-            instructions=instructions,
+            deps=deps,
             usage_limits=UsageLimits(request_limit=8),
         )
         return self.memory._coerce_text(result.output), self._extract_token_count(result)
 
-    async def _run_with_spec_async(self, spec: ModelSpec, user_prompt: str, instructions: str) -> tuple[str, int]:
+    async def _run_with_spec_async(self, spec: ModelSpec, user_prompt: str, deps: AgentRunDeps) -> tuple[str, int]:
         agent = self._get_agent_instance(spec)
         result = await agent.run(
             user_prompt,
-            instructions=instructions,
+            deps=deps,
             usage_limits=UsageLimits(request_limit=8),
         )
         return self.memory._coerce_text(result.output), self._extract_token_count(result)
@@ -226,14 +242,20 @@ class Agent(BaseAgent):
         if cached is not None:
             return cached
 
-        model = self._build_model(spec)
         agent = PydanticAgent(
-            model=model,
+            model=self._build_model(spec),
+            deps_type=AgentRunDeps,
             tools=tools,
+            instructions=SYSTEM_PROMPT,
             retries=1,
             defer_model_check=True,
             end_strategy="early",
         )
+
+        @agent.system_prompt
+        def build_context_prompt(ctx: RunContext[AgentRunDeps]) -> str:
+            return self._build_context_prompt(ctx.deps)
+
         self._agent_cache[cache_key] = agent
         return agent
 
@@ -256,43 +278,43 @@ class Agent(BaseAgent):
             settings={"temperature": settings.llm_temperature},
         )
 
-    def _build_system_prompt(self, text: str, session_id: str, task_type: str) -> str:
+    def _build_context_prompt(self, deps: AgentRunDeps) -> str:
         from src.core.prompts import ENTITY_BLOCK
 
-        context = self.context_manager.assemble_context(
-            query=text,
-            session_id=session_id,
-            task_type=task_type,
+        context = deps.context_manager.assemble_context(
+            query=deps.query,
+            session_id=deps.session_id,
+            task_type=deps.task_type,
         )
-        system_parts = [SYSTEM_PROMPT]
+        prompt_parts: list[str] = []
 
         entities = context["entities"]
         if entities:
-            ent_lines = []
+            entity_lines = []
             for entity in entities:
                 node = entity["node"]
                 conn_list = [
                     f"{connection['type']} -> {connection['target']} ({connection['target_label']})"
                     for connection in entity["connections"]
                 ]
-                ent_lines.append(
+                entity_lines.append(
                     f"ENTITY: {node['name']} ({node['label']})\n"
                     f"Facts: {node.get('description', 'N/A')}\n"
                     f"Relations: {', '.join(conn_list)}"
                 )
-            system_parts.append(ENTITY_BLOCK.format(entities="\n\n".join(ent_lines)))
+            prompt_parts.append(ENTITY_BLOCK.format(entities="\n\n".join(entity_lines)))
 
         rag = context["rag"]
         if rag:
-            mem_lines = [f"[{m['metadata'].get('timestamp')}] {m['text']}" for m in rag]
-            system_parts.append(CONTEXT_BLOCK.format(memories="\n".join(mem_lines)))
+            memory_lines = [f"[{m['metadata'].get('timestamp')}] {m['text']}" for m in rag]
+            prompt_parts.append(CONTEXT_BLOCK.format(memories="\n".join(memory_lines)))
 
         history = context["history"]
         if history:
-            hist_lines = [f"{h['metadata'].get('role')}: {h['text']}" for h in history]
-            system_parts.append(HISTORY_BLOCK.format(history="\n".join(hist_lines)))
+            history_lines = [f"{h['metadata'].get('role')}: {h['text']}" for h in history]
+            prompt_parts.append(HISTORY_BLOCK.format(history="\n".join(history_lines)))
 
-        return "\n\n".join(system_parts)
+        return "\n\n".join(prompt_parts).strip()
 
     @staticmethod
     def _extract_token_count(result) -> int:

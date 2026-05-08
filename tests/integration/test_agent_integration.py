@@ -6,8 +6,13 @@ from src.core.agent import Agent
 from src.memory.manager import MemoryManager
 
 
-def _fake_run(self, _spec, user_prompt, instructions):
-    full_text = f"{instructions}\n{user_prompt}"
+def _fake_run(self, _spec, user_prompt, deps):
+    history = deps.context_manager.assemble_context(
+        query=deps.query,
+        session_id=deps.session_id,
+        task_type=deps.task_type,
+    )["history"]
+    full_text = "\n".join(item["text"] for item in history) + f"\n{user_prompt}"
 
     if "What programming language do I like?" in user_prompt and "Rust" in full_text:
         return "You like Rust.", 42
