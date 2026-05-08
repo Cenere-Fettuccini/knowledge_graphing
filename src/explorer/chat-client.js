@@ -39,11 +39,12 @@
             }
         },
 
-        async sendMessage(sessionId, message, context = null) {
+        async sendMessage(sessionId, message, messageTimestamp, context = null) {
             try {
                 return await http.post('/api/chat-app/message', {
                     session_id: sessionId,
                     message,
+                    message_timestamp: messageTimestamp,
                     context,
                 });
             } catch (error) {

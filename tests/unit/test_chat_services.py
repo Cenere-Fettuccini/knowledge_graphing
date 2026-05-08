@@ -31,3 +31,27 @@ def test_build_effective_prompt_includes_context_metadata():
     assert "Context id: belief-1" in prompt
     assert "Context relationships: SUPPORTED_BY -> Memory" in prompt
     assert "User request: Explain this belief" in prompt
+
+
+def test_get_chat_session_returns_chronological_order_from_history(monkeypatch):
+    session_id = "session-1"
+    monkeypatch.setattr(
+        services.memory_manager,
+        "get_history",
+        lambda sid, limit=100: [
+            {
+                "id": "assistant-1",
+                "text": "Reply",
+                "metadata": {"role": "assistant", "timestamp": "2026-05-09T01:02:14.684000+00:00"},
+            },
+            {
+                "id": "user-1",
+                "text": "Question",
+                "metadata": {"role": "user", "timestamp": "2026-05-09T01:02:14.683000+00:00"},
+            },
+        ] if sid == session_id else [],
+    )
+
+    payload = services.get_chat_session(session_id)
+
+    assert [m["role"] for m in payload["messages"]] == ["user", "assistant"]

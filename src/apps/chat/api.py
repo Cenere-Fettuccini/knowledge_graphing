@@ -32,6 +32,7 @@ async def delete_chat_session(session_id: str):
 async def post_chat_message(body: dict = Body(...)):
     session_id = body.get("session_id")
     text = (body.get("message") or "").strip()
+    message_timestamp = body.get("message_timestamp")
     context = body.get("context")
     anchor_node_id = body.get("anchor_node_id")
 
@@ -45,6 +46,7 @@ async def post_chat_message(body: dict = Body(...)):
         user_id="web_user",
         session_id=session_id,
         text=text,
+        message_timestamp=message_timestamp,
         context=context,
         anchor_node_id=anchor_node_id,
     )

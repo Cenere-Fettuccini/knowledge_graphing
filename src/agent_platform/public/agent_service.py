@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from src.agent_platform.public.contracts import AgentRunRequest, AgentRunResult, AgentStatus
 from src.core.agent import Agent, BaseAgent
@@ -24,6 +25,7 @@ class AgentService:
             request.user_id,
             request.message,
             request.session_id,
+            message_timestamp=request.message_timestamp,
             prompt_text=effective_prompt,
             store_text=request.store_text or request.message,
             store_metadata=request.store_metadata,
@@ -32,6 +34,7 @@ class AgentService:
             app_id=request.app_id,
             session_id=request.session_id,
             reply=reply,
+            reply_timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     async def arun(self, request: AgentRunRequest) -> AgentRunResult:
@@ -40,6 +43,7 @@ class AgentService:
             request.user_id,
             request.message,
             request.session_id,
+            message_timestamp=request.message_timestamp,
             prompt_text=effective_prompt,
             store_text=request.store_text or request.message,
             store_metadata=request.store_metadata,
@@ -48,6 +52,7 @@ class AgentService:
             app_id=request.app_id,
             session_id=request.session_id,
             reply=reply,
+            reply_timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     def status(self, force: bool = False) -> AgentStatus:

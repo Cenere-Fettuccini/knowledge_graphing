@@ -10,6 +10,7 @@ class AgentRunRequest:
     user_id: str
     session_id: str
     message: str
+    message_timestamp: str | None = None
     prompt_text: str | None = None
     store_text: str | None = None
     store_metadata: dict[str, Any] = field(default_factory=dict)
@@ -21,6 +22,7 @@ class AgentRunResult:
     app_id: str
     session_id: str
     reply: str
+    reply_timestamp: str | None = None
 
 
 @dataclass(frozen=True)

@@ -93,6 +93,22 @@ class MemoryManager:
             return json.dumps(value, ensure_ascii=True, sort_keys=True)
         return str(value)
 
+    def _prepare_chroma_metadata(self, metadata: dict) -> dict:
+        """Flatten metadata into Chroma-compatible scalar/list values."""
+        safe_metadata = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                safe_metadata[key] = value
+            elif isinstance(value, list):
+                safe_metadata[key] = [
+                    item if isinstance(item, (str, int, float, bool)) or item is None
+                    else self._coerce_text(item)
+                    for item in value
+                ]
+            else:
+                safe_metadata[key] = self._coerce_text(value)
+        return safe_metadata
+
     def store(self, text, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
         """Store a conversation turn with metadata."""
@@ -106,11 +122,12 @@ class MemoryManager:
         if not normalized_text.strip():
             logger.warning("Skipping empty memory write for session %s", session_id)
             return None
+        chroma_metadata = self._prepare_chroma_metadata(metadata)
 
         memory_id = None
         if self._is_chroma_available():
             try:
-                memory_id = self.chroma.add_memory(normalized_text, metadata)
+                memory_id = self.chroma.add_memory(normalized_text, chroma_metadata)
             except Exception as e:
                 logger.error("Failed to store memory in Chroma: %s", e)
                 self._health_cache_time = 0

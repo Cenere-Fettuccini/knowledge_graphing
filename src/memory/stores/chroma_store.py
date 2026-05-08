@@ -101,8 +101,16 @@ class ChromaStore:
             }
             for i in range(len(results["documents"]))
         ]
+
+        def sort_key(memory: dict) -> tuple[str, int]:
+            metadata = memory.get("metadata", {})
+            return (
+                metadata.get("timestamp", ""),
+                int(metadata.get("turn_order", 0) or 0),
+            )
+
         memories.sort(
-            key=lambda m: m["metadata"].get("timestamp", ""), reverse=True
+            key=sort_key, reverse=True
         )
         return memories[:n]
 

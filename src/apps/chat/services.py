@@ -171,6 +171,7 @@ async def send_chat_message(
     user_id: str,
     session_id: str,
     text: str,
+    message_timestamp: str | None = None,
     context: dict | None = None,
     anchor_node_id: str | None = None,
 ) -> dict:
@@ -183,6 +184,7 @@ async def send_chat_message(
             user_id=user_id,
             session_id=session_id,
             message=text,
+            message_timestamp=message_timestamp,
             prompt_text=effective_text,
             store_text=text,
             store_metadata={
@@ -199,5 +201,6 @@ async def send_chat_message(
         "session_id": session_id,
         "reply": result.reply,
         "context": normalized_context,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": result.reply_timestamp or datetime.now(timezone.utc).isoformat(),
+        "message_timestamp": message_timestamp,
     }

@@ -206,6 +206,7 @@ class Agent(BaseAgent):
         text: str,
         session_id: str,
         *,
+        message_timestamp: str | None = None,
         prompt_text: str | None = None,
         store_text: str | None = None,
         store_metadata: dict | None = None,
@@ -215,14 +216,27 @@ class Agent(BaseAgent):
         persisted_text = store_text or text
         deps = self._build_run_deps(effective_prompt, session_id, task_type="QA")
         merged_store_metadata = {"user_id": user_id, **(store_metadata or {})}
+        effective_message_timestamp = message_timestamp or datetime.now(timezone.utc).isoformat()
 
         try:
             reply = self._execute_with_retries_sync(effective_prompt, deps)
-            self._store_interaction(persisted_text, reply, session_id, metadata=merged_store_metadata)
+            self._store_interaction(
+                persisted_text,
+                reply,
+                session_id,
+                metadata=merged_store_metadata,
+                user_timestamp=effective_message_timestamp,
+            )
             return reply
         except Exception as e:
             logger.error("Agent loop failed: %s", e)
-            self._store_interaction(persisted_text, None, session_id, metadata=merged_store_metadata)
+            self._store_interaction(
+                persisted_text,
+                None,
+                session_id,
+                metadata=merged_store_metadata,
+                user_timestamp=effective_message_timestamp,
+            )
             return "I'm sorry, I encountered an internal error while processing that."
 
     async def aprocess_message(
@@ -231,6 +245,7 @@ class Agent(BaseAgent):
         text: str,
         session_id: str,
         *,
+        message_timestamp: str | None = None,
         prompt_text: str | None = None,
         store_text: str | None = None,
         store_metadata: dict | None = None,
@@ -240,14 +255,27 @@ class Agent(BaseAgent):
         persisted_text = store_text or text
         deps = self._build_run_deps(effective_prompt, session_id, task_type="QA")
         merged_store_metadata = {"user_id": user_id, **(store_metadata or {})}
+        effective_message_timestamp = message_timestamp or datetime.now(timezone.utc).isoformat()
 
         try:
             reply = await self._execute_with_retries_async(effective_prompt, deps)
-            await self._astore_interaction(persisted_text, reply, session_id, metadata=merged_store_metadata)
+            await self._astore_interaction(
+                persisted_text,
+                reply,
+                session_id,
+                metadata=merged_store_metadata,
+                user_timestamp=effective_message_timestamp,
+            )
             return reply
         except Exception as e:
             logger.error("Agent loop failed: %s", e)
-            await self._astore_interaction(persisted_text, None, session_id, metadata=merged_store_metadata)
+            await self._astore_interaction(
+                persisted_text,
+                None,
+                session_id,
+                metadata=merged_store_metadata,
+                user_timestamp=effective_message_timestamp,
+            )
             return "I'm sorry, I encountered an internal error while processing that."
 
     def get_history(self, session_id: str, limit: int = 20) -> list[dict]:
@@ -412,21 +440,65 @@ class Agent(BaseAgent):
         usage = result.usage()
         return (usage.input_tokens or 0) + (usage.output_tokens or 0)
 
-    def _store_interaction(self, user_text: str, reply: str | None, session_id: str, metadata: dict | None = None):
+    def _store_interaction(
+        self,
+        user_text: str,
+        reply: str | None,
+        session_id: str,
+        metadata: dict | None = None,
+        user_timestamp: str | None = None,
+    ):
         """Store the conversation turn in memory backends."""
-        ts = datetime.now(timezone.utc).isoformat()
+        user_ts = user_timestamp or datetime.now(timezone.utc).isoformat()
+        assistant_ts = datetime.now(timezone.utc).isoformat()
         metadata = metadata or {}
-        self.memory.store(user_text, role="user", session_id=session_id, timestamp=ts, **metadata)
+        self.memory.store(
+            user_text,
+            role="user",
+            session_id=session_id,
+            timestamp=user_ts,
+            turn_order=0,
+            **metadata,
+        )
         if reply:
-            self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts, **metadata)
+            self.memory.store(
+                reply,
+                role="assistant",
+                session_id=session_id,
+                timestamp=assistant_ts,
+                turn_order=1,
+                **metadata,
+            )
 
-    async def _astore_interaction(self, user_text: str, reply: str | None, session_id: str, metadata: dict | None = None):
+    async def _astore_interaction(
+        self,
+        user_text: str,
+        reply: str | None,
+        session_id: str,
+        metadata: dict | None = None,
+        user_timestamp: str | None = None,
+    ):
         """Async-safe variant for storing the conversation turn in memory backends."""
-        ts = datetime.now(timezone.utc).isoformat()
+        user_ts = user_timestamp or datetime.now(timezone.utc).isoformat()
+        assistant_ts = datetime.now(timezone.utc).isoformat()
         metadata = metadata or {}
-        self.memory.store(user_text, role="user", session_id=session_id, timestamp=ts, **metadata)
+        self.memory.store(
+            user_text,
+            role="user",
+            session_id=session_id,
+            timestamp=user_ts,
+            turn_order=0,
+            **metadata,
+        )
         if reply:
-            self.memory.store(reply, role="assistant", session_id=session_id, timestamp=ts, **metadata)
+            self.memory.store(
+                reply,
+                role="assistant",
+                session_id=session_id,
+                timestamp=assistant_ts,
+                turn_order=1,
+                **metadata,
+            )
 
 
 def process_message_sync(agent: Agent, user_id: str, text: str, session_id: str) -> str:

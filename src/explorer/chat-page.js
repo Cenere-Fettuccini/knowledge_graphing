@@ -301,12 +301,13 @@
         const sendBtn = document.getElementById('chatSendBtn');
         const raw = input ? input.value.trim() : '';
         if (!raw) return;
+        const messageTimestamp = new Date().toISOString();
 
         state.sending = true;
         if (sendBtn) sendBtn.disabled = true;
 
         const sessionId = await ensureSession();
-        appendMessage('user', raw);
+        appendMessage('user', raw, messageTimestamp);
         if (input) {
             input.value = '';
             autoResize(input);
@@ -319,7 +320,7 @@
         );
         renderMessages();
 
-        const result = await chatClient().sendMessage(sessionId, raw, state.chatContext);
+        const result = await chatClient().sendMessage(sessionId, raw, messageTimestamp, state.chatContext);
         state.sending = false;
 
         if (result.ok) {
