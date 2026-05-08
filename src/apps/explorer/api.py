@@ -17,6 +17,11 @@ async def get_node_detail(node_id: str):
     return services.get_node_detail(node_id)
 
 
+@router.get("/graph/node/{node_id}/provenance")
+async def get_node_provenance(node_id: str):
+    return services.get_node_provenance(node_id)
+
+
 @router.get("/tasks/active")
 async def get_active_tasks():
     return services.get_active_tasks()

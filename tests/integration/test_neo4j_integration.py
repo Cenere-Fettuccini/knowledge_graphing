@@ -84,3 +84,37 @@ def test_node_update(neo4j_store):
     assert detail["node"]["name"] == "NewName"
     assert detail["node"]["version"] == 2
     assert detail["node"]["new_prop"] is True
+
+
+def test_conversation_turn_provenance(neo4j_store):
+    """Conversation turns should become graph nodes with session provenance."""
+    session_id = f"session_{uuid.uuid4().hex[:8]}"
+    topic_id = f"topic_{uuid.uuid4().hex[:8]}"
+    neo4j_store.add_node("Project", "Explorer Provenance", {"id": topic_id})
+
+    note_id = neo4j_store.store_conversation_turn(
+        text="We should make Explorer the notes surface.",
+        role="user",
+        session_id=session_id,
+        context={
+            "context_id": topic_id,
+            "context_type": "graph_node",
+            "context_summary": "Explorer Provenance (Project)",
+        },
+    )
+    thought_id = neo4j_store.store_conversation_turn(
+        text="I can wire conversation turns into the graph first.",
+        role="assistant",
+        session_id=session_id,
+    )
+
+    note_detail = neo4j_store.get_node_detail(note_id)
+    thought_detail = neo4j_store.get_node_detail(thought_id)
+    note_provenance = neo4j_store.get_node_provenance(note_id)
+
+    assert note_detail["node"]["label"] == "Note"
+    assert thought_detail["node"]["label"] == "Thought"
+    assert note_detail["node"]["session_id"] == session_id
+    assert len(note_provenance["timeline"]) == 2
+    assert note_provenance["timeline"][0]["id"] == note_id
+    assert any(edge["type"] == "REFERENCES" and edge["id"] == topic_id for edge in note_provenance["outgoing"])

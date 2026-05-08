@@ -12,6 +12,7 @@ class AgentRunRequest:
     message: str
     prompt_text: str | None = None
     store_text: str | None = None
+    store_metadata: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict)
 
 

@@ -185,6 +185,12 @@ async def send_chat_message(
             message=text,
             prompt_text=effective_text,
             store_text=text,
+            store_metadata={
+                "app_id": app_id,
+                "user_id": user_id,
+                "source_section": normalized_context.get("source_section", "chat") if normalized_context else "chat",
+                "chat_context": normalized_context or {},
+            },
             context={"chat_context": normalized_context} if normalized_context else {},
         )
     )

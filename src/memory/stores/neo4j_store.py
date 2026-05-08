@@ -2,6 +2,7 @@
 
 import uuid
 import logging
+from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
 from src.core.config import settings
@@ -88,6 +89,117 @@ class Neo4jStore:
             session.run(query, source_id=source_id, target_id=target_id, props=props)
 
     # ── Read Operations (Explorer API format) ──────────────────────────────────
+
+    def upsert_conversation(self, session_id: str, properties: dict = None) -> str:
+        """Create or update a conversation node keyed by session_id."""
+        if not self.driver:
+            return ""
+
+        props = properties or {}
+        conversation_id = props.get("id", str(uuid.uuid4()))
+        name = props.get("name", f"Conversation {session_id[:8]}")
+        query = """
+        MERGE (c:Conversation {session_id: $session_id})
+        ON CREATE SET c.id = $conversation_id
+        SET c.name = $name, c += $props
+        RETURN c.id AS id
+        """
+
+        with self.driver.session() as session:
+            record = session.run(
+                query,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                name=name,
+                props={**props, "session_id": session_id},
+            ).single()
+            return record["id"] if record else conversation_id
+
+    def store_conversation_turn(
+        self,
+        *,
+        text: str,
+        role: str,
+        session_id: str,
+        timestamp: str | None = None,
+        source_section: str | None = None,
+        context: dict | None = None,
+        metadata: dict | None = None,
+    ) -> str:
+        """Persist one conversation turn into the graph as a Note or Thought."""
+        if not self.driver:
+            return ""
+
+        label = "Thought" if role == "assistant" else "Note"
+        now = timestamp or datetime.now(timezone.utc).isoformat()
+        props = metadata.copy() if metadata else {}
+        turn_id = props.pop("id", str(uuid.uuid4()))
+        preview = text[:60] + "..." if len(text) > 60 else text
+        context = context or {}
+        context_id = context.get("context_id")
+        context_type = context.get("context_type")
+        context_summary = context.get("context_summary")
+
+        self.upsert_conversation(
+            session_id,
+            {
+                "name": f"Chat {session_id[:12]}",
+                "last_updated_at": now,
+                "source_section": source_section or "chat",
+            },
+        )
+
+        query = f"""
+        MATCH (c:Conversation {{session_id: $session_id}})
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(prev)
+        WITH c, coalesce(max(prev.sequence), 0) AS max_sequence
+        CREATE (t:{label} {{
+            id: $turn_id,
+            name: $preview,
+            text: $text,
+            role: $role,
+            session_id: $session_id,
+            timestamp: $timestamp,
+            sequence: max_sequence + 1,
+            source_section: $source_section,
+            context_id: $context_id,
+            context_type: $context_type,
+            context_summary: $context_summary
+        }})
+        SET t += $props
+        MERGE (c)-[:HAS_TURN {{timestamp: $timestamp}}]->(t)
+        WITH t, c
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(prev {{sequence: t.sequence - 1}})
+        FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END |
+            MERGE (t)-[:FOLLOWS]->(prev)
+        )
+        WITH t
+        OPTIONAL MATCH (anchor {{id: $context_id}})
+        FOREACH (_ IN CASE WHEN anchor IS NULL THEN [] ELSE [1] END |
+            MERGE (t)-[:REFERENCES {{
+                context_type: $context_type,
+                context_summary: $context_summary
+            }}]->(anchor)
+        )
+        RETURN t.id AS id
+        """
+
+        with self.driver.session() as session:
+            record = session.run(
+                query,
+                session_id=session_id,
+                turn_id=turn_id,
+                preview=preview or f"{label} {session_id[:8]}",
+                text=text,
+                role=role,
+                timestamp=now,
+                source_section=source_section or "chat",
+                context_id=context_id,
+                context_type=context_type,
+                context_summary=context_summary,
+                props=props,
+            ).single()
+            return record["id"] if record else turn_id
 
     def get_graph_overview(self, limit: int = 100) -> dict:
         """Returns nodes and edges formatted for the 3D Explorer."""
@@ -207,6 +319,104 @@ class Neo4jStore:
             }
 
     # ── Belief Provenance ──────────────────────────────────────────────────────
+
+    def _normalize_relation_entries(self, entries: list[dict], side: str) -> list[dict]:
+        normalized = []
+        seen = set()
+        for entry in entries:
+            rel = entry.get("rel")
+            node = entry.get("node")
+            if rel is None or node is None:
+                continue
+            node_id = node.get("id")
+            if not node_id:
+                continue
+            key = (node_id, rel.type, side)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append({
+                "id": node_id,
+                "name": node.get("name", "Unnamed"),
+                "label": list(node.labels)[0] if node.labels else "Unknown",
+                "type": rel.type,
+                "direction": side,
+                "relationship": dict(rel.items()),
+            })
+        return normalized
+
+    def _get_conversation_timeline(self, session_id: str) -> list[dict]:
+        if not self.driver or not session_id:
+            return []
+
+        cypher = """
+        MATCH (c:Conversation {session_id: $session_id})-[:HAS_TURN]->(t)
+        RETURN t.id AS id, labels(t)[0] AS label, t.name AS name, t.text AS text,
+               t.role AS role, t.sequence AS sequence, t.timestamp AS timestamp
+        ORDER BY t.sequence ASC, t.timestamp ASC
+        """
+        timeline = []
+        with self.driver.session() as session:
+            for record in session.run(cypher, session_id=session_id):
+                timeline.append({
+                    "id": record["id"],
+                    "label": record["label"],
+                    "name": record["name"],
+                    "text": record["text"],
+                    "role": record["role"],
+                    "sequence": record["sequence"],
+                    "timestamp": record["timestamp"],
+                })
+        return timeline
+
+    def get_node_provenance(self, node_id: str) -> dict:
+        """Return generic provenance for any node plus belief-specific trails."""
+        empty = {
+            "node": None,
+            "incoming": [],
+            "outgoing": [],
+            "timeline": [],
+            "chain": [],
+            "evidence": {"supports": [], "weakens": []},
+        }
+        if not self.driver:
+            return empty
+
+        query = """
+        MATCH (n {id: $node_id})
+        OPTIONAL MATCH (src)-[in_r]->(n)
+        OPTIONAL MATCH (n)-[out_r]->(dst)
+        RETURN n,
+               collect(DISTINCT {rel: in_r, node: src}) AS incoming,
+               collect(DISTINCT {rel: out_r, node: dst}) AS outgoing
+        """
+
+        with self.driver.session() as session:
+            record = session.run(query, node_id=node_id).single()
+
+        if not record or not record["n"]:
+            return empty
+
+        node = record["n"]
+        node_data = {
+            "id": node.get("id"),
+            "label": list(node.labels)[0] if node.labels else "Unknown",
+            "name": node.get("name", "Unnamed"),
+            **{k: v for k, v in node.items() if k not in ["id", "name"]},
+        }
+        session_id = node_data.get("session_id")
+
+        return {
+            "node": node_data,
+            "incoming": self._normalize_relation_entries(record["incoming"], "in"),
+            "outgoing": self._normalize_relation_entries(record["outgoing"], "out"),
+            "timeline": self._get_conversation_timeline(session_id),
+            "chain": self.get_belief_chain(node_id) if node_data["label"] == "Belief" else [],
+            "evidence": self.get_belief_evidence(node_id) if node_data["label"] == "Belief" else {
+                "supports": [],
+                "weakens": [],
+            },
+        }
 
     def upsert_belief(
         self,

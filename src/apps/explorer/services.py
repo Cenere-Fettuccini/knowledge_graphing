@@ -13,6 +13,10 @@ def get_node_detail(node_id: str) -> dict:
     return memory_manager.neo4j.get_node_detail(node_id)
 
 
+def get_node_provenance(node_id: str) -> dict:
+    return memory_manager.neo4j.get_node_provenance(node_id)
+
+
 def get_active_tasks() -> list[dict]:
     overview = memory_manager.neo4j.get_graph_overview(limit=100)
     return [n for n in overview["nodes"] if n["label"] == "Task"]

@@ -21,6 +21,15 @@
             }
         },
 
+        async getNodeProvenance(nodeId) {
+            try {
+                return await http.get(`/api/explorer/graph/node/${nodeId}/provenance`);
+            } catch (error) {
+                console.error('ExplorerClient.getNodeProvenance failed', error);
+                return null;
+            }
+        },
+
         async getBeliefTrail(nodeId) {
             try {
                 return await http.get(`/api/explorer/graph/belief/${nodeId}/trail`);

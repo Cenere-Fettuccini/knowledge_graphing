@@ -26,6 +26,7 @@ class AgentService:
             request.session_id,
             prompt_text=effective_prompt,
             store_text=request.store_text or request.message,
+            store_metadata=request.store_metadata,
         )
         return AgentRunResult(
             app_id=request.app_id,
@@ -41,6 +42,7 @@ class AgentService:
             request.session_id,
             prompt_text=effective_prompt,
             store_text=request.store_text or request.message,
+            store_metadata=request.store_metadata,
         )
         return AgentRunResult(
             app_id=request.app_id,
