@@ -231,16 +231,24 @@ class MemoryManager:
         self.chroma.delete_memories(where=where)
 
     def delete_session(self, session_id: str):
-        """Wipe an entire session from Chroma."""
-        if not self._is_chroma_available():
+        """Wipe an entire session from Chroma and Neo4j."""
+        chroma_ok = True
+        graph_ok = True
+
+        if self._is_chroma_available():
+            try:
+                self.chroma.delete_memories(where={"session_id": session_id})
+            except Exception as e:
+                logger.error("Failed to delete Chroma session %s: %s", session_id, e)
+                chroma_ok = False
+        else:
             logger.error("ChromaDB is offline, cannot delete session.")
-            return False
-        try:
-            self.chroma.delete_memories(where={"session_id": session_id})
-            return True
-        except Exception as e:
-            logger.error("Failed to delete session %s: %s", session_id, e)
-            return False
+            chroma_ok = False
+
+        if self.neo4j.driver or self.neo4j.verify_connection():
+            graph_ok = self.neo4j.delete_session_graph(session_id)
+
+        return chroma_ok and graph_ok
 
 
 # ── Singleton instance ────────────────────────────────────────────────────────

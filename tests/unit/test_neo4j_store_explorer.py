@@ -7,9 +7,21 @@ class FakeNode(dict):
         self.labels = set(labels)
 
 
+class FakeResult:
+    def __init__(self, records):
+        self.records = records
+
+    def __iter__(self):
+        return iter(self.records)
+
+    def single(self):
+        return self.records[0] if self.records else None
+
+
 class FakeSession:
     def __init__(self, records):
         self.records = records
+        self.calls = []
 
     def __enter__(self):
         return self
@@ -17,16 +29,19 @@ class FakeSession:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def run(self, _query, **_params):
-        return self.records
+    def run(self, query, **params):
+        self.calls.append({"query": query, "params": params})
+        return FakeResult(self.records)
 
 
 class FakeDriver:
     def __init__(self, records):
         self.records = records
+        self.last_session = None
 
     def session(self):
-        return FakeSession(self.records)
+        self.last_session = FakeSession(self.records)
+        return self.last_session
 
 
 def make_store(records):
@@ -118,3 +133,25 @@ def test_list_active_tasks_queries_tasks_directly():
             "label": "Task",
         },
     ]
+
+
+def test_cleanup_test_artifacts_passes_expected_prefixes():
+    store = make_store([{"deleted_count": 4}])
+
+    deleted = store.cleanup_test_artifacts()
+
+    call = store.driver.last_session.calls[0]
+    assert deleted == 4
+    assert "test_" in call["params"]["id_prefixes"]
+    assert "pytest_" in call["params"]["session_prefixes"]
+
+
+def test_delete_session_graph_targets_conversation_session():
+    store = make_store([])
+
+    ok = store.delete_session_graph("test_session_123")
+
+    call = store.driver.last_session.calls[0]
+    assert ok is True
+    assert call["params"]["session_id"] == "test_session_123"
+    assert "MATCH (c:Conversation {session_id: $session_id})" in call["query"]

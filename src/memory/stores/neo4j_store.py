@@ -16,6 +16,7 @@ class Neo4jStore:
     EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
     EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project"}
     TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
+    TEST_SESSION_PREFIXES = ("test_", "test-", "session_", "pytest_")
 
     def __init__(self, uri=None, user=None, password=None):
         self._uri = uri or settings.neo4j_uri
@@ -392,6 +393,63 @@ class Neo4jStore:
                     "label": "Task",
                 })
         return tasks
+
+    def delete_session_graph(self, session_id: str) -> bool:
+        """Delete a conversation session and its turn nodes from Neo4j."""
+        if not self.driver and not self.verify_connection():
+            return False
+
+        query = """
+        MATCH (c:Conversation {session_id: $session_id})
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(t)
+        DETACH DELETE c, t
+        """
+        try:
+            with self.driver.session() as session:
+                session.run(query, session_id=session_id)
+            return True
+        except Exception as e:
+            logger.error("Failed to delete Neo4j session %s: %s", session_id, e)
+            return False
+
+    def cleanup_test_artifacts(self) -> int:
+        """Delete graph data that matches our pytest/test naming conventions."""
+        if not self.driver and not self.verify_connection():
+            return 0
+
+        query = """
+        MATCH (n)
+        WHERE
+            (
+                n.id IS NOT NULL AND (
+                    any(prefix IN $id_prefixes WHERE toLower(n.id) STARTS WITH prefix)
+                    OR (
+                        any(prefix IN $session_prefixes WHERE toLower(n.id) STARTS WITH prefix)
+                        AND any(label IN labels(n) WHERE label IN ['Conversation', 'Note', 'Thought'])
+                    )
+                )
+            )
+            OR (
+                n.session_id IS NOT NULL
+                AND any(prefix IN $session_prefixes WHERE toLower(n.session_id) STARTS WITH prefix)
+            )
+            OR any(label IN labels(n) WHERE label IN ['TestNode'])
+        WITH collect(DISTINCT n) AS doomed
+        FOREACH (node IN doomed | DETACH DELETE node)
+        RETURN size(doomed) AS deleted_count
+        """
+
+        try:
+            with self.driver.session() as session:
+                record = session.run(
+                    query,
+                    id_prefixes=[prefix.lower() for prefix in self.TEST_ID_PREFIXES],
+                    session_prefixes=[prefix.lower() for prefix in self.TEST_SESSION_PREFIXES],
+                ).single()
+            return int(record["deleted_count"]) if record else 0
+        except Exception as e:
+            logger.error("Failed to clean Neo4j test artifacts: %s", e)
+            return 0
 
     def get_node_detail(self, node_id: str) -> dict:
         """Returns details for a specific node and its immediate connections."""
