@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 class Neo4jStore:
     """Interface to the Neo4j Knowledge Graph."""
 
+    EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
+    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project"}
+    TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
+
     def __init__(self, uri=None, user=None, password=None):
         self._uri = uri or settings.neo4j_uri
         self._user = user or settings.neo4j_user
@@ -260,6 +264,134 @@ class Neo4jStore:
                 "edges": len(unique_edges),
             }
         }
+
+    def _serialize_node(self, node) -> dict:
+        label = list(node.labels)[0] if node.labels else "Unknown"
+        return {
+            "id": node.get("id"),
+            "label": label,
+            "name": node.get("name", "Unnamed"),
+            **{k: v for k, v in node.items() if k not in ["id", "name"]},
+        }
+
+    def _looks_like_test_artifact(self, node_data: dict) -> bool:
+        node_id = str(node_data.get("id") or "").lower()
+        label = str(node_data.get("label") or "")
+        return label == "TestNode" or any(node_id.startswith(prefix) for prefix in self.TEST_ID_PREFIXES)
+
+    def get_explorer_graph_overview(self, limit: int = 100) -> dict:
+        """Return a curated graph centered on beliefs, tasks, projects, and linked entities."""
+        if not self.driver and not self.verify_connection():
+            return {"nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+
+        query = """
+        MATCH (root)
+        WHERE any(label IN labels(root) WHERE label IN $root_labels)
+        WITH root
+        ORDER BY coalesce(root.updated_at, root.created_at, root.last_updated_at, root.name) DESC
+        LIMIT $limit
+        OPTIONAL MATCH (root)-[r]-(neighbor)
+        WHERE neighbor IS NULL OR NOT any(label IN labels(neighbor) WHERE label IN $hidden_labels)
+        RETURN root, neighbor,
+               type(r) AS rel_type,
+               startNode(r).id AS source_id,
+               endNode(r).id AS target_id
+        """
+
+        nodes_dict = {}
+        edges = []
+
+        with self.driver.session() as session:
+            result = session.run(
+                query,
+                limit=limit,
+                root_labels=list(self.EXPLORER_ROOT_LABELS),
+                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
+            )
+            for record in result:
+                root = record["root"]
+                if root is not None:
+                    node_data = self._serialize_node(root)
+                    if not self._looks_like_test_artifact(node_data):
+                        nodes_dict[node_data["id"]] = node_data
+
+                neighbor = record["neighbor"]
+                if neighbor is not None:
+                    node_data = self._serialize_node(neighbor)
+                    if not self._looks_like_test_artifact(node_data):
+                        nodes_dict[node_data["id"]] = node_data
+
+                source_id = record["source_id"]
+                target_id = record["target_id"]
+                rel_type = record["rel_type"]
+                if source_id and target_id and rel_type:
+                    edges.append({
+                        "source": source_id,
+                        "target": target_id,
+                        "type": rel_type,
+                    })
+
+        visible_ids = set(nodes_dict)
+        unique_edges = [
+            dict(t)
+            for t in {
+                tuple(d.items()) for d in edges
+                if d["source"] in visible_ids and d["target"] in visible_ids
+            }
+        ]
+
+        connected_ids = set()
+        for edge in unique_edges:
+            connected_ids.add(edge["source"])
+            connected_ids.add(edge["target"])
+
+        if connected_ids:
+            nodes = [node for node_id, node in nodes_dict.items() if node_id in connected_ids]
+        else:
+            nodes = [
+                node for node in nodes_dict.values()
+                if node["label"] in self.EXPLORER_ROOT_LABELS
+            ]
+
+        visible_ids = {node["id"] for node in nodes}
+        unique_edges = [
+            edge for edge in unique_edges
+            if edge["source"] in visible_ids and edge["target"] in visible_ids
+        ]
+
+        return {
+            "nodes": nodes,
+            "edges": unique_edges,
+            "stats": {
+                "nodes": len(nodes),
+                "edges": len(unique_edges),
+            }
+        }
+
+    def list_active_tasks(self) -> list[dict]:
+        """Return task nodes directly instead of relying on the explorer overview."""
+        if not self.driver and not self.verify_connection():
+            return []
+
+        query = """
+        MATCH (t:Task)
+        RETURN t.id AS id, t.name AS name, t.status AS status,
+               t.priority AS priority, t.due_date AS due_date
+        ORDER BY coalesce(t.updated_at, t.created_at, t.name) DESC
+        """
+
+        tasks = []
+        with self.driver.session() as session:
+            for record in session.run(query):
+                tasks.append({
+                    "id": record["id"],
+                    "name": record["name"],
+                    "status": record["status"],
+                    "priority": record["priority"],
+                    "due_date": record["due_date"],
+                    "label": "Task",
+                })
+        return tasks
 
     def get_node_detail(self, node_id: str) -> dict:
         """Returns details for a specific node and its immediate connections."""

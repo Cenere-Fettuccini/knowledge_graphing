@@ -6,7 +6,7 @@ from src.memory.manager import memory_manager
 
 
 def get_graph_overview() -> dict:
-    return memory_manager.neo4j.get_graph_overview(limit=100)
+    return memory_manager.neo4j.get_explorer_graph_overview(limit=100)
 
 
 def get_node_detail(node_id: str) -> dict:
@@ -18,8 +18,7 @@ def get_node_provenance(node_id: str) -> dict:
 
 
 def get_active_tasks() -> list[dict]:
-    overview = memory_manager.neo4j.get_graph_overview(limit=100)
-    return [n for n in overview["nodes"] if n["label"] == "Task"]
+    return memory_manager.neo4j.list_active_tasks()
 
 
 def get_belief_trail(belief_id: str) -> dict:

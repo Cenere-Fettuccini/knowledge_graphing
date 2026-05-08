@@ -670,6 +670,7 @@
 
             placeNodes(graphData.nodes, graphData.edges);
             buildTaxonomy(graphData.nodes, graphData.edges);
+            draw();
 
             if (data.stats) {
                 const el = document.getElementById('topStats');
@@ -694,6 +695,11 @@
         };
 
         await reload();
+
+        const activeSection = window.AIManagerShell?.getCurrentSectionId?.();
+        if (activeSection === 'explorer') {
+            window.GraphManager.activate();
+        }
 
         // ── Mouse / touch events ────────────────────────────────────────────────
         wrap.addEventListener('mousedown', e => {
