@@ -11,7 +11,8 @@ def get_financial_manager_app() -> AppDefinition:
         name="Financial Manager",
         description="A separate app surface for money workflows, analysis, and future finance-safe tools.",
         route_prefix="/apps/financial-manager",
-        static_dir=Path(__file__).resolve().parent / "static",
+        section_role="domain",
+        static_dir=Path(__file__).resolve().parents[2] / "frontend" / "shell",
         icon="Finance",
         status="active",
     )

@@ -11,7 +11,8 @@ def get_routine_scheduler_app() -> AppDefinition:
         name="Routine Scheduler",
         description="A separate scheduling app for routines, recurring structure, and calendar-driven automation.",
         route_prefix="/apps/routine-scheduler",
-        static_dir=Path(__file__).resolve().parent / "static",
+        section_role="domain",
+        static_dir=Path(__file__).resolve().parents[2] / "frontend" / "shell",
         icon="Routine",
         status="active",
     )

@@ -22,6 +22,7 @@ def build_shell_router(registry: AppRegistry) -> APIRouter:
                 "description": app_def.description,
                 "route_prefix": app_def.route_prefix,
                 "api_prefix": app_def.api_prefix,
+                "section_role": app_def.section_role,
                 "status": app_def.status,
             }
             for app_def in registry.list_apps()

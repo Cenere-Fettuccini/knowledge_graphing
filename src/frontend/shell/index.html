@@ -207,7 +207,7 @@
 
                     <section class="module ex-tasks placeholder-module">
                         <h3>Active Tasks</h3>
-                        <div class="placeholder-content"
+                        <div class="placeholder-content" id="activeTasks"
                             style="border: 1px dashed var(--border-focus); border-radius: var(--radius-sm); margin-top: 10px; cursor: pointer; padding: 10px;">
                             <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                 stroke-width="1">
@@ -341,6 +341,7 @@
                                 This app will become the dedicated surface for account snapshots,
                                 spending analysis, planning, and finance-scoped agent workflows.
                             </p>
+                            <button class="btn btn-ghost" id="financialOpenChatBtn" type="button">Open Finance Context in Chat</button>
                         </div>
                         <div class="inner-section" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
                             <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(126, 145, 190, 0.08);">
@@ -369,6 +370,7 @@
                                 This app is reserved for routines, recurring plans, time blocks,
                                 and calendar-driven automation flows.
                             </p>
+                            <button class="btn btn-ghost" id="routineOpenChatBtn" type="button">Open Routine Context in Chat</button>
                         </div>
                         <div class="inner-section" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
                             <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(196, 155, 118, 0.08);">
@@ -526,7 +528,11 @@
      5. panel.js      — Explorer detail panel + status manager
      6. graph.js      — Explorer 3D graph canvas
      ═══════════════════════════════════════════════════════════════ -->
-    <script src="/shell-assets/api.js"></script>
+    <script src="/shell-assets/http.js"></script>
+    <script src="/shell-assets/explorer-client.js"></script>
+    <script src="/shell-assets/chat-client.js"></script>
+    <script src="/shell-assets/credits-client.js"></script>
+    <script src="/shell-assets/color-manager.js"></script>
     <script src="/shell-assets/app.js"></script>
     <script src="/shell-assets/explorer-page.js"></script>
     <script src="/shell-assets/financial-page.js"></script>

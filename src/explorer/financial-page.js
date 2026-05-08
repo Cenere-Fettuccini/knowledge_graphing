@@ -1,17 +1,44 @@
 (function () {
+    const state = {
+        searchQuery: '',
+        initialized: false,
+    };
+
+    function buildFinanceContext() {
+        return {
+            source_section: 'financial',
+            context_type: 'finance_overview',
+            context_id: 'financial-manager',
+            context_summary: 'Financial Manager overview',
+            context_payload: {
+                scope: 'accounts, spending, planning',
+            },
+        };
+    }
+
     PageRouter.register({
         id: 'financial',
         label: 'Financial',
-        init() {
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.placeholder = 'Search accounts, budgets, or spending plans...';
-                searchInput.value = '';
+        role: 'domain',
+        paths: ['/financial', '/apps/financial-manager'],
+        mount(root, shellContext) {
+            if (!state.initialized) {
+                root.querySelector('#financialOpenChatBtn')?.addEventListener('click', () => {
+                    void shellContext.navigateToSection('chat', {
+                        type: 'chat:open-context',
+                        payload: buildFinanceContext(),
+                    });
+                });
+                state.initialized = true;
             }
 
-            const topStats = document.getElementById('topStats');
-            if (topStats) topStats.style.display = 'none';
+            shellContext.setSearchPlaceholder('Search accounts, budgets, or spending plans...');
+            shellContext.setSearchValue(state.searchQuery);
+            shellContext.setTopStats('', false);
         },
-        destroy() { }
+        unmount() { },
+        onSearch(query) {
+            state.searchQuery = query;
+        },
     });
 })();

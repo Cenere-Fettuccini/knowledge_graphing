@@ -10,9 +10,10 @@ def get_chat_app() -> AppDefinition:
     return AppDefinition(
         id="chat",
         name="Chat",
-        description="A dedicated conversational surface that will consume the shared agent platform.",
+        description="A dedicated conversational surface that consumes platform context across sections.",
         route_prefix="/apps/chat",
-        static_dir=Path(__file__).resolve().parent / "static",
+        section_role="cross_cutting",
+        static_dir=Path(__file__).resolve().parents[2] / "frontend" / "shell",
         api_prefix="/api/chat-app",
         api_router=chat_api_router,
         icon="Chat",

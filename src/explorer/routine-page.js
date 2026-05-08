@@ -1,17 +1,44 @@
 (function () {
+    const state = {
+        searchQuery: '',
+        initialized: false,
+    };
+
+    function buildRoutineContext() {
+        return {
+            source_section: 'routine',
+            context_type: 'routine_overview',
+            context_id: 'routine-scheduler',
+            context_summary: 'Routine Scheduler overview',
+            context_payload: {
+                scope: 'routines, timeblocks, recurring plans',
+            },
+        };
+    }
+
     PageRouter.register({
         id: 'routine',
         label: 'Routine',
-        init() {
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.placeholder = 'Search routines, blocks, or recurring plans...';
-                searchInput.value = '';
+        role: 'domain',
+        paths: ['/routine', '/apps/routine-scheduler'],
+        mount(root, shellContext) {
+            if (!state.initialized) {
+                root.querySelector('#routineOpenChatBtn')?.addEventListener('click', () => {
+                    void shellContext.navigateToSection('chat', {
+                        type: 'chat:open-context',
+                        payload: buildRoutineContext(),
+                    });
+                });
+                state.initialized = true;
             }
 
-            const topStats = document.getElementById('topStats');
-            if (topStats) topStats.style.display = 'none';
+            shellContext.setSearchPlaceholder('Search routines, blocks, or recurring plans...');
+            shellContext.setSearchValue(state.searchQuery);
+            shellContext.setTopStats('', false);
         },
-        destroy() { }
+        unmount() { },
+        onSearch(query) {
+            state.searchQuery = query;
+        },
     });
 })();

@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import router as legacy_api_router
 from src.apps.chat.app import get_chat_app
+from src.apps.credits.app import get_credits_app
 from src.apps.explorer.app import get_explorer_app
 from src.apps.financial_manager.app import get_financial_manager_app
 from src.apps.routine_scheduler.app import get_routine_scheduler_app
@@ -21,6 +22,7 @@ def build_registry() -> AppRegistry:
     for app_factory in (
         get_explorer_app,
         get_chat_app,
+        get_credits_app,
         get_financial_manager_app,
         get_routine_scheduler_app,
     ):

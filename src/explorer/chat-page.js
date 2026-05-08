@@ -1,5 +1,5 @@
 (function () {
-    const ANCHOR_STORAGE_KEY = 'aimanager_chat_anchor';
+    const CHAT_CONTEXT_STORAGE_KEY = 'aimanager_chat_context';
 
     const state = {
         initialized: false,
@@ -8,17 +8,21 @@
         activeSessionTitle: '',
         messages: [],
         searchQuery: '',
-        anchor: null,
+        chatContext: null,
         sending: false,
         pendingDeleteSessionId: null,
         deletingSessionId: null,
     };
 
+    function chatClient() {
+        return window.AIManagerShell?.clients?.chat || window.AIManagerClients?.chat;
+    }
+
     function fmtDate(iso) {
         if (!iso) return 'No timestamp';
         try {
-            const d = new Date(iso);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' · ' + d.toLocaleDateString();
+            const date = new Date(iso);
+            return `${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${date.toLocaleDateString()}`;
         } catch (_) {
             return iso;
         }
@@ -42,7 +46,7 @@
     }
 
     function getPendingDeleteSession() {
-        return state.sessions.find(session => session.session_id === state.pendingDeleteSessionId) || null;
+        return state.sessions.find((session) => session.session_id === state.pendingDeleteSessionId) || null;
     }
 
     function syncDeleteModal() {
@@ -86,7 +90,7 @@
         syncDeleteModal();
         setStatus('Deleting session...');
 
-        const result = await API.deleteChatSession(sessionId);
+        const result = await chatClient().deleteSession(sessionId);
         if (result.ok) {
             if (state.activeSessionId === sessionId) {
                 state.activeSessionId = null;
@@ -104,36 +108,36 @@
         }
     }
 
-    function persistAnchor(anchor) {
-        if (!anchor) {
-            sessionStorage.removeItem(ANCHOR_STORAGE_KEY);
+    function persistContext(context) {
+        if (!context) {
+            sessionStorage.removeItem(CHAT_CONTEXT_STORAGE_KEY);
             return;
         }
-        sessionStorage.setItem(ANCHOR_STORAGE_KEY, JSON.stringify(anchor));
+        sessionStorage.setItem(CHAT_CONTEXT_STORAGE_KEY, JSON.stringify(context));
     }
 
-    function loadPersistedAnchor() {
+    function loadPersistedContext() {
         try {
-            const raw = sessionStorage.getItem(ANCHOR_STORAGE_KEY);
+            const raw = sessionStorage.getItem(CHAT_CONTEXT_STORAGE_KEY);
             return raw ? JSON.parse(raw) : null;
         } catch (_) {
             return null;
         }
     }
 
-    function renderAnchor() {
+    function renderContext() {
         const box = document.getElementById('chatAnchorBox');
         const title = document.getElementById('chatAnchorTitle');
         const subtitle = document.getElementById('chatAnchorSubtitle');
         if (!box || !title || !subtitle) return;
 
-        if (!state.anchor) {
+        if (!state.chatContext) {
             box.hidden = true;
             return;
         }
 
-        title.textContent = state.anchor.name || state.anchor.id;
-        subtitle.textContent = `${state.anchor.label || 'Node'}${state.anchor.id ? ` · ${state.anchor.id}` : ''}`;
+        title.textContent = state.chatContext.context_summary || state.chatContext.context_id;
+        subtitle.textContent = `${state.chatContext.context_type || 'Context'}${state.chatContext.context_id ? ` · ${state.chatContext.context_id}` : ''}`;
         box.hidden = false;
     }
 
@@ -142,7 +146,7 @@
         const count = document.getElementById('chatSessionCount');
         if (!list) return;
 
-        const filtered = state.sessions.filter(session => {
+        const filtered = state.sessions.filter((session) => {
             if (!state.searchQuery) return true;
             const haystack = `${session.session_id} ${session.preview || ''}`.toLowerCase();
             return haystack.includes(state.searchQuery.toLowerCase());
@@ -157,7 +161,7 @@
             return;
         }
 
-        list.innerHTML = filtered.map(session => `
+        list.innerHTML = filtered.map((session) => `
             <div class="chat-session-item ${session.session_id === state.activeSessionId ? 'active' : ''}" data-session-id="${session.session_id}">
                 <button class="chat-session-item__delete" title="Delete Session">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" stroke-linecap="round" stroke-linejoin="round">
@@ -174,43 +178,31 @@
             </div>
         `).join('');
 
-        list.querySelectorAll('.chat-session-item').forEach(item => {
+        list.querySelectorAll('.chat-session-item').forEach((item) => {
             const sessionId = item.getAttribute('data-session-id');
             item.addEventListener('click', () => {
-                if (sessionId) {
-                    void selectSession(sessionId);
-                }
+                if (sessionId) void selectSession(sessionId);
             });
 
             const deleteBtn = item.querySelector('.chat-session-item__delete');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    openDeleteModal(sessionId);
-                });
-            }
+            deleteBtn?.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openDeleteModal(sessionId);
+            });
         });
     }
 
     function parseMarkdown(text) {
         if (!text) return '';
-        // Escape HTML
         let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        
-        // Code blocks
         html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-        // Inline code
         html = html.replace(/`(.*?)`/g, '<code>$1</code>');
-        // Bold
         html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        // Italic
         html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
-        // Newlines to <br> outside of pre blocks
-        // A simple approach: split by <pre>, replace newlines in non-pre, then rejoin
         const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
-        for (let i = 0; i < parts.length; i++) {
-            if (!parts[i].startsWith('<pre>')) {
-                parts[i] = parts[i].replace(/\n/g, '<br/>');
+        for (let index = 0; index < parts.length; index += 1) {
+            if (!parts[index].startsWith('<pre>')) {
+                parts[index] = parts[index].replace(/\n/g, '<br/>');
             }
         }
         return parts.join('');
@@ -226,15 +218,15 @@
         if (!state.messages.length && !state.sending) {
             thread.innerHTML = `
                 <div class="chat-empty-state">
-                    ${state.anchor
-                    ? 'This chat is anchored to a graph node.<br>Ask the assistant to analyze or elaborate from here.'
-                    : 'Start a chat, or jump here from a graph node to talk from that point.'}
+                    ${state.chatContext
+                        ? 'This chat is anchored to platform context.<br>Ask the assistant to analyze or elaborate from here.'
+                        : 'Start a chat, or jump here from a graph node to talk from that point.'}
                 </div>
             `;
             return;
         }
 
-        let html = state.messages.map(message => `
+        let html = state.messages.map((message) => `
             <div class="chat-message ${message.role}">
                 <div class="chat-message__meta">${message.role === 'user' ? 'You' : 'AIManager'} · ${fmtDate(message.timestamp)}</div>
                 <div class="chat-message__bubble">${parseMarkdown(message.text)}</div>
@@ -258,11 +250,10 @@
 
     function scrollToBottom() {
         const thread = document.getElementById('chatThread');
-        if (thread) {
-            setTimeout(() => {
-                thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
-            }, 50);
-        }
+        if (!thread) return;
+        setTimeout(() => {
+            thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
+        }, 50);
     }
 
     function appendMessage(role, text, timestamp = new Date().toISOString()) {
@@ -271,7 +262,7 @@
     }
 
     async function refreshSessions() {
-        const payload = await API.getChatSessions();
+        const payload = await chatClient().getSessions();
         state.sessions = payload.sessions || [];
         renderSessions();
     }
@@ -282,9 +273,9 @@
         renderSessions();
         setStatus('Loading conversation...');
 
-        const payload = await API.getChatSession(sessionId);
+        const payload = await chatClient().getSession(sessionId);
         state.messages = payload.messages || [];
-        const sessionMeta = state.sessions.find(s => s.session_id === sessionId);
+        const sessionMeta = state.sessions.find((session) => session.session_id === sessionId);
         state.activeSessionTitle = sessionMeta ? sessionTitle(sessionMeta) : sessionId;
         renderMessages();
         renderSessions();
@@ -293,7 +284,7 @@
 
     async function ensureSession() {
         if (state.activeSessionId) return state.activeSessionId;
-        const payload = await API.createChatSession('web');
+        const payload = await chatClient().createSession('web');
         state.activeSessionId = payload.session_id;
         state.activeSessionTitle = 'New conversation';
         state.messages = [];
@@ -321,34 +312,27 @@
             autoResize(input);
         }
 
-        setStatus(state.anchor
-            ? `Thinking from anchor: ${state.anchor.name || state.anchor.id}...`
-            : 'Thinking...'
+        setStatus(
+            state.chatContext
+                ? `Thinking from context: ${state.chatContext.context_summary || state.chatContext.context_id}...`
+                : 'Thinking...'
         );
-
-        // Force a re-render to show typing indicator
         renderMessages();
 
-        const result = await API.sendChatMessage(
-            sessionId,
-            raw,
-            state.anchor ? state.anchor.id : null
-        );
-
+        const result = await chatClient().sendMessage(sessionId, raw, state.chatContext);
         state.sending = false;
 
         if (result.ok) {
             appendMessage('assistant', result.reply, result.timestamp);
-            if (result.anchor) {
-                state.anchor = result.anchor;
-                persistAnchor(state.anchor);
-                renderAnchor();
+            if (result.context) {
+                state.chatContext = result.context;
+                persistContext(state.chatContext);
+                renderContext();
             }
             setStatus('Replied successfully');
             await refreshSessions();
-            renderSessions();
         } else {
-            appendMessage('assistant', `⚠️ **Error:** ${result.error || 'Unknown network error occurred.'}`);
+            appendMessage('assistant', `**Error:** ${result.error || 'Unknown network error occurred.'}`);
             setStatus('Request failed');
         }
 
@@ -356,7 +340,7 @@
     }
 
     async function startNewSession() {
-        const payload = await API.createChatSession('web');
+        const payload = await chatClient().createSession('web');
         state.activeSessionId = payload.session_id;
         state.activeSessionTitle = 'New conversation';
         state.messages = [];
@@ -365,18 +349,16 @@
         setStatus('New session created');
     }
 
-    async function adoptPendingAnchor() {
-        const pending = loadPersistedAnchor();
+    async function adoptPendingContext() {
+        const pending = loadPersistedContext();
         if (!pending) return;
 
-        state.anchor = pending;
-        renderAnchor();
-
+        state.chatContext = pending;
+        renderContext();
         if (!state.activeSessionId) {
             await startNewSession();
         }
-
-        setStatus(`Anchored to ${pending.name || pending.id}`);
+        setStatus(`Anchored to ${pending.context_summary || pending.context_id}`);
     }
 
     function bindEvents() {
@@ -385,81 +367,57 @@
             void startNewSession();
         });
         document.getElementById('chatClearAnchorBtn')?.addEventListener('click', () => {
-            state.anchor = null;
-            persistAnchor(null);
-            renderAnchor();
-            setStatus('Graph anchor cleared');
+            state.chatContext = null;
+            persistContext(null);
+            renderContext();
+            setStatus('Platform context cleared');
         });
         document.getElementById('chatDeleteCancelBtn')?.addEventListener('click', closeDeleteModal);
         document.getElementById('chatDeleteConfirmBtn')?.addEventListener('click', () => {
             void confirmDeleteSession();
         });
-        document.getElementById('chatDeleteModal')?.addEventListener('click', event => {
+        document.getElementById('chatDeleteModal')?.addEventListener('click', (event) => {
             if (event.target?.id === 'chatDeleteModal' && !state.deletingSessionId) {
                 closeDeleteModal();
             }
         });
-        document.addEventListener('keydown', event => {
+        document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && state.pendingDeleteSessionId && !state.deletingSessionId) {
                 closeDeleteModal();
             }
         });
 
         const input = document.getElementById('chatMessageInput');
-        if (input) {
-            input.addEventListener('input', () => autoResize(input));
-            input.addEventListener('keydown', event => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    // Avoid duplicate submission if already sending
-                    if (!state.sending) {
-                        const evt = new Event('submit', { cancelable: true });
-                        document.getElementById('chatComposer')?.dispatchEvent(evt);
-                    }
+        if (!input) return;
+        input.addEventListener('input', () => autoResize(input));
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                if (!state.sending) {
+                    document.getElementById('chatComposer')?.dispatchEvent(new Event('submit', { cancelable: true }));
                 }
-            });
-        }
+            }
+        });
     }
-
-    window.ChatPage = {
-        openFromGraph(node) {
-            state.anchor = {
-                id: node.id,
-                name: node.name,
-                label: node.label,
-            };
-            persistAnchor(state.anchor);
-            renderAnchor();
-            PageRouter.navigateTo('chat');
-        }
-    };
 
     PageRouter.register({
         id: 'chat',
         label: 'Chat',
-        async init() {
+        role: 'cross_cutting',
+        paths: ['/chat', '/apps/chat'],
+        async mount(_root, shellContext) {
             if (!state.initialized) {
                 bindEvents();
                 state.initialized = true;
             }
 
-            const topStats = document.getElementById('topStats');
-            if (topStats) topStats.style.display = 'none';
+            shellContext.setTopStats('', false);
+            shellContext.setSearchPlaceholder('Search conversation sessions...');
+            shellContext.setSearchValue(state.searchQuery);
 
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.placeholder = 'Search conversation sessions...';
-                searchInput.value = state.searchQuery;
-                searchInput.oninput = event => {
-                    if (PageRouter.getActive() !== 'chat') return;
-                    state.searchQuery = event.target.value;
-                    renderSessions();
-                };
-            }
-
-            renderAnchor();
+            renderContext();
             await refreshSessions();
-            await adoptPendingAnchor();
+            await adoptPendingContext();
 
             if (!state.activeSessionId && state.sessions.length) {
                 await selectSession(state.sessions[0].session_id);
@@ -469,6 +427,17 @@
                 renderMessages();
             }
         },
-        destroy() { }
+        unmount() { },
+        onSearch(query) {
+            state.searchQuery = query;
+            renderSessions();
+        },
+        onContext(event) {
+            if (event.type !== 'chat:open-context') return;
+            state.chatContext = event.payload;
+            persistContext(state.chatContext);
+            renderContext();
+            setStatus(`Anchored to ${state.chatContext.context_summary || state.chatContext.context_id}`);
+        },
     });
 })();

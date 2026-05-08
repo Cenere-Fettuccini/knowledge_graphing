@@ -13,6 +13,7 @@ class AppDefinition:
     name: str
     description: str
     route_prefix: str
+    section_role: str
     static_dir: Path | None = None
     api_prefix: str | None = None
     api_router: object | None = None

@@ -9,6 +9,79 @@ from src.agent_platform.public.contracts import AgentRunRequest
 from src.memory.manager import memory_manager
 
 
+def build_graph_context(anchor_node_id: str) -> dict | None:
+    detail = memory_manager.neo4j.get_node_detail(anchor_node_id)
+    node = detail.get("node") if detail else None
+    if not node:
+        return None
+
+    connections = detail.get("connections", [])[:8]
+    relation_summary = ", ".join(
+        f"{c['type']} -> {c['target']}" for c in connections
+    ) or "No direct connections listed."
+    return {
+        "source_section": "explorer",
+        "context_type": "graph_node",
+        "context_id": node.get("id"),
+        "context_summary": f"{node.get('name')} ({node.get('label')})",
+        "context_payload": {
+            "node": {
+                "id": node.get("id"),
+                "label": node.get("label"),
+                "name": node.get("name"),
+            },
+            "details": node,
+            "connections": detail.get("connections", []),
+            "relation_summary": relation_summary,
+        },
+    }
+
+
+def normalize_chat_context(
+    context: dict | None,
+    anchor_node_id: str | None = None,
+) -> dict | None:
+    if context and context.get("context_type") and context.get("context_id"):
+        return {
+            "source_section": context.get("source_section") or "chat",
+            "context_type": context["context_type"],
+            "context_id": context["context_id"],
+            "context_summary": context.get("context_summary") or context["context_id"],
+            "context_payload": context.get("context_payload") or {},
+        }
+    if anchor_node_id:
+        return build_graph_context(anchor_node_id)
+    return None
+
+
+def build_effective_prompt(text: str, context: dict | None) -> str:
+    if not context:
+        return text
+
+    payload = context.get("context_payload") or {}
+    source_section = context.get("source_section", "unknown")
+    context_type = context.get("context_type", "context")
+    context_id = context.get("context_id", "unknown")
+    context_summary = context.get("context_summary", context_id)
+
+    lines = [
+        "Use this platform context as the current conversation anchor.",
+        f"Source section: {source_section}",
+        f"Context type: {context_type}",
+        f"Context id: {context_id}",
+        f"Context summary: {context_summary}",
+    ]
+
+    if payload:
+        lines.append(f"Context payload: {payload}")
+        relation_summary = payload.get("relation_summary")
+        if relation_summary:
+            lines.append(f"Context relationships: {relation_summary}")
+
+    lines.extend(["", f"User request: {text}"])
+    return "\n".join(lines)
+
+
 def build_session_preview(memories: list[dict]) -> str:
     for memory in memories:
         if memory.get("metadata", {}).get("role") == "user" and memory.get("text"):
@@ -98,31 +171,11 @@ async def send_chat_message(
     user_id: str,
     session_id: str,
     text: str,
+    context: dict | None = None,
     anchor_node_id: str | None = None,
 ) -> dict:
-    effective_text = text
-    anchor = None
-
-    if anchor_node_id:
-        detail = memory_manager.neo4j.get_node_detail(anchor_node_id)
-        node = detail.get("node") if detail else None
-        if node:
-            connections = detail.get("connections", [])[:8]
-            relation_summary = ", ".join(
-                f"{c['type']} -> {c['target']}" for c in connections
-            ) or "No direct connections listed."
-            anchor = {
-                "id": node.get("id"),
-                "label": node.get("label"),
-                "name": node.get("name"),
-            }
-            effective_text = (
-                "Use this graph node as the anchor for the conversation.\n"
-                f"Node: {node.get('name')} ({node.get('label')})\n"
-                f"Details: {node}\n"
-                f"Connections: {relation_summary}\n\n"
-                f"User request: {text}"
-            )
+    normalized_context = normalize_chat_context(context, anchor_node_id)
+    effective_text = build_effective_prompt(text, normalized_context)
 
     result = await agent_service.arun(
         AgentRunRequest(
@@ -132,13 +185,13 @@ async def send_chat_message(
             message=text,
             prompt_text=effective_text,
             store_text=text,
-            context={"anchor": anchor} if anchor else {},
+            context={"chat_context": normalized_context} if normalized_context else {},
         )
     )
     return {
         "ok": True,
         "session_id": session_id,
         "reply": result.reply,
-        "anchor": anchor,
+        "context": normalized_context,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

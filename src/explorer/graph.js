@@ -1,11 +1,10 @@
 // graph.js — 3D Zen Mesh Network
-// Drop-in replacement for the D3 force-simulation graph.js
-// Requires: ColorManager (graph.js loads after api.js which defines it)
-// Contracts: API.getOverview() → { nodes, edges, stats }
-//            Panel.loadNode(id) — called on node click
-//            window.ColorManager.getColor(label) → hex color
+// Requires: section-owned explorer client, ColorManager, and Panel
 
 (function () {
+    function getExplorerClient() {
+        return window.AIManagerShell?.clients?.explorer || window.AIManagerClients?.explorer;
+    }
 
     // ── State ──────────────────────────────────────────────────────────────────
 
@@ -481,6 +480,7 @@
     // ── Animation loop ────────────────────────────────────────────────────────
 
     let raf, lastTs = 0;
+    let hasStartedTick = false;
     function tick(ts) {
         raf = requestAnimationFrame(tick);
         if (ts - lastTs < 14) return;   // ~70fps cap
@@ -657,7 +657,7 @@
         // ── Data Loading ────────────────────────────────────────────────────────
         async function reload() {
             let data = { nodes: [], edges: [], stats: null };
-            try { data = await API.getOverview(); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
+            try { data = await getExplorerClient().getOverview(); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
 
             graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
             const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
@@ -678,7 +678,20 @@
                 if (el) el.textContent = `${n} Nodes · ${e} Connections`;
             }
         }
-        window.GraphManager = { focusNode, reload };
+        window.GraphManager = {
+            focusNode,
+            reload,
+            setSearchQuery(query) {
+                searchQuery = query || '';
+            },
+            activate() {
+                if (!hasStartedTick) {
+                    hasStartedTick = true;
+                    requestAnimationFrame(tick);
+                }
+            },
+            deactivate() { },
+        };
 
         await reload();
 
@@ -762,19 +775,8 @@
         }, { passive: true });
         window.addEventListener('touchend', () => { dragging = false; });
 
-        // Search
-        document.getElementById('searchInput')?.addEventListener('input', e => {
-            if (PageRouter.getActive() === 'explorer') {
-                searchQuery = e.target.value;
-                window.explorerSearchQuery = searchQuery;
-            }
-        });
-
         // Graph controls
         bindGraphControls();
-
-        // Start render loop
-        requestAnimationFrame(tick);
     }
 
     function focusNode(nodeId) {
@@ -810,8 +812,6 @@
             isAnimating = true;
         }
     }
-
-
     document.addEventListener('DOMContentLoaded', initGraph);
 
 })();
