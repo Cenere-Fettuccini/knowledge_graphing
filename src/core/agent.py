@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict
 
+import httpx
 from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai import RunContext
 from pydantic_ai.models.google import GoogleModel
@@ -124,14 +125,7 @@ class Agent(BaseAgent):
     def _status_impl_sync(self, info: dict) -> dict:
         try:
             spec = self.router.get_best_model("QA")
-            deps = AgentRunDeps(
-                query="ping",
-                session_id="health-check",
-                task_type="QA",
-                context_manager=self.context_manager,
-            )
-            reply, _tokens = self._run_with_spec_sync(spec, "ping", deps)
-            if reply.strip().lower():
+            if self._probe_provider_sync(spec):
                 info["llm"] = "online"
         except Exception as e:
             info["llm"] = f"error ({type(e).__name__})"
@@ -142,20 +136,69 @@ class Agent(BaseAgent):
     async def _status_impl_async(self, info: dict) -> dict:
         try:
             spec = self.router.get_best_model("QA")
-            deps = AgentRunDeps(
-                query="ping",
-                session_id="health-check",
-                task_type="QA",
-                context_manager=self.context_manager,
-            )
-            reply, _tokens = await self._run_with_spec_async(spec, "ping", deps)
-            if reply.strip().lower():
+            if await self._probe_provider_async(spec):
                 info["llm"] = "online"
         except Exception as e:
             info["llm"] = f"error ({type(e).__name__})"
             info["status"] = "degraded"
 
         return self._finalize_health_info(info)
+
+    def _probe_provider_sync(self, spec: ModelSpec) -> bool:
+        if spec.provider == "google":
+            self._probe_google_model_sync(spec)
+            return True
+        if spec.provider == "local":
+            self._probe_openai_compatible_sync()
+            return True
+        raise RuntimeError(f"unsupported provider for health probe: {spec.provider}")
+
+    async def _probe_provider_async(self, spec: ModelSpec) -> bool:
+        if spec.provider == "google":
+            await self._probe_google_model_async(spec)
+            return True
+        if spec.provider == "local":
+            await self._probe_openai_compatible_async()
+            return True
+        raise RuntimeError(f"unsupported provider for health probe: {spec.provider}")
+
+    def _probe_google_model_sync(self, spec: ModelSpec) -> None:
+        if not spec.api_key:
+            raise RuntimeError("missing Google API key")
+
+        response = httpx.get(
+            f"https://generativelanguage.googleapis.com/v1beta/{spec.model_id}",
+            params={"key": spec.api_key},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+
+    async def _probe_google_model_async(self, spec: ModelSpec) -> None:
+        if not spec.api_key:
+            raise RuntimeError("missing Google API key")
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"https://generativelanguage.googleapis.com/v1beta/{spec.model_id}",
+                params={"key": spec.api_key},
+            )
+            response.raise_for_status()
+
+    def _probe_openai_compatible_sync(self) -> None:
+        response = httpx.get(
+            f"{settings.lm_studio_base_url.rstrip('/')}/models",
+            headers={"Authorization": "Bearer not-needed"},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+
+    async def _probe_openai_compatible_async(self) -> None:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.lm_studio_base_url.rstrip('/')}/models",
+                headers={"Authorization": "Bearer not-needed"},
+            )
+            response.raise_for_status()
 
     def process_message(
         self,

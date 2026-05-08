@@ -29,22 +29,26 @@ class FakeMemory:
 async def test_astatus_uses_async_probe(monkeypatch):
     agent = Agent(memory=FakeMemory())
     spec = SimpleNamespace(model_id="fake-model", project_scope="test")
+    probe_calls: list[object] = []
 
     monkeypatch.setattr(agent.router, "get_best_model", lambda _task_type: spec)
 
     def fail_sync_probe(*_args, **_kwargs):
         raise AssertionError("sync probe should not run in async status")
 
-    async def fake_async_probe(*_args, **_kwargs):
-        return "pong", 1
+    async def fake_provider_probe(actual_spec):
+        probe_calls.append(actual_spec)
+        return True
 
     monkeypatch.setattr(agent, "_run_with_spec_sync", fail_sync_probe)
-    monkeypatch.setattr(agent, "_run_with_spec_async", fake_async_probe)
+    monkeypatch.setattr(agent, "_run_with_spec_async", fail_sync_probe)
+    monkeypatch.setattr(agent, "_probe_provider_async", fake_provider_probe)
 
     health = await agent.astatus(force=True)
 
     assert health["status"] == "online"
     assert health["llm"] == "online"
+    assert probe_calls == [spec]
 
 
 @pytest.mark.asyncio

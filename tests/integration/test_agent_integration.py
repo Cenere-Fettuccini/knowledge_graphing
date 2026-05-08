@@ -25,6 +25,7 @@ def _fake_run(self, _spec, user_prompt, deps):
 def agent(monkeypatch):
     """Agent backed by an isolated in-memory ChromaDB and fake LLM."""
     monkeypatch.setattr(Agent, "_run_with_spec_sync", _fake_run)
+    monkeypatch.setattr(Agent, "_probe_provider_sync", lambda self, _spec: True)
     mem = MemoryManager(persist_path=":memory:")
     return Agent(memory=mem)
 
