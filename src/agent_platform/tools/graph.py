@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 
 def search_knowledge_graph(query: str):
@@ -23,7 +23,7 @@ def search_knowledge_graph(query: str):
         LIMIT 10
         """
         results = []
-        with memory_manager.neo4j.driver.session() as session:
+        with get_memory_manager().neo4j.driver.session() as session:
             records = session.run(cypher, query=query)
             for record in records:
                 results.append({
@@ -44,7 +44,7 @@ def store_knowledge(entity_name: str, entity_label: str, fact: str):
     """
     logger.info("Tool Call: store_knowledge -> %s is a %s", entity_name, entity_label)
     try:
-        node_id = memory_manager.neo4j.add_node(
+        node_id = get_memory_manager().neo4j.add_node(
             entity_label,
             entity_name,
             {"description": fact},

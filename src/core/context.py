@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any
 from src.core.config import settings
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +12,7 @@ class ContextManager:
     """
 
     def __init__(self, memory=None):
-        self.memory = memory or memory_manager
+        self.memory = memory or get_memory_manager()
 
     def assemble_context(self, query: str, session_id: str, task_type: str) -> Dict[str, Any]:
         """
@@ -92,4 +92,3 @@ class ContextManager:
         
         return results
 
-context_manager = ContextManager()

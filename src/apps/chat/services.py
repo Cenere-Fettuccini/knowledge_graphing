@@ -4,13 +4,13 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from src.agent_platform.public.agent_service import agent_service
+from src.agent_platform.public.agent_service import AgentService
 from src.agent_platform.public.contracts import AgentRunRequest
-from src.memory.manager import memory_manager
+from src.memory.manager import MemoryManager
 
 
-def build_graph_context(anchor_node_id: str) -> dict | None:
-    detail = memory_manager.graph_node_detail(anchor_node_id)
+def build_graph_context(anchor_node_id: str, memory: MemoryManager) -> dict | None:
+    detail = memory.graph_node_detail(anchor_node_id)
     node = detail.get("node") if detail else None
     if not node:
         return None
@@ -39,6 +39,7 @@ def build_graph_context(anchor_node_id: str) -> dict | None:
 
 def normalize_chat_context(
     context: dict | None,
+    memory: MemoryManager,
     anchor_node_id: str | None = None,
 ) -> dict | None:
     if context and context.get("context_type") and context.get("context_id"):
@@ -50,7 +51,7 @@ def normalize_chat_context(
             "context_payload": context.get("context_payload") or {},
         }
     if anchor_node_id:
-        return build_graph_context(anchor_node_id)
+        return build_graph_context(anchor_node_id, memory)
     return None
 
 
@@ -99,8 +100,8 @@ def session_sort_key(item: dict) -> tuple[int, str]:
         return (0, ts)
 
 
-def list_chat_sessions() -> dict:
-    results = memory_manager.list_sessions(limit=500)
+def list_chat_sessions(memory: MemoryManager) -> dict:
+    results = memory.list_sessions(limit=500)
     docs = results["documents"]
     metas = results["metadatas"]
 
@@ -132,8 +133,8 @@ def list_chat_sessions() -> dict:
     return {"sessions": sessions}
 
 
-def get_chat_session(session_id: str) -> dict:
-    history = memory_manager.get_history(session_id, limit=100)
+def get_chat_session(session_id: str, memory: MemoryManager) -> dict:
+    history = memory.get_history(session_id, limit=100)
     ordered = list(reversed(history))
     return {
         "session_id": session_id,
@@ -154,8 +155,8 @@ def create_chat_session(label: str = "browser") -> dict:
     return {"session_id": session_id}
 
 
-def delete_chat_session(session_id: str) -> dict:
-    ok = memory_manager.delete_session(session_id)
+def delete_chat_session(session_id: str, memory: MemoryManager) -> dict:
+    ok = memory.delete_session(session_id)
     if ok:
         return {"ok": True, "session_id": session_id}
     return {"ok": False, "session_id": session_id, "error": "Failed to delete session"}
@@ -167,14 +168,16 @@ async def send_chat_message(
     user_id: str,
     session_id: str,
     text: str,
+    memory: MemoryManager,
+    service: AgentService,
     message_timestamp: str | None = None,
     context: dict | None = None,
     anchor_node_id: str | None = None,
 ) -> dict:
-    normalized_context = normalize_chat_context(context, anchor_node_id)
+    normalized_context = normalize_chat_context(context, memory, anchor_node_id)
     effective_text = build_effective_prompt(text, normalized_context)
 
-    result = await agent_service.arun(
+    result = await service.arun(
         AgentRunRequest(
             app_id=app_id,
             user_id=user_id,

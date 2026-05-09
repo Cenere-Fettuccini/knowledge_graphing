@@ -1,35 +1,35 @@
 from __future__ import annotations
 
-from src.agent_platform.public.agent_service import agent_service
-from src.memory.manager import memory_manager
+from src.agent_platform.public.agent_service import AgentService
+from src.memory.manager import MemoryManager
 
 
-def get_graph_overview() -> dict:
-    return memory_manager.graph_overview(limit=100)
+def get_graph_overview(memory: MemoryManager) -> dict:
+    return memory.graph_overview(limit=100)
 
 
-def get_node_detail(node_id: str) -> dict:
-    return memory_manager.graph_node_detail(node_id)
+def get_node_detail(node_id: str, memory: MemoryManager) -> dict:
+    return memory.graph_node_detail(node_id)
 
 
-def get_node_provenance(node_id: str) -> dict:
-    return memory_manager.graph_node_provenance(node_id)
+def get_node_provenance(node_id: str, memory: MemoryManager) -> dict:
+    return memory.graph_node_provenance(node_id)
 
 
-def get_active_tasks() -> list[dict]:
-    return memory_manager.graph_active_tasks()
+def get_active_tasks(memory: MemoryManager) -> list[dict]:
+    return memory.graph_active_tasks()
 
 
-def get_belief_trail(belief_id: str) -> dict:
-    return memory_manager.graph_belief_trail(belief_id)
+def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:
+    return memory.graph_belief_trail(belief_id)
 
 
-async def get_system_status() -> dict:
-    memory_manager.invalidate_health_cache()
-    health = memory_manager.status()
+async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:
+    memory.invalidate_health_cache()
+    health = memory.status()
 
-    quota = await agent_service.aquota_status()
-    agent_status = await agent_service.astatus(force=True)
+    quota = await service.aquota_status()
+    agent_status = await service.astatus(force=True)
     return {
         "status": health["status"],
         "neo4j": "online" if "online" in health["neo4j"] else "offline",

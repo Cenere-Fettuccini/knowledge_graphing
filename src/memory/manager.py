@@ -353,7 +353,12 @@ class MemoryManager:
         return {"chain": chain, "evidence": evidence}
 
 
-# ── Singleton instance ────────────────────────────────────────────────────────
-# This is used by the API and other non-Agent modules that need direct access
-# to the storage layer (like the Explorer).
-memory_manager = MemoryManager()
+_instance: MemoryManager | None = None
+
+
+def get_memory_manager() -> MemoryManager:
+    """Return the shared MemoryManager, creating it on first call."""
+    global _instance
+    if _instance is None:
+        _instance = MemoryManager()
+    return _instance

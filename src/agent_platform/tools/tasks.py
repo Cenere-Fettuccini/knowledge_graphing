@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 
 def create_task(title: str, due_date: str = None, priority: str = "medium"):
@@ -19,7 +19,7 @@ def create_task(title: str, due_date: str = None, priority: str = "medium"):
             "priority": priority,
             "created_at": datetime.now().isoformat(),
         }
-        node_id = memory_manager.neo4j.add_node("Task", title, properties)
+        node_id = get_memory_manager().neo4j.add_node("Task", title, properties)
         return f"Task created: '{title}' (ID: {node_id})"
     except Exception as e:
         return f"Error creating task: {str(e)}"
@@ -56,7 +56,7 @@ def list_tasks(status_filter: str = ""):
             params = {}
 
         results = []
-        with memory_manager.neo4j.driver.session() as session:
+        with get_memory_manager().neo4j.driver.session() as session:
             records = session.run(cypher, **params)
             for record in records:
                 results.append({
@@ -100,7 +100,7 @@ def update_task(task_title: str, new_status: str = "", notes: str = ""):
         LIMIT 1
         """
 
-        with memory_manager.neo4j.driver.session() as session:
+        with get_memory_manager().neo4j.driver.session() as session:
             result = session.run(cypher, **params)
             record = result.single()
             if record:

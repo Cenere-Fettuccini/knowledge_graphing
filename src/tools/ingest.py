@@ -3,7 +3,7 @@ from pathlib import Path
 
 from src.core.logging_config import setup_logging
 from src.ingestion.chunker import chunk_text
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ class KnowledgeIngestor:
     """Processes local files and injects them into the AIManager memory ecosystem."""
 
     def __init__(self):
-        self.memory = memory_manager
+        self.memory = get_memory_manager()
 
     def ingest_directory(self, path: str):
         """Load text and markdown files from a directory and store them as chunks."""
