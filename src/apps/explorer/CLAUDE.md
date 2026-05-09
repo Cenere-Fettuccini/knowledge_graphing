@@ -23,8 +23,11 @@ from src.memory.manager import get_memory_manager, MemoryManager
 **In `api.py` (routes):**
 ```python
 @router.get("/graph/overview")
-async def get_overview(memory: MemoryManager = Depends(get_memory_manager)):
-    return services.get_graph_overview(memory)
+async def get_overview(
+    limit: int = Query(100, ge=1, le=1000),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.get_graph_overview(memory, limit=limit)
 
 @router.get("/system/status")
 async def get_system_status(
@@ -36,7 +39,7 @@ async def get_system_status(
 
 **In `services.py` (business logic):**
 ```python
-def get_graph_overview(memory: MemoryManager) -> dict: ...
+def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict: ...
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict: ...
 ```
 

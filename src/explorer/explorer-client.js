@@ -3,9 +3,12 @@
 
     window.AIManagerClients = window.AIManagerClients || {};
     window.AIManagerClients.explorer = {
-        async getOverview() {
+        async getOverview(limit) {
             try {
-                return await http.get('/api/explorer/graph/overview');
+                const url = limit
+                    ? `/api/explorer/graph/overview?limit=${encodeURIComponent(limit)}`
+                    : '/api/explorer/graph/overview';
+                return await http.get(url);
             } catch (error) {
                 console.error('ExplorerClient.getOverview failed', error);
                 return { nodes: [], edges: [], stats: {} };

@@ -4,8 +4,8 @@ from src.agent_platform.public.agent_service import AgentService
 from src.memory.manager import MemoryManager
 
 
-def get_graph_overview(memory: MemoryManager) -> dict:
-    return memory.graph_overview(limit=100)
+def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict:
+    return memory.graph_overview(limit=limit)
 
 
 def get_node_detail(node_id: str, memory: MemoryManager) -> dict:

@@ -18,6 +18,9 @@
     let searchQuery = "";
     let activeNodeId = null;
     let hoveredId = null;
+    let currentLimit = 100;
+    let reloadTimer = null;
+    const RELOAD_INTERVAL_MS = 60000;
 
     // Camera
     let transformMatrix = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]; // Identity matrix
@@ -611,6 +614,17 @@
             targetFov = 420;
             isAnimating = true;
         });
+        const limitSelect = document.getElementById('graphLimitSelect');
+        if (limitSelect) {
+            const initial = parseInt(limitSelect.value, 10);
+            if (Number.isFinite(initial) && initial > 0) currentLimit = initial;
+            limitSelect.addEventListener('change', () => {
+                const next = parseInt(limitSelect.value, 10);
+                if (Number.isFinite(next) && next > 0) {
+                    window.GraphManager?.setLimit?.(next);
+                }
+            });
+        }
     }
 
     // ── Main init ─────────────────────────────────────────────────────────────
@@ -657,7 +671,7 @@
         // ── Data Loading ────────────────────────────────────────────────────────
         async function reload() {
             let data = { nodes: [], edges: [], stats: null };
-            try { data = await getExplorerClient().getOverview(); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
+            try { data = await getExplorerClient().getOverview(currentLimit); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
 
             graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
             const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
@@ -685,13 +699,27 @@
             setSearchQuery(query) {
                 searchQuery = query || '';
             },
+            setLimit(n) {
+                const next = parseInt(n, 10);
+                if (!Number.isFinite(next) || next <= 0 || next === currentLimit) return;
+                currentLimit = next;
+                reload();
+            },
             activate() {
                 if (!hasStartedTick) {
                     hasStartedTick = true;
                     requestAnimationFrame(tick);
                 }
+                if (reloadTimer === null) {
+                    reloadTimer = setInterval(reload, RELOAD_INTERVAL_MS);
+                }
             },
-            deactivate() { },
+            deactivate() {
+                if (reloadTimer !== null) {
+                    clearInterval(reloadTimer);
+                    reloadTimer = null;
+                }
+            },
         };
 
         await reload();
