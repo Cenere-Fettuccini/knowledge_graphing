@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from src.agent_platform.public.contracts import AgentRunRequest, AgentRunResult, AgentStatus
 from src.core.agent import Agent, BaseAgent
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 
 class AgentService:
@@ -17,7 +17,7 @@ class AgentService:
     """
 
     def __init__(self, agent: BaseAgent | None = None) -> None:
-        self._agent = agent or Agent(memory=memory_manager)
+        self._agent = agent or Agent(memory=get_memory_manager())
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         effective_prompt = self._build_effective_prompt(request)
@@ -90,4 +90,12 @@ class AgentService:
         )
 
 
-agent_service = AgentService()
+_instance: AgentService | None = None
+
+
+def get_agent_service() -> AgentService:
+    """Return the shared AgentService, creating it on first call."""
+    global _instance
+    if _instance is None:
+        _instance = AgentService()
+    return _instance

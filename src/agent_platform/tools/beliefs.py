@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager
 
 
 def save_belief(
@@ -26,12 +26,12 @@ def save_belief(
             MATCH (e) WHERE toLower(e.name) CONTAINS toLower($name)
             RETURN e.id AS id LIMIT 1
             """
-            with memory_manager.neo4j.driver.session() as session:
+            with get_memory_manager().neo4j.driver.session() as session:
                 record = session.run(cypher, name=about_entity).single()
                 if record:
                     entity_id = record["id"]
 
-        belief_id = memory_manager.neo4j.upsert_belief(
+        belief_id = get_memory_manager().neo4j.upsert_belief(
             content=content,
             confidence=confidence,
             about_entity_id=entity_id,
@@ -61,15 +61,15 @@ def get_belief_trail(belief_query: str):
         ORDER BY b.created_at DESC
         LIMIT 1
         """
-        with memory_manager.neo4j.driver.session() as session:
+        with get_memory_manager().neo4j.driver.session() as session:
             record = session.run(cypher, q=belief_query).single()
 
         if not record:
             return f"No beliefs found matching '{belief_query}'"
 
         belief_id = record["id"]
-        chain = memory_manager.neo4j.get_belief_chain(belief_id)
-        evidence = memory_manager.neo4j.get_belief_evidence(belief_id)
+        chain = get_memory_manager().neo4j.get_belief_chain(belief_id)
+        evidence = get_memory_manager().neo4j.get_belief_evidence(belief_id)
         return {
             "current": {
                 "content": record["content"],
@@ -99,13 +99,13 @@ def evolve_belief_tool(old_belief_query: str, new_content: str, reason: str = ""
         RETURN b.id AS id, b.content AS content
         ORDER BY b.created_at DESC LIMIT 1
         """
-        with memory_manager.neo4j.driver.session() as session:
+        with get_memory_manager().neo4j.driver.session() as session:
             record = session.run(cypher, q=old_belief_query).single()
 
         if not record:
             return f"No active belief found matching '{old_belief_query}'"
 
-        new_id = memory_manager.neo4j.evolve_belief(
+        new_id = get_memory_manager().neo4j.evolve_belief(
             old_belief_id=record["id"],
             new_content=new_content,
             reason=reason,

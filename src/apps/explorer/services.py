@@ -1,35 +1,35 @@
 from __future__ import annotations
 
-from src.agent_platform.public.agent_service import agent_service
+from src.agent_platform.public.agent_service import AgentService
 from src.core.router import llm_router
-from src.memory.manager import memory_manager
+from src.memory.manager import MemoryManager
 
 
-def get_graph_overview() -> dict:
-    return memory_manager.neo4j.get_explorer_graph_overview(limit=100)
+def get_graph_overview(memory: MemoryManager) -> dict:
+    return memory.neo4j.get_explorer_graph_overview(limit=100)
 
 
-def get_node_detail(node_id: str) -> dict:
-    return memory_manager.neo4j.get_node_detail(node_id)
+def get_node_detail(node_id: str, memory: MemoryManager) -> dict:
+    return memory.neo4j.get_node_detail(node_id)
 
 
-def get_node_provenance(node_id: str) -> dict:
-    return memory_manager.neo4j.get_node_provenance(node_id)
+def get_node_provenance(node_id: str, memory: MemoryManager) -> dict:
+    return memory.neo4j.get_node_provenance(node_id)
 
 
-def get_active_tasks() -> list[dict]:
-    return memory_manager.neo4j.list_active_tasks()
+def get_active_tasks(memory: MemoryManager) -> list[dict]:
+    return memory.neo4j.list_active_tasks()
 
 
-def get_belief_trail(belief_id: str) -> dict:
-    chain = memory_manager.neo4j.get_belief_chain(belief_id)
-    evidence = memory_manager.neo4j.get_belief_evidence(belief_id)
+def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:
+    chain = memory.neo4j.get_belief_chain(belief_id)
+    evidence = memory.neo4j.get_belief_evidence(belief_id)
     return {"chain": chain, "evidence": evidence}
 
 
-async def get_system_status() -> dict:
-    memory_manager._health_cache_time = 0
-    health = memory_manager.status()
+async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:
+    memory._health_cache_time = 0
+    health = memory.status()
 
     quota = []
     for model in llm_router.models:
@@ -48,7 +48,7 @@ async def get_system_status() -> dict:
             "rpd_limit": model.rpd_limit,
         })
 
-    agent_status = await agent_service.astatus(force=True)
+    agent_status = await service.astatus(force=True)
     return {
         "status": health["status"],
         "neo4j": "online" if "online" in health["neo4j"] else "offline",
