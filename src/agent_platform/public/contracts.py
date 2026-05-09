@@ -30,3 +30,17 @@ class AgentStatus:
     status: str
     llm: str
     memory: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class MemorySearchRequest:
+    """Typed contract for semantic memory searches.
+
+    Use instead of calling ``memory_manager.search()`` with raw kwargs so that
+    callers have a documented, stable interface to program against.
+    """
+
+    query: str
+    session_id: str | None = None
+    k: int = 5
+    include_ephemeral: bool = True

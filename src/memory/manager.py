@@ -300,6 +300,58 @@ class MemoryManager:
 
         return chroma_ok and graph_ok
 
+    # ── Chroma session listing ────────────────────────────────────────────────
+
+    def list_sessions(self, limit: int = 500) -> dict:
+        """Return raw Chroma records for all sessions up to *limit*.
+
+        Returns a dict with keys ``documents`` (list[str]) and ``metadatas``
+        (list[dict]) — safe to iterate even when Chroma is offline.
+        """
+        empty: dict = {"documents": [], "metadatas": []}
+        if not self._is_chroma_available():
+            return empty
+        try:
+            result = self.chroma.collection.get(limit=limit)
+            return {
+                "documents": result.get("documents") or [],
+                "metadatas": result.get("metadatas") or [],
+            }
+        except Exception as e:
+            logger.error("Failed to list sessions from Chroma: %s", e)
+            self._health_cache_time = 0
+            return empty
+
+    # ── Health cache control ──────────────────────────────────────────────────
+
+    def invalidate_health_cache(self) -> None:
+        """Force the next ``status()`` call to re-probe backends."""
+        self._health_cache_time = 0
+
+    # ── Knowledge graph public queries ────────────────────────────────────────
+
+    def graph_overview(self, limit: int = 100) -> dict:
+        """Return node/relationship counts and top labels from Neo4j."""
+        return self.neo4j.get_explorer_graph_overview(limit=limit)
+
+    def graph_node_detail(self, node_id: str) -> dict:
+        """Return a node's properties and its connections by ID."""
+        return self.neo4j.get_node_detail(node_id)
+
+    def graph_node_provenance(self, node_id: str) -> dict:
+        """Return the provenance / source chain for a node."""
+        return self.neo4j.get_node_provenance(node_id)
+
+    def graph_active_tasks(self) -> list:
+        """Return active task nodes from the knowledge graph."""
+        return self.neo4j.list_active_tasks()
+
+    def graph_belief_trail(self, belief_id: str) -> dict:
+        """Return the belief chain and supporting evidence for a belief node."""
+        chain = self.neo4j.get_belief_chain(belief_id)
+        evidence = self.neo4j.get_belief_evidence(belief_id)
+        return {"chain": chain, "evidence": evidence}
+
 
 _instance: MemoryManager | None = None
 
