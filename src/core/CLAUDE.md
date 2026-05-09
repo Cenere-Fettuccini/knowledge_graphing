@@ -46,4 +46,4 @@ llm_router.limiter.get_headroom(model_id, project_scope, rpm_limit, rpd_limit, t
 - `src.agent_platform.*` — agent internals
 - `src.memory.*` — storage backends
 - `src.apps.credits` — credits admin app (llm_router only)
-- Nobody else — apps use `agent_service` and `memory_manager` instead
+- Nobody else — apps use `get_agent_service()` and `get_memory_manager()` instead

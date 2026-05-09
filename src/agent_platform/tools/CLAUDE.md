@@ -41,10 +41,14 @@ def my_tool(param_a: str, param_b: int = 5) -> dict:
 ```
 
 ## Dependencies Available in Tools
-Tools run inside the agent turn and may use:
+Tools run inside the agent turn and call `get_memory_manager()` directly (not via FastAPI `Depends()`):
 ```python
-from src.memory.manager import memory_manager   # read/write memory
-from src.core.config import settings             # configuration
+from src.memory.manager import get_memory_manager
+from src.core.config import settings
+
+def my_tool(param: str) -> str:
+    memory = get_memory_manager()
+    ...
 ```
 
 Tools should NOT import from `src.apps.*`.

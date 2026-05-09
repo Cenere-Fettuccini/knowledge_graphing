@@ -16,15 +16,22 @@ When building out this app, follow the same pattern as `chat` or `explorer`:
 2. Create `api.py` with a FastAPI `APIRouter` that delegates to `services.py`
 3. Update `app.py` to wire in the router
 
-**Allowed imports for services.py:**
+**Allowed imports:**
 ```python
-from src.agent_platform.public.agent_service import agent_service
+# In api.py (routes) — inject via Depends():
+from fastapi import Depends
+from src.agent_platform.public.agent_service import get_agent_service, AgentService
+from src.memory.manager import get_memory_manager, MemoryManager
+
+# In services.py — accept as parameters:
+from src.agent_platform.public.agent_service import AgentService
 from src.agent_platform.public.contracts import AgentRunRequest
-from src.memory.manager import memory_manager
+from src.memory.manager import MemoryManager
 from src.core.config import settings
 ```
 
 ## What NOT to Do
 - Do not import from other apps
 - Do not import `src.core.router` or other `src.core.*` internals
-- Do not access `memory_manager.neo4j.*` or `memory_manager.chroma.*` directly
+- Do not access `memory.neo4j.*` or `memory.chroma.*` directly
+- Do not use module-level singleton imports — always go through `Depends()` in routes

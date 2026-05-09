@@ -7,53 +7,68 @@ endpoint that aggregates memory, agent, and LLM quota status.
 ## Files
 | File | Role |
 |------|------|
-| `api.py` | FastAPI router — thin HTTP layer, delegates everything to `services.py` |
+| `api.py` | FastAPI router — injects deps via `Depends()`, delegates to `services.py` |
 | `services.py` | Graph queries and system status aggregation |
 | `app.py` | `AppDefinition` registration (metadata only) |
 
 ## Allowed Imports (what this app may use)
 ```python
-from src.agent_platform.public.agent_service import agent_service
-from src.memory.manager import memory_manager
+from fastapi import Depends
+from src.agent_platform.public.agent_service import get_agent_service, AgentService
+from src.memory.manager import get_memory_manager, MemoryManager
 ```
 
-## Public Methods Used from Each Import
+## Usage Pattern
 
-### `memory_manager` (public methods only)
+**In `api.py` (routes):**
 ```python
-memory_manager.status() -> dict
+@router.get("/graph/overview")
+async def get_overview(memory: MemoryManager = Depends(get_memory_manager)):
+    return services.get_graph_overview(memory)
+
+@router.get("/system/status")
+async def get_system_status(
+    memory: MemoryManager = Depends(get_memory_manager),
+    service: AgentService = Depends(get_agent_service),
+):
+    return await services.get_system_status(memory, service)
+```
+
+**In `services.py` (business logic):**
+```python
+def get_graph_overview(memory: MemoryManager) -> dict: ...
+async def get_system_status(memory: MemoryManager, service: AgentService) -> dict: ...
+```
+
+## Public Methods Used from Each Dependency
+
+### `MemoryManager` (public methods only)
+```python
+memory.status() -> dict
 # {"status": "online"|"degraded"|"offline", "neo4j": str, "chroma": str}
 
-memory_manager.invalidate_health_cache() -> None
+memory.invalidate_health_cache() -> None
 # forces the next status() call to re-probe backends (use before status() in /system/status)
 
-memory_manager.graph_overview(limit: int = 100) -> dict
-# node/relationship counts and top labels from Neo4j
-
-memory_manager.graph_node_detail(node_id: str) -> dict
-# {"node": {id, label, name, ...}, "connections": [{type, target}, ...]}
-
-memory_manager.graph_node_provenance(node_id: str) -> dict
-# provenance/source chain for a node
-
-memory_manager.graph_active_tasks() -> list[dict]
-# active task nodes from the graph
-
-memory_manager.graph_belief_trail(belief_id: str) -> dict
-# {"chain": list, "evidence": list}
+memory.graph_overview(limit: int = 100) -> dict
+memory.graph_node_detail(node_id: str) -> dict
+memory.graph_node_provenance(node_id: str) -> dict
+memory.graph_active_tasks() -> list[dict]
+memory.graph_belief_trail(belief_id: str) -> dict
 ```
 
-### `agent_service`
+### `AgentService`
 ```python
-await agent_service.astatus(force: bool = False) -> AgentStatus
+await service.astatus(force: bool = False) -> AgentStatus
 # .status: str   .llm: str   .memory: dict
 
-await agent_service.aquota_status() -> list[dict]
+await service.aquota_status() -> list[dict]
 # [{"model": str, "project_scope": str, "headroom": float, "rpm_limit": int, "rpd_limit": int}, ...]
 ```
 
 ## What NOT to Do
-- Do not import `src.core.router` — use `agent_service.aquota_status()` instead
-- Do not access `memory_manager.neo4j.*` directly — use `memory_manager.graph_*()` methods
-- Do not access `memory_manager._health_cache_time` — use `memory_manager.invalidate_health_cache()`
+- Do not import `src.core.router` — use `service.aquota_status()` instead
+- Do not access `memory.neo4j.*` directly — use `memory.graph_*()` methods
+- Do not access `memory._health_cache_time` — use `memory.invalidate_health_cache()`
 - Do not import from other apps (`src.apps.chat`, etc.)
+- Do not use module-level singleton imports — always go through `Depends()` in routes
