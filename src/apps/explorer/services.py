@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from src.agent_platform.analyzers.knowledge import KnowledgeAnalyzer
 from src.agent_platform.public.agent_service import AgentService
 from src.memory.manager import MemoryManager
+
+
+def _build_analyzer(memory: MemoryManager) -> KnowledgeAnalyzer:
+    return KnowledgeAnalyzer(memory=memory)
 
 
 def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict:
@@ -34,6 +39,27 @@ def bootstrap_user(name: str, memory: MemoryManager) -> dict:
         raise ValueError("name must be a non-empty string")
     user = memory.bootstrap_user_root(name.strip())
     return {"user": user}
+
+
+def get_analyzer_status(memory: MemoryManager) -> dict:
+    analyzer = _build_analyzer(memory)
+    return analyzer.queue_status()
+
+
+def list_analyzer_models(memory: MemoryManager) -> list[dict]:
+    analyzer = _build_analyzer(memory)
+    return analyzer.list_available_models()
+
+
+def run_analyzer(
+    memory: MemoryManager,
+    *,
+    batch_size: int = 20,
+    model: str | None = None,
+) -> dict:
+    analyzer = _build_analyzer(memory)
+    result = analyzer.analyze_pending(batch_size=batch_size, model=model)
+    return result.as_dict()
 
 
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:

@@ -123,3 +123,58 @@ class ChromaStore:
     def count(self) -> int:
         """Total documents in the collection."""
         return self.collection.count()
+
+    def list_where(
+        self,
+        where: dict | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return documents matching ``where`` (no embedding lookup), oldest-first.
+
+        Used by the analyzer pipeline to drain the ``analyzed: false`` queue in
+        chronological order so the LLM sees conversation turns in the same
+        sequence the user lived them.
+        """
+        results = self.collection.get(where=where, limit=limit, offset=offset)
+        if not results.get("documents"):
+            return []
+        memories = [
+            {
+                "id": results["ids"][i],
+                "text": results["documents"][i],
+                "metadata": results["metadatas"][i],
+            }
+            for i in range(len(results["documents"]))
+        ]
+        memories.sort(
+            key=lambda m: (
+                m.get("metadata", {}).get("timestamp", ""),
+                int(m.get("metadata", {}).get("turn_order", 0) or 0),
+            )
+        )
+        return memories
+
+    def update_metadata(self, ids: list[str], patch: dict) -> int:
+        """Merge ``patch`` into the metadata of every doc in ``ids``. Returns count touched."""
+        if not ids:
+            return 0
+        existing = self.collection.get(ids=ids)
+        new_metadatas = []
+        for current in existing.get("metadatas", []) or []:
+            merged = dict(current or {})
+            merged.update(patch)
+            new_metadatas.append(merged)
+        if not new_metadatas:
+            return 0
+        self.collection.update(ids=existing["ids"], metadatas=new_metadatas)
+        return len(existing["ids"])
+
+    def count_where(self, where: dict | None = None) -> int:
+        """Approximate count of documents matching ``where``.
+
+        Chroma has no native count-with-filter, so this fetches just the ids;
+        cheap enough for queue-status displays.
+        """
+        results = self.collection.get(where=where, include=[])
+        return len(results.get("ids") or [])

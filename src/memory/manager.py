@@ -262,6 +262,70 @@ class MemoryManager:
         evidence = self.neo4j.get_belief_evidence(belief_id)
         return {"chain": chain, "evidence": evidence}
 
+    # ── Analyzer queue (Chroma) ──────────────────────────────────────────────
+
+    def list_unanalyzed(self, limit: int = 50) -> list[dict]:
+        """Return the next batch of conversation turns awaiting analysis.
+
+        Filters to ``analyzed: false`` and excludes ephemeral rows.
+        """
+        if not self._is_chroma_available():
+            return []
+        where = {"$and": [{"analyzed": False}, {"is_ephemeral": False}]}
+        return self.chroma.list_where(where=where, limit=limit)
+
+    def count_unanalyzed(self) -> int:
+        """Number of non-ephemeral Chroma rows waiting for the analyzer."""
+        if not self._is_chroma_available():
+            return 0
+        where = {"$and": [{"analyzed": False}, {"is_ephemeral": False}]}
+        return self.chroma.count_where(where=where)
+
+    def mark_analyzed(self, memory_ids: list[str], run_id: str | None = None) -> int:
+        """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""
+        if not memory_ids or not self._is_chroma_available():
+            return 0
+        patch = {"analyzed": True}
+        if run_id:
+            patch["analysis_run_id"] = run_id
+            patch["analyzed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return self.chroma.update_metadata(memory_ids, patch)
+
+    # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────
+
+    def graph_schema_snapshot(self) -> dict:
+        """Snapshot of labels / relationship types / sample entities for prompts."""
+        return self.neo4j.get_schema_snapshot()
+
+    def upsert_node(
+        self,
+        *,
+        node_id: str,
+        labels: list[str],
+        name: str,
+        properties: dict | None = None,
+    ) -> str:
+        """Create-or-update a multi-label node, keyed on stable id."""
+        return self.neo4j.upsert_node_with_labels(
+            node_id=node_id, labels=labels, name=name, properties=properties
+        )
+
+    def upsert_relationship(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: dict | None = None,
+    ) -> bool:
+        """MERGE a typed relationship between two existing nodes."""
+        return self.neo4j.upsert_relationship(
+            source_id=source_id,
+            target_id=target_id,
+            rel_type=rel_type,
+            properties=properties,
+        )
+
     # ── Bootstrap ────────────────────────────────────────────────────────────
 
     def user_root_exists(self) -> bool:

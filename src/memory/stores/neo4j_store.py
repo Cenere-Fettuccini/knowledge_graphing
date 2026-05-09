@@ -332,6 +332,110 @@ class Neo4jStore:
             **{k: v for k, v in node.items() if k not in ["id", "name"]},
         }
 
+    # ── Schema snapshot ───────────────────────────────────────────────────────
+
+    def get_schema_snapshot(self, sample_entities: int = 25) -> dict:
+        """Return labels, relationship types, and a sample of named entities.
+
+        Fed into the analyzer's prompt so the LLM prefers reusing what's
+        already in the graph instead of inventing parallel labels.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"labels": [], "relationship_types": [], "entities": []}
+
+        with self.driver.session() as session:
+            labels = [r["label"] for r in session.run("CALL db.labels() YIELD label RETURN label ORDER BY label")]
+            rels = [r["rel"] for r in session.run("CALL db.relationshipTypes() YIELD relationshipType AS rel RETURN rel ORDER BY rel")]
+            entities = []
+            for record in session.run(
+                """
+                MATCH (n)
+                WHERE n.name IS NOT NULL
+                RETURN n.id AS id, n.name AS name, labels(n) AS labels
+                ORDER BY coalesce(n.updated_at, n.created_at, n.name) DESC
+                LIMIT $sample
+                """,
+                sample=sample_entities,
+            ):
+                entities.append(
+                    {"id": record["id"], "name": record["name"], "labels": list(record["labels"] or [])}
+                )
+
+        return {"labels": labels, "relationship_types": rels, "entities": entities}
+
+    # ── Multi-label upsert (used by the analyzer) ────────────────────────────
+
+    def upsert_node_with_labels(
+        self,
+        *,
+        node_id: str,
+        labels: list[str],
+        name: str,
+        properties: dict | None = None,
+    ) -> str:
+        """Create-or-update a node with one or more labels, keyed on ``node_id``.
+
+        If the node already exists (matched by id), additional labels are
+        merged in via ``SET n:Label`` so the analyzer can layer new labels
+        onto existing entities without recreating them.
+        """
+        if not self.driver and not self.verify_connection():
+            return ""
+        if not labels:
+            raise ValueError("At least one label is required.")
+        if not node_id:
+            raise ValueError("node_id is required.")
+
+        props = dict(properties or {})
+        props["id"] = node_id
+        props["name"] = name
+        labels_clause = ":".join(labels)
+
+        cypher = f"""
+        MERGE (n {{id: $node_id}})
+        ON CREATE SET n:{labels_clause}, n.created_at = $now
+        SET n:{labels_clause}, n += $props, n.updated_at = $now
+        RETURN n.id AS id
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            record = session.run(cypher, node_id=node_id, now=now, props=props).single()
+            return record["id"] if record else node_id
+
+    def upsert_relationship(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: dict | None = None,
+    ) -> bool:
+        """MERGE a relationship by (source, target, type). Returns True on success."""
+        if not self.driver and not self.verify_connection():
+            return False
+        clean_type = re.sub(r"[^A-Z0-9_]", "_", (rel_type or "RELATED_TO").upper())
+        if not clean_type:
+            clean_type = "RELATED_TO"
+        props = dict(properties or {})
+        cypher = f"""
+        MATCH (a {{id: $source_id}})
+        MATCH (b {{id: $target_id}})
+        MERGE (a)-[r:{clean_type}]->(b)
+        ON CREATE SET r += $props, r.created_at = $now
+        SET r += $props, r.updated_at = $now
+        RETURN r
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            result = session.run(
+                cypher,
+                source_id=source_id,
+                target_id=target_id,
+                now=now,
+                props=props,
+            ).single()
+            return result is not None
+
     # ── User root / bootstrap ─────────────────────────────────────────────────
 
     def user_root_exists(self) -> bool:

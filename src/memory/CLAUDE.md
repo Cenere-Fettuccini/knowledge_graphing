@@ -70,6 +70,32 @@ memory.graph_belief_trail(belief_id: str) -> dict
 # {"chain": list[dict], "evidence": list[dict]}
 ```
 
+### Analyzer queue (Chroma)
+```python
+memory.list_unanalyzed(limit: int = 50) -> list[dict]
+# Returns the next batch of conversation turns awaiting analysis.
+# Filters to `analyzed: false` and excludes ephemeral rows; ordered oldest-first.
+
+memory.count_unanalyzed() -> int
+# Cheap-ish count for queue-status displays.
+
+memory.mark_analyzed(memory_ids: list[str], run_id: str | None = None) -> int
+# Stamps each Chroma row with `analyzed: true` (and `analysis_run_id`).
+```
+
+### Analyzer graph writes (Neo4j)
+```python
+memory.graph_schema_snapshot() -> dict
+# {"labels": [...], "relationship_types": [...], "entities": [...]}
+# Fed into the analyzer prompt so the LLM reuses existing labels and edge types.
+
+memory.upsert_node(*, node_id: str, labels: list[str], name: str, properties: dict | None = None) -> str
+# Multi-label MERGE on stable id. Layered labels are accepted on first sighting.
+
+memory.upsert_relationship(*, source_id: str, target_id: str, rel_type: str, properties: dict | None = None) -> bool
+# MERGE a typed relationship between two existing nodes.
+```
+
 ### Bootstrap (Neo4j)
 ```python
 memory.user_root_exists() -> bool

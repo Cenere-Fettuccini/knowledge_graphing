@@ -52,6 +52,36 @@ class MemoryProtocol(Protocol):
 
     def graph_belief_trail(self, belief_id: str) -> dict: ...
 
+    # ── Analyzer queue (Chroma) ──────────────────────────────────────────────
+
+    def list_unanalyzed(self, limit: int = 50) -> list: ...
+
+    def count_unanalyzed(self) -> int: ...
+
+    def mark_analyzed(self, memory_ids: list, run_id: str | None = None) -> int: ...
+
+    # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────
+
+    def graph_schema_snapshot(self) -> dict: ...
+
+    def upsert_node(
+        self,
+        *,
+        node_id: str,
+        labels: list,
+        name: str,
+        properties: dict | None = None,
+    ) -> str: ...
+
+    def upsert_relationship(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: dict | None = None,
+    ) -> bool: ...
+
     # ── Bootstrap ─────────────────────────────────────────────────────────────
 
     def user_root_exists(self) -> bool: ...
