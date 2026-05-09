@@ -1,53 +1,34 @@
 from __future__ import annotations
 
 from src.agent_platform.public.agent_service import agent_service
-from src.core.router import llm_router
 from src.memory.manager import memory_manager
 
 
 def get_graph_overview() -> dict:
-    return memory_manager.neo4j.get_explorer_graph_overview(limit=100)
+    return memory_manager.graph_overview(limit=100)
 
 
 def get_node_detail(node_id: str) -> dict:
-    return memory_manager.neo4j.get_node_detail(node_id)
+    return memory_manager.graph_node_detail(node_id)
 
 
 def get_node_provenance(node_id: str) -> dict:
-    return memory_manager.neo4j.get_node_provenance(node_id)
+    return memory_manager.graph_node_provenance(node_id)
 
 
 def get_active_tasks() -> list[dict]:
-    return memory_manager.neo4j.list_active_tasks()
+    return memory_manager.graph_active_tasks()
 
 
 def get_belief_trail(belief_id: str) -> dict:
-    chain = memory_manager.neo4j.get_belief_chain(belief_id)
-    evidence = memory_manager.neo4j.get_belief_evidence(belief_id)
-    return {"chain": chain, "evidence": evidence}
+    return memory_manager.graph_belief_trail(belief_id)
 
 
 async def get_system_status() -> dict:
-    memory_manager._health_cache_time = 0
+    memory_manager.invalidate_health_cache()
     health = memory_manager.status()
 
-    quota = []
-    for model in llm_router.models:
-        headroom = llm_router.limiter.get_headroom(
-            model.model_id,
-            model.project_scope,
-            model.rpm_limit,
-            model.rpd_limit,
-            model.tpm_limit,
-        )
-        quota.append({
-            "model": model.model_id.split("/")[-1],
-            "project_scope": model.project_scope,
-            "headroom": round(headroom * 100, 1),
-            "rpm_limit": model.rpm_limit,
-            "rpd_limit": model.rpd_limit,
-        })
-
+    quota = await agent_service.aquota_status()
     agent_status = await agent_service.astatus(force=True)
     return {
         "status": health["status"],

@@ -77,6 +77,33 @@ class AgentService:
     def clear_session(self, session_id: str) -> None:
         self._agent.clear_session(session_id)
 
+    async def aquota_status(self) -> list[dict]:
+        """Return per-model quota headroom without exposing llm_router internals.
+
+        Each entry: {"model": str, "project_scope": str, "headroom": float (0–100),
+                     "rpm_limit": int, "rpd_limit": int}
+        """
+        # Import here to keep agent_service free of a hard top-level router dep
+        from src.core.router import llm_router  # noqa: PLC0415
+
+        quota = []
+        for model in llm_router.models:
+            headroom = llm_router.limiter.get_headroom(
+                model.model_id,
+                model.project_scope,
+                model.rpm_limit,
+                model.rpd_limit,
+                model.tpm_limit,
+            )
+            quota.append({
+                "model": model.model_id.split("/")[-1],
+                "project_scope": model.project_scope,
+                "headroom": round(headroom * 100, 1),
+                "rpm_limit": model.rpm_limit,
+                "rpd_limit": model.rpd_limit,
+            })
+        return quota
+
     @staticmethod
     def _build_effective_prompt(request: AgentRunRequest) -> str:
         if request.prompt_text:

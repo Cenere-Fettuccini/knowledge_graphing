@@ -10,7 +10,7 @@ from src.memory.manager import memory_manager
 
 
 def build_graph_context(anchor_node_id: str) -> dict | None:
-    detail = memory_manager.neo4j.get_node_detail(anchor_node_id)
+    detail = memory_manager.graph_node_detail(anchor_node_id)
     node = detail.get("node") if detail else None
     if not node:
         return None
@@ -100,16 +100,12 @@ def session_sort_key(item: dict) -> tuple[int, str]:
 
 
 def list_chat_sessions() -> dict:
-    if not memory_manager._is_chroma_available():
-        return {"sessions": []}
+    results = memory_manager.list_sessions(limit=500)
+    docs = results["documents"]
+    metas = results["metadatas"]
 
-    try:
-        results = memory_manager.chroma.collection.get(limit=500)
-    except Exception:
+    if not docs:
         return {"sessions": []}
-
-    docs = results.get("documents") or []
-    metas = results.get("metadatas") or []
 
     grouped: dict[str, list[dict]] = defaultdict(list)
     for idx, text in enumerate(docs):
