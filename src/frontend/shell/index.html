@@ -111,6 +111,25 @@
                                     Model Headroom</h4>
                                 <div id="quotaList"></div>
                             </div>
+                            <div class="status-divider"></div>
+                            <div id="analyzerCard">
+                                <div class="analyzer-card__header">
+                                    <h4 class="dim analyzer-card__title">Knowledge Analyzer</h4>
+                                    <span class="status-badge connecting" id="analyzerLLMBadge">PINGING...</span>
+                                </div>
+                                <p class="analyzer-card__queue">
+                                    <span id="analyzerQueueCount">—</span>
+                                    <span class="dim"> messages pending</span>
+                                </p>
+                                <label class="analyzer-card__label" for="analyzerModelSelect">Model</label>
+                                <select id="analyzerModelSelect" class="analyzer-card__select">
+                                    <option value="">Default</option>
+                                </select>
+                                <button id="analyzerRunBtn" class="btn btn-ghost analyzer-card__run">
+                                    Run analyzer
+                                </button>
+                                <p class="analyzer-card__result dim" id="analyzerResult"></p>
+                            </div>
                         </div>
                     </aside>
 
