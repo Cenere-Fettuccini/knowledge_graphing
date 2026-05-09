@@ -269,6 +269,17 @@ h3 {
 }
 .ex-graph:has(.module-details.active) .graph-controls { right: 320px; }
 .graph-controls .theme-btn { margin: 0; }
+.graph-controls select.theme-btn {
+    width: auto;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 12px;
+    font: inherit;
+    font-size: 11px;
+    appearance: none;
+    -webkit-appearance: none;
+}
+.graph-controls select.theme-btn:focus { outline: none; color: var(--fg-primary); }
 
 /* ── Placeholders ───────────────────────────────────────────────────────── */
 .placeholder-module { padding: 16px; }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from src.agent_platform.public.agent_service import AgentService, get_agent_service
 from src.apps.explorer import services
@@ -10,8 +10,11 @@ router = APIRouter()
 
 
 @router.get("/graph/overview")
-async def get_overview(memory: MemoryManager = Depends(get_memory_manager)):
-    return services.get_graph_overview(memory)
+async def get_overview(
+    limit: int = Query(100, ge=1, le=1000),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.get_graph_overview(memory, limit=limit)
 
 
 @router.get("/graph/node/{node_id}")
