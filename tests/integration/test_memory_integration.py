@@ -77,3 +77,51 @@ def test_session_isolation(mem):
     assert "Bob" in results[0]['text']
     assert "banana" in results[0]['text']
     assert "apple" not in results[0]['text']
+
+
+def test_nested_metadata_is_sanitized_for_chroma(mem):
+    """Structured graph context should not break Chroma metadata writes."""
+    session_id = f"test_nested_{uuid.uuid4().hex[:8]}"
+
+    mem.store(
+        "Anchor this message to a graph node.",
+        role="user",
+        session_id=session_id,
+        chat_context={
+            "source_section": "explorer",
+            "context_type": "graph_node",
+            "context_id": "belief-1",
+            "context_summary": "Belief node",
+            "context_payload": {"relation_summary": "SUPPORTED_BY -> Memory"},
+        },
+    )
+
+    history = mem.get_history(session_id)
+    assert len(history) == 1
+    assert history[0]["metadata"]["chat_context"]
+    assert isinstance(history[0]["metadata"]["chat_context"], str)
+
+
+def test_same_timestamp_messages_keep_turn_order(mem):
+    """User/assistant pairs with matching timestamps should remain ordered."""
+    session_id = f"test_order_{uuid.uuid4().hex[:8]}"
+    ts = "2026-05-09T01:02:14.683000+00:00"
+
+    mem.store("user message", role="user", session_id=session_id, timestamp=ts, turn_order=0)
+    mem.store("assistant reply", role="assistant", session_id=session_id, timestamp=ts, turn_order=1)
+
+    history = mem.get_history(session_id)
+    ordered = list(reversed(history))
+
+    assert [item["text"] for item in ordered] == ["user message", "assistant reply"]
+
+
+def test_explicit_user_timestamp_is_preserved(mem):
+    """A caller-provided message timestamp should survive persistence."""
+    session_id = f"test_explicit_ts_{uuid.uuid4().hex[:8]}"
+    user_ts = "2026-05-09T01:02:14.123000+00:00"
+
+    mem.store("sent now", role="user", session_id=session_id, timestamp=user_ts, turn_order=0)
+
+    history = mem.get_history(session_id)
+    assert history[0]["metadata"]["timestamp"] == user_ts

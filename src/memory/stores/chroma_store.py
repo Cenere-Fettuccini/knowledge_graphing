@@ -1,4 +1,4 @@
-"""ChromaDB episodic memory — raw conversation storage and semantic retrieval."""
+"""ChromaDB episodic memory storage and semantic retrieval."""
 
 import os
 import uuid
@@ -11,13 +11,25 @@ from src.memory.embeddings.google import get_embedding_model
 
 
 class GoogleChromaEmbedder(chromadb.EmbeddingFunction):
-    """Adapter: LangChain Google embeddings → ChromaDB embedding interface."""
+    """Adapter from native Google embeddings to ChromaDB's interface."""
 
     def __init__(self):
         self._model = get_embedding_model()
 
+    @staticmethod
+    def name() -> str:
+        return "google-genai-embedder"
+
+    def get_config(self) -> dict:
+        return {"provider": "google-genai", "model": "gemini-embedding-2"}
+
+    @staticmethod
+    def build_from_config(config: dict):
+        del config
+        return GoogleChromaEmbedder()
+
     def __call__(self, input):
-        return self._model.embed_documents(input)
+        return self._model.embed_documents(list(input))
 
 
 class ChromaStore:
@@ -42,8 +54,6 @@ class ChromaStore:
             metadata={"hnsw:space": "cosine"},
         )
 
-    # ── Write ─────────────────────────────────────────────────────────────────
-
     def add_memory(self, text: str, metadata: dict) -> str:
         """Embed and store a single document. Returns the generated ID."""
         doc_id = str(uuid.uuid4())
@@ -54,8 +64,6 @@ class ChromaStore:
             ids=[doc_id],
         )
         return doc_id
-
-    # ── Read ──────────────────────────────────────────────────────────────────
 
     def query_memory(self, query: str, k: int = 5, where: dict | None = None):
         """Semantic search. Returns list of {id, text, metadata, distance}."""
@@ -77,9 +85,8 @@ class ChromaStore:
         ]
 
     def get_recent(self, n: int = 20, session_id: str | None = None):
-        """Latest *n* turns, sorted newest-first. Optionally scoped to a session."""
+        """Latest n turns, sorted newest-first. Optionally scoped to a session."""
         where = {"session_id": session_id} if session_id else None
-        # Fetch enough headroom so the timestamp sort is meaningful.
         results = self.collection.get(
             where=where,
             limit=max(n, 100),
@@ -94,20 +101,24 @@ class ChromaStore:
             }
             for i in range(len(results["documents"]))
         ]
+
+        def sort_key(memory: dict) -> tuple[str, int]:
+            metadata = memory.get("metadata", {})
+            return (
+                metadata.get("timestamp", ""),
+                int(metadata.get("turn_order", 0) or 0),
+            )
+
         memories.sort(
-            key=lambda m: m["metadata"].get("timestamp", ""), reverse=True
+            key=sort_key, reverse=True
         )
         return memories[:n]
 
-    # ── Delete ────────────────────────────────────────────────────────────────
-
     def delete_memories(self, where: dict):
-        """Delete all documents matching *where*. Raises on empty filter."""
+        """Delete all documents matching where. Raises on empty filter."""
         if not where:
             raise ValueError("A filter is required to prevent accidental full wipe.")
         self.collection.delete(where=where)
-
-    # ── Utils ─────────────────────────────────────────────────────────────────
 
     def count(self) -> int:
         """Total documents in the collection."""

@@ -2,6 +2,7 @@
 
 import uuid
 import logging
+from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
 from src.core.config import settings
@@ -11,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 class Neo4jStore:
     """Interface to the Neo4j Knowledge Graph."""
+
+    EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
+    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project"}
+    TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
+    TEST_SESSION_PREFIXES = ("test_", "test-", "session_", "pytest_")
 
     def __init__(self, uri=None, user=None, password=None):
         self._uri = uri or settings.neo4j_uri
@@ -89,6 +95,117 @@ class Neo4jStore:
 
     # ── Read Operations (Explorer API format) ──────────────────────────────────
 
+    def upsert_conversation(self, session_id: str, properties: dict = None) -> str:
+        """Create or update a conversation node keyed by session_id."""
+        if not self.driver:
+            return ""
+
+        props = properties or {}
+        conversation_id = props.get("id", str(uuid.uuid4()))
+        name = props.get("name", f"Conversation {session_id[:8]}")
+        query = """
+        MERGE (c:Conversation {session_id: $session_id})
+        ON CREATE SET c.id = $conversation_id
+        SET c.name = $name, c += $props
+        RETURN c.id AS id
+        """
+
+        with self.driver.session() as session:
+            record = session.run(
+                query,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                name=name,
+                props={**props, "session_id": session_id},
+            ).single()
+            return record["id"] if record else conversation_id
+
+    def store_conversation_turn(
+        self,
+        *,
+        text: str,
+        role: str,
+        session_id: str,
+        timestamp: str | None = None,
+        source_section: str | None = None,
+        context: dict | None = None,
+        metadata: dict | None = None,
+    ) -> str:
+        """Persist one conversation turn into the graph as a Note or Thought."""
+        if not self.driver:
+            return ""
+
+        label = "Thought" if role == "assistant" else "Note"
+        now = timestamp or datetime.now(timezone.utc).isoformat()
+        props = metadata.copy() if metadata else {}
+        turn_id = props.pop("id", str(uuid.uuid4()))
+        preview = text[:60] + "..." if len(text) > 60 else text
+        context = context or {}
+        context_id = context.get("context_id")
+        context_type = context.get("context_type")
+        context_summary = context.get("context_summary")
+
+        self.upsert_conversation(
+            session_id,
+            {
+                "name": f"Chat {session_id[:12]}",
+                "last_updated_at": now,
+                "source_section": source_section or "chat",
+            },
+        )
+
+        query = f"""
+        MATCH (c:Conversation {{session_id: $session_id}})
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(prev)
+        WITH c, coalesce(max(prev.sequence), 0) AS max_sequence
+        CREATE (t:{label} {{
+            id: $turn_id,
+            name: $preview,
+            text: $text,
+            role: $role,
+            session_id: $session_id,
+            timestamp: $timestamp,
+            sequence: max_sequence + 1,
+            source_section: $source_section,
+            context_id: $context_id,
+            context_type: $context_type,
+            context_summary: $context_summary
+        }})
+        SET t += $props
+        MERGE (c)-[:HAS_TURN {{timestamp: $timestamp}}]->(t)
+        WITH t, c
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(prev {{sequence: t.sequence - 1}})
+        FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END |
+            MERGE (t)-[:FOLLOWS]->(prev)
+        )
+        WITH t
+        OPTIONAL MATCH (anchor {{id: $context_id}})
+        FOREACH (_ IN CASE WHEN anchor IS NULL THEN [] ELSE [1] END |
+            MERGE (t)-[:REFERENCES {{
+                context_type: $context_type,
+                context_summary: $context_summary
+            }}]->(anchor)
+        )
+        RETURN t.id AS id
+        """
+
+        with self.driver.session() as session:
+            record = session.run(
+                query,
+                session_id=session_id,
+                turn_id=turn_id,
+                preview=preview or f"{label} {session_id[:8]}",
+                text=text,
+                role=role,
+                timestamp=now,
+                source_section=source_section or "chat",
+                context_id=context_id,
+                context_type=context_type,
+                context_summary=context_summary,
+                props=props,
+            ).single()
+            return record["id"] if record else turn_id
+
     def get_graph_overview(self, limit: int = 100) -> dict:
         """Returns nodes and edges formatted for the 3D Explorer."""
         if not self.driver and not self.verify_connection():
@@ -149,6 +266,191 @@ class Neo4jStore:
             }
         }
 
+    def _serialize_node(self, node) -> dict:
+        label = list(node.labels)[0] if node.labels else "Unknown"
+        return {
+            "id": node.get("id"),
+            "label": label,
+            "name": node.get("name", "Unnamed"),
+            **{k: v for k, v in node.items() if k not in ["id", "name"]},
+        }
+
+    def _looks_like_test_artifact(self, node_data: dict) -> bool:
+        node_id = str(node_data.get("id") or "").lower()
+        label = str(node_data.get("label") or "")
+        return label == "TestNode" or any(node_id.startswith(prefix) for prefix in self.TEST_ID_PREFIXES)
+
+    def get_explorer_graph_overview(self, limit: int = 100) -> dict:
+        """Return a curated graph centered on beliefs, tasks, projects, and linked entities."""
+        if not self.driver and not self.verify_connection():
+            return {"nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+
+        query = """
+        MATCH (root)
+        WHERE any(label IN labels(root) WHERE label IN $root_labels)
+        WITH root
+        ORDER BY coalesce(root.updated_at, root.created_at, root.last_updated_at, root.name) DESC
+        LIMIT $limit
+        OPTIONAL MATCH (root)-[r]-(neighbor)
+        WHERE neighbor IS NULL OR NOT any(label IN labels(neighbor) WHERE label IN $hidden_labels)
+        RETURN root, neighbor,
+               type(r) AS rel_type,
+               startNode(r).id AS source_id,
+               endNode(r).id AS target_id
+        """
+
+        nodes_dict = {}
+        edges = []
+
+        with self.driver.session() as session:
+            result = session.run(
+                query,
+                limit=limit,
+                root_labels=list(self.EXPLORER_ROOT_LABELS),
+                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
+            )
+            for record in result:
+                root = record["root"]
+                if root is not None:
+                    node_data = self._serialize_node(root)
+                    if not self._looks_like_test_artifact(node_data):
+                        nodes_dict[node_data["id"]] = node_data
+
+                neighbor = record["neighbor"]
+                if neighbor is not None:
+                    node_data = self._serialize_node(neighbor)
+                    if not self._looks_like_test_artifact(node_data):
+                        nodes_dict[node_data["id"]] = node_data
+
+                source_id = record["source_id"]
+                target_id = record["target_id"]
+                rel_type = record["rel_type"]
+                if source_id and target_id and rel_type:
+                    edges.append({
+                        "source": source_id,
+                        "target": target_id,
+                        "type": rel_type,
+                    })
+
+        visible_ids = set(nodes_dict)
+        unique_edges = [
+            dict(t)
+            for t in {
+                tuple(d.items()) for d in edges
+                if d["source"] in visible_ids and d["target"] in visible_ids
+            }
+        ]
+
+        connected_ids = set()
+        for edge in unique_edges:
+            connected_ids.add(edge["source"])
+            connected_ids.add(edge["target"])
+
+        if connected_ids:
+            nodes = [node for node_id, node in nodes_dict.items() if node_id in connected_ids]
+        else:
+            nodes = [
+                node for node in nodes_dict.values()
+                if node["label"] in self.EXPLORER_ROOT_LABELS
+            ]
+
+        visible_ids = {node["id"] for node in nodes}
+        unique_edges = [
+            edge for edge in unique_edges
+            if edge["source"] in visible_ids and edge["target"] in visible_ids
+        ]
+
+        return {
+            "nodes": nodes,
+            "edges": unique_edges,
+            "stats": {
+                "nodes": len(nodes),
+                "edges": len(unique_edges),
+            }
+        }
+
+    def list_active_tasks(self) -> list[dict]:
+        """Return task nodes directly instead of relying on the explorer overview."""
+        if not self.driver and not self.verify_connection():
+            return []
+
+        query = """
+        MATCH (t:Task)
+        RETURN t.id AS id, t.name AS name, t.status AS status,
+               t.priority AS priority, t.due_date AS due_date
+        ORDER BY coalesce(t.updated_at, t.created_at, t.name) DESC
+        """
+
+        tasks = []
+        with self.driver.session() as session:
+            for record in session.run(query):
+                tasks.append({
+                    "id": record["id"],
+                    "name": record["name"],
+                    "status": record["status"],
+                    "priority": record["priority"],
+                    "due_date": record["due_date"],
+                    "label": "Task",
+                })
+        return tasks
+
+    def delete_session_graph(self, session_id: str) -> bool:
+        """Delete a conversation session and its turn nodes from Neo4j."""
+        if not self.driver and not self.verify_connection():
+            return False
+
+        query = """
+        MATCH (c:Conversation {session_id: $session_id})
+        OPTIONAL MATCH (c)-[:HAS_TURN]->(t)
+        DETACH DELETE c, t
+        """
+        try:
+            with self.driver.session() as session:
+                session.run(query, session_id=session_id)
+            return True
+        except Exception as e:
+            logger.error("Failed to delete Neo4j session %s: %s", session_id, e)
+            return False
+
+    def cleanup_test_artifacts(self) -> int:
+        """Delete graph data that matches our pytest/test naming conventions."""
+        if not self.driver and not self.verify_connection():
+            return 0
+
+        query = """
+        MATCH (n)
+        WHERE
+            (
+                n.id IS NOT NULL AND (
+                    any(prefix IN $id_prefixes WHERE toLower(n.id) STARTS WITH prefix)
+                    OR (
+                        any(prefix IN $session_prefixes WHERE toLower(n.id) STARTS WITH prefix)
+                        AND any(label IN labels(n) WHERE label IN ['Conversation', 'Note', 'Thought'])
+                    )
+                )
+            )
+            OR (
+                n.session_id IS NOT NULL
+                AND any(prefix IN $session_prefixes WHERE toLower(n.session_id) STARTS WITH prefix)
+            )
+            OR any(label IN labels(n) WHERE label IN ['TestNode'])
+        WITH collect(DISTINCT n) AS doomed
+        FOREACH (node IN doomed | DETACH DELETE node)
+        RETURN size(doomed) AS deleted_count
+        """
+
+        try:
+            with self.driver.session() as session:
+                record = session.run(
+                    query,
+                    id_prefixes=[prefix.lower() for prefix in self.TEST_ID_PREFIXES],
+                    session_prefixes=[prefix.lower() for prefix in self.TEST_SESSION_PREFIXES],
+                ).single()
+            return int(record["deleted_count"]) if record else 0
+        except Exception as e:
+            logger.error("Failed to clean Neo4j test artifacts: %s", e)
+            return 0
+
     def get_node_detail(self, node_id: str) -> dict:
         """Returns details for a specific node and its immediate connections."""
         if not self.driver:
@@ -207,6 +509,104 @@ class Neo4jStore:
             }
 
     # ── Belief Provenance ──────────────────────────────────────────────────────
+
+    def _normalize_relation_entries(self, entries: list[dict], side: str) -> list[dict]:
+        normalized = []
+        seen = set()
+        for entry in entries:
+            rel = entry.get("rel")
+            node = entry.get("node")
+            if rel is None or node is None:
+                continue
+            node_id = node.get("id")
+            if not node_id:
+                continue
+            key = (node_id, rel.type, side)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append({
+                "id": node_id,
+                "name": node.get("name", "Unnamed"),
+                "label": list(node.labels)[0] if node.labels else "Unknown",
+                "type": rel.type,
+                "direction": side,
+                "relationship": dict(rel.items()),
+            })
+        return normalized
+
+    def _get_conversation_timeline(self, session_id: str) -> list[dict]:
+        if not self.driver or not session_id:
+            return []
+
+        cypher = """
+        MATCH (c:Conversation {session_id: $session_id})-[:HAS_TURN]->(t)
+        RETURN t.id AS id, labels(t)[0] AS label, t.name AS name, t.text AS text,
+               t.role AS role, t.sequence AS sequence, t.timestamp AS timestamp
+        ORDER BY t.sequence ASC, t.timestamp ASC
+        """
+        timeline = []
+        with self.driver.session() as session:
+            for record in session.run(cypher, session_id=session_id):
+                timeline.append({
+                    "id": record["id"],
+                    "label": record["label"],
+                    "name": record["name"],
+                    "text": record["text"],
+                    "role": record["role"],
+                    "sequence": record["sequence"],
+                    "timestamp": record["timestamp"],
+                })
+        return timeline
+
+    def get_node_provenance(self, node_id: str) -> dict:
+        """Return generic provenance for any node plus belief-specific trails."""
+        empty = {
+            "node": None,
+            "incoming": [],
+            "outgoing": [],
+            "timeline": [],
+            "chain": [],
+            "evidence": {"supports": [], "weakens": []},
+        }
+        if not self.driver:
+            return empty
+
+        query = """
+        MATCH (n {id: $node_id})
+        OPTIONAL MATCH (src)-[in_r]->(n)
+        OPTIONAL MATCH (n)-[out_r]->(dst)
+        RETURN n,
+               collect(DISTINCT {rel: in_r, node: src}) AS incoming,
+               collect(DISTINCT {rel: out_r, node: dst}) AS outgoing
+        """
+
+        with self.driver.session() as session:
+            record = session.run(query, node_id=node_id).single()
+
+        if not record or not record["n"]:
+            return empty
+
+        node = record["n"]
+        node_data = {
+            "id": node.get("id"),
+            "label": list(node.labels)[0] if node.labels else "Unknown",
+            "name": node.get("name", "Unnamed"),
+            **{k: v for k, v in node.items() if k not in ["id", "name"]},
+        }
+        session_id = node_data.get("session_id")
+
+        return {
+            "node": node_data,
+            "incoming": self._normalize_relation_entries(record["incoming"], "in"),
+            "outgoing": self._normalize_relation_entries(record["outgoing"], "out"),
+            "timeline": self._get_conversation_timeline(session_id),
+            "chain": self.get_belief_chain(node_id) if node_data["label"] == "Belief" else [],
+            "evidence": self.get_belief_evidence(node_id) if node_data["label"] == "Belief" else {
+                "supports": [],
+                "weakens": [],
+            },
+        }
 
     def upsert_belief(
         self,

@@ -1,68 +1,59 @@
-import os
 import logging
-from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredMarkdownLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from src.memory.manager import memory_manager
+from pathlib import Path
+
 from src.core.logging_config import setup_logging
+from src.ingestion.chunker import chunk_text
+from src.memory.manager import memory_manager
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
+
 class KnowledgeIngestor:
-    """
-    Processes local files and injects them into the AIManager memory ecosystem.
-    """
+    """Processes local files and injects them into the AIManager memory ecosystem."""
 
     def __init__(self):
         self.memory = memory_manager
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100
-        )
 
     def ingest_directory(self, path: str):
-        """
-        Loads all text/markdown files from a directory.
-        """
-        if not os.path.exists(path):
-            logger.error(f"Path does not exist: {path}")
+        """Load text and markdown files from a directory and store them as chunks."""
+        root = Path(path)
+        if not root.exists():
+            logger.error("Path does not exist: %s", path)
             return
 
-        logger.info(f"Ingesting documents from {path}...")
-        
-        # 1. Load files
-        loader = DirectoryLoader(path, glob="**/*.md", loader_cls=UnstructuredMarkdownLoader)
-        docs = loader.load()
-        
-        if not docs:
-            # Try plain text if no markdown
-            loader = DirectoryLoader(path, glob="**/*.txt", loader_cls=TextLoader)
-            docs = loader.load()
+        files = sorted(
+            candidate
+            for candidate in root.rglob("*")
+            if candidate.is_file() and candidate.suffix.lower() in {".md", ".txt"}
+        )
+        logger.info("Found %d candidate documents in %s.", len(files), path)
 
-        logger.info(f"Found {len(docs)} documents.")
+        chunk_total = 0
+        for file_path in files:
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
 
-        # 2. Split into chunks
-        chunks = self.splitter.split_documents(docs)
-        logger.info(f"Created {len(chunks)} semantic chunks.")
+            chunks = chunk_text(text, chunk_size=1000, chunk_overlap=100)
+            chunk_total += len(chunks)
 
-        # 3. Store in ChromaDB
-        for i, chunk in enumerate(chunks):
-            self.memory.store(
-                text=chunk.page_content,
-                role="document",
-                session_id="bulk_import",
-                metadata={
-                    "source": chunk.metadata.get("source", "unknown"),
-                    "type": "ingested_file"
-                }
-            )
-            if i % 10 == 0:
-                logger.info(f"Progress: {i}/{len(chunks)} chunks stored.")
+            for chunk in chunks:
+                self.memory.store(
+                    text=chunk,
+                    role="document",
+                    session_id="bulk_import",
+                    source=str(file_path),
+                    type="ingested_file",
+                )
 
-        logger.info("Bulk ingestion complete!")
+        logger.info("Bulk ingestion complete. Stored %d chunks from %d files.", chunk_total, len(files))
+
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         logger.error("Usage: python -m src.tools.ingest <directory_path>")
     else:

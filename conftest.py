@@ -1,13 +1,17 @@
 """Shared pytest fixtures for all test modules."""
 
+import logging
 import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from src.memory.stores.neo4j_store import Neo4jStore
+
 
 _WORKSPACE_TMP_ROOT = Path(__file__).resolve().parent / "data" / "pytest_tmp"
+logger = logging.getLogger(__name__)
 
 
 class _FakeEmbeddingModel:
@@ -51,3 +55,30 @@ def tmp_path():
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_neo4j_test_artifacts():
+    """
+    Purge graph test artifacts before and after the suite.
+
+    This keeps local Neo4j instances from accumulating nodes created by pytest
+    while avoiding destructive full-database wipes outside tests that explicitly
+    ask for them.
+    """
+    store = Neo4jStore()
+    if not store.driver:
+        yield
+        return
+
+    deleted_before = store.cleanup_test_artifacts()
+    if deleted_before:
+        logger.info("Removed %s stale Neo4j test artifacts before pytest.", deleted_before)
+
+    try:
+        yield
+    finally:
+        deleted_after = store.cleanup_test_artifacts()
+        if deleted_after:
+            logger.info("Removed %s Neo4j test artifacts after pytest.", deleted_after)
+        store.close()

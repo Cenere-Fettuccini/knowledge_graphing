@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from src.core.config import settings
 from src.core.limiter import InternalRateLimiter
-from src.core.limits_store import get_limit_for_model, log_429_event, load_limits
+from src.core.limits_store import (
+    get_limit_for_model,
+    is_text_output_category,
+    log_429_event,
+    load_limits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,14 @@ class LLMRouter:
         else:
             # Dynamically register every model imported from AI Studio
             for short_id, limits in overrides.items():
+                if not is_text_output_category(limits.get("category")):
+                    logger.info(
+                        "Skipping non-text chat model from router registry: %s (%s)",
+                        short_id,
+                        limits.get("category", "unknown"),
+                    )
+                    continue
+
                 lower_id = short_id.lower()
                 
                 # Exclude models not meant for text generation via generateContent

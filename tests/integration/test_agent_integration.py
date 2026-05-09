@@ -2,30 +2,30 @@
 
 import pytest
 import uuid
-from langchain_core.messages import AIMessage
 from src.core.agent import Agent
 from src.memory.manager import MemoryManager
 
 
-class _FakeLLM:
-    def bind_tools(self, _tools):
-        return self
+def _fake_run(self, _spec, user_prompt, deps):
+    history = deps.context_manager.assemble_context(
+        query=deps.query,
+        session_id=deps.session_id,
+        task_type=deps.task_type,
+    )["history"]
+    full_text = "\n".join(item["text"] for item in history) + f"\n{user_prompt}"
 
-    def invoke(self, messages):
-        full_text = "\n".join(str(getattr(msg, "content", "")) for msg in messages)
-        latest = str(messages[-1].content)
-
-        if "What programming language do I like?" in latest and "Rust" in full_text:
-            return AIMessage(content="You like Rust.")
-        if "Hello, how are you?" in latest:
-            return AIMessage(content="I'm doing well and ready to help.")
-        return AIMessage(content=f"I heard you: {latest}")
+    if "What programming language do I like?" in user_prompt and "Rust" in full_text:
+        return "You like Rust.", 42
+    if "Hello, how are you?" in user_prompt:
+        return "I'm doing well and ready to help.", 21
+    return f"I heard you: {user_prompt}", 13
 
 
 @pytest.fixture
 def agent(monkeypatch):
     """Agent backed by an isolated in-memory ChromaDB and fake LLM."""
-    monkeypatch.setattr(Agent, "_get_llm_instance", lambda self, spec: _FakeLLM())
+    monkeypatch.setattr(Agent, "_run_with_spec_sync", _fake_run)
+    monkeypatch.setattr(Agent, "_probe_provider_sync", lambda self, _spec: True)
     mem = MemoryManager(persist_path=":memory:")
     return Agent(memory=mem)
 

@@ -93,13 +93,25 @@ class MemoryManager:
             return json.dumps(value, ensure_ascii=True, sort_keys=True)
         return str(value)
 
+    def _prepare_chroma_metadata(self, metadata: dict) -> dict:
+        """Flatten metadata into Chroma-compatible scalar/list values."""
+        safe_metadata = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                safe_metadata[key] = value
+            elif isinstance(value, list):
+                safe_metadata[key] = [
+                    item if isinstance(item, (str, int, float, bool)) or item is None
+                    else self._coerce_text(item)
+                    for item in value
+                ]
+            else:
+                safe_metadata[key] = self._coerce_text(value)
+        return safe_metadata
+
     def store(self, text, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
         """Store a conversation turn with metadata."""
-        if not self._is_chroma_available():
-            logger.error("ChromaDB is offline, cannot store memory.")
-            return None
-
         metadata = {
             "role": role,
             "session_id": session_id,
@@ -110,13 +122,62 @@ class MemoryManager:
         if not normalized_text.strip():
             logger.warning("Skipping empty memory write for session %s", session_id)
             return None
+        chroma_metadata = self._prepare_chroma_metadata(metadata)
+
+        memory_id = None
+        if self._is_chroma_available():
+            try:
+                memory_id = self.chroma.add_memory(normalized_text, chroma_metadata)
+            except Exception as e:
+                logger.error("Failed to store memory in Chroma: %s", e)
+                self._health_cache_time = 0
+        else:
+            logger.error("ChromaDB is offline, cannot store memory.")
+
+        self._store_graph_memory(
+            text=normalized_text,
+            role=role,
+            session_id=session_id,
+            metadata=metadata,
+            memory_id=memory_id,
+        )
+        return memory_id
+
+    def _store_graph_memory(
+        self,
+        *,
+        text: str,
+        role: str,
+        session_id: str,
+        metadata: dict,
+        memory_id: str | None,
+    ) -> None:
+        if not self.neo4j.driver and not self.neo4j.verify_connection():
+            return
+
+        source_section = metadata.get("source_section") or "chat"
+        context = metadata.get("chat_context") or metadata.get("context")
+        graph_metadata = {
+            "chroma_id": memory_id,
+            "is_ephemeral": metadata.get("is_ephemeral", False),
+        }
+        for key in ("timestamp", "app_id", "user_id"):
+            if key in metadata:
+                graph_metadata[key] = metadata[key]
+
         try:
-            return self.chroma.add_memory(normalized_text, metadata)
+            self.neo4j.store_conversation_turn(
+                text=text,
+                role=role,
+                session_id=session_id,
+                timestamp=metadata.get("timestamp"),
+                source_section=source_section,
+                context=context if isinstance(context, dict) else None,
+                metadata=graph_metadata,
+            )
         except Exception as e:
-            logger.error("Failed to store memory in Chroma: %s", e)
-            # Invalidate cache on failure so next call re-checks
+            logger.error("Failed to store memory in Neo4j: %s", e)
             self._health_cache_time = 0
-            return None
 
     def search(self, query: str, k: int = 5, session_id: str | None = None,
                 include_ephemeral: bool = True):
@@ -170,16 +231,24 @@ class MemoryManager:
         self.chroma.delete_memories(where=where)
 
     def delete_session(self, session_id: str):
-        """Wipe an entire session from Chroma."""
-        if not self._is_chroma_available():
+        """Wipe an entire session from Chroma and Neo4j."""
+        chroma_ok = True
+        graph_ok = True
+
+        if self._is_chroma_available():
+            try:
+                self.chroma.delete_memories(where={"session_id": session_id})
+            except Exception as e:
+                logger.error("Failed to delete Chroma session %s: %s", session_id, e)
+                chroma_ok = False
+        else:
             logger.error("ChromaDB is offline, cannot delete session.")
-            return False
-        try:
-            self.chroma.delete_memories(where={"session_id": session_id})
-            return True
-        except Exception as e:
-            logger.error("Failed to delete session %s: %s", session_id, e)
-            return False
+            chroma_ok = False
+
+        if self.neo4j.driver or self.neo4j.verify_connection():
+            graph_ok = self.neo4j.delete_session_graph(session_id)
+
+        return chroma_ok and graph_ok
 
 
 # ── Singleton instance ────────────────────────────────────────────────────────

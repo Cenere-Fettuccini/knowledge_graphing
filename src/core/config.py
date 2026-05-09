@@ -5,12 +5,14 @@ Every module that needs configuration imports the singleton:
     from src.core.config import settings
 """
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """Typed, validated settings with automatic .env loading."""
+
+    _google_key_configs_override: list[dict[str, str]] | None = PrivateAttr(default=None)
 
     # ── Telegram ──────────────────────────────────────────────────────────────
     telegram_bot_token: str
@@ -78,10 +80,17 @@ class Settings(BaseSettings):
     @property
     def google_key_configs(self) -> list[dict[str, str]]:
         """Return per-key configs paired with their project-scoped quota bucket."""
+        if self._google_key_configs_override is not None:
+            return self._google_key_configs_override
         return [
             {"api_key": api_key, "project_scope": project_scope}
             for api_key, project_scope in zip(self.api_keys, self.project_scopes)
         ]
+
+    @google_key_configs.setter
+    def google_key_configs(self, value: list[dict[str, str]]) -> None:
+        """Allow tests to override computed key configs on the singleton instance."""
+        self._google_key_configs_override = value
 
     @property
     def allowed_user_ids(self) -> set[str]:

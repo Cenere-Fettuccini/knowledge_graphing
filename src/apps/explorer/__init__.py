@@ -1,0 +1,1 @@
+"""Explorer app registration."""

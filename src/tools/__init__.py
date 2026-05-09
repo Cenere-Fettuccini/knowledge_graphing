@@ -1,1 +1,1 @@
-"""LangChain @tool definitions — memory, tasks, calendar, search."""
+"""Shared tool definitions for the agent runtime."""

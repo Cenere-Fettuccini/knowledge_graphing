@@ -332,6 +332,62 @@
                 </div>
             </div>
 
+            <div class="page-view" id="page-financial">
+                <div style="padding: 32px 28px 40px;">
+                    <section class="module" style="max-width: 980px; margin: 0 auto;">
+                        <div class="inner-section" style="padding-bottom: 18px;">
+                            <h1 style="margin: 0 0 10px; font-size: 34px;">Financial Manager</h1>
+                            <p class="dim" style="max-width: 700px; line-height: 1.7;">
+                                This app will become the dedicated surface for account snapshots,
+                                spending analysis, planning, and finance-scoped agent workflows.
+                            </p>
+                        </div>
+                        <div class="inner-section" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(126, 145, 190, 0.08);">
+                                <h3 style="margin-top: 0;">Accounts</h3>
+                                <p class="dim">Future account summaries, balances, and net worth snapshots live here.</p>
+                            </div>
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(190, 170, 126, 0.08);">
+                                <h3 style="margin-top: 0;">Spending</h3>
+                                <p class="dim">Category trends, recurring bills, and anomaly detection can be isolated here.</p>
+                            </div>
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(127, 163, 141, 0.08);">
+                                <h3 style="margin-top: 0;">Agent Profile</h3>
+                                <p class="dim">This app will eventually use finance-safe tools without exposing agent internals.</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="page-view" id="page-routine">
+                <div style="padding: 32px 28px 40px;">
+                    <section class="module" style="max-width: 980px; margin: 0 auto;">
+                        <div class="inner-section" style="padding-bottom: 18px;">
+                            <h1 style="margin: 0 0 10px; font-size: 34px;">Routine Scheduler</h1>
+                            <p class="dim" style="max-width: 700px; line-height: 1.7;">
+                                This app is reserved for routines, recurring plans, time blocks,
+                                and calendar-driven automation flows.
+                            </p>
+                        </div>
+                        <div class="inner-section" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(196, 155, 118, 0.08);">
+                                <h3 style="margin-top: 0;">Routines</h3>
+                                <p class="dim">Daily and weekly structures can live here without being mixed into chat or graph views.</p>
+                            </div>
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(143, 133, 154, 0.08);">
+                                <h3 style="margin-top: 0;">Timeblocks</h3>
+                                <p class="dim">Planned sessions, suggested schedules, and future calendar integration fit here.</p>
+                            </div>
+                            <div style="padding: 18px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: rgba(127, 163, 141, 0.08);">
+                                <h3 style="margin-top: 0;">Agent Profile</h3>
+                                <p class="dim">This app can later be bound to scheduling-specific tools and constraints.</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
             <div class="modal-overlay" id="chatDeleteModal" aria-hidden="true">
                 <div class="modal chat-delete-modal" role="dialog" aria-modal="true" aria-labelledby="chatDeleteModalTitle">
                     <h2 id="chatDeleteModalTitle">Delete Conversation?</h2>
@@ -473,6 +529,8 @@
     <script src="api.js"></script>
     <script src="app.js"></script>
     <script src="explorer-page.js"></script>
+    <script src="financial-page.js"></script>
+    <script src="routine-page.js"></script>
     <script src="chat-page.js"></script>
     <script src="credits-page.js"></script>
     <script src="panel.js"></script>

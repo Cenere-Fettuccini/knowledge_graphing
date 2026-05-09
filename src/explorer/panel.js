@@ -2,9 +2,60 @@
  * Detail Panel logic
  */
 
+function getExplorerClient() {
+    return window.AIManagerShell?.clients?.explorer || window.AIManagerClients?.explorer;
+}
+
+function buildGraphChatContext(node, detail) {
+    const connections = detail?.connections || [];
+    return {
+        source_section: 'explorer',
+        context_type: 'graph_node',
+        context_id: node.id,
+        context_summary: `${node.name} (${node.label})`,
+        context_payload: {
+            node: {
+                id: node.id,
+                label: node.label,
+                name: node.name,
+            },
+            details: detail?.node || node,
+            connections,
+            relation_summary: connections
+                .slice(0, 8)
+                .map((entry) => `${entry.type} -> ${entry.target}`)
+                .join(', '),
+        },
+    };
+}
+
 const Panel = {
     typeSequence: 0,
+    appendProvHeader(list, label, color = 'var(--fg-dim)') {
+        const header = document.createElement('li');
+        header.innerHTML = `<span style="font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:${color}">${label}</span>`;
+        header.classList.add('visible');
+        list.appendChild(header);
+    },
+
+    appendProvEntry(list, html, onClick = null, delay = 100) {
+        const li = document.createElement('li');
+        li.innerHTML = html;
+        if (onClick) {
+            li.style.cursor = 'pointer';
+            li.addEventListener('click', onClick);
+        }
+        list.appendChild(li);
+        setTimeout(() => li.classList.add('visible'), delay);
+    },
+
+    focusProvenanceNode(id) {
+        this.loadNode(id);
+        if (window.GraphManager) window.GraphManager.focusNode(id);
+    },
+
     init() {
+        if (this._initialized) return;
         this.container = document.getElementById('detailPanel');
         this.nodeInfo = document.getElementById('nodeInfo');
         this.nodeConnections = document.getElementById('nodeConnections');
@@ -82,6 +133,7 @@ const Panel = {
                 expandModule(mod);
             });
         });
+        this._initialized = true;
     },
 
     close() {
@@ -141,7 +193,7 @@ const Panel = {
         }
 
         this.nodeInfo.innerHTML = '<p class="dim">Fetching data...</p>';
-        const data = await API.getNodeDetail(nodeId);
+        const data = await getExplorerClient().getNodeDetail(nodeId);
 
         if (!data || !data.node) {
             await this.typeWriter(this.nodeInfo, '<p class="dim" style="color:var(--c-red)">ERR: Node not found.</p>');
@@ -214,20 +266,124 @@ const Panel = {
         await this.typeWriter(this.nodeInfo, html);
 
         document.getElementById('talkFromNodeBtn')?.addEventListener('click', () => {
-            window.ChatPage?.openFromGraph?.({
-                id: n.id,
-                name: n.name,
-                label: n.label,
+            void window.AIManagerShell?.navigateToSection('chat', {
+                type: 'chat:open-context',
+                payload: buildGraphChatContext(n, data),
             });
         });
 
         // ── Provenance / Belief Trail ────────────────────────────────────
         provList.innerHTML = '';
+        try {
+            const provenance = await getExplorerClient().getNodeProvenance(nodeId);
+            provSec.style.display = 'block';
+            let rendered = false;
+
+            if (provenance?.chain?.length > 1) {
+                this.appendProvHeader(provList, 'Evolution Chain');
+                provenance.chain.forEach((b, i) => {
+                    const statusIcon = b.status === 'active' ? '●' : '○';
+                    const statusColor = b.status === 'active' ? 'var(--c-green, #7FA38D)' : 'var(--fg-dim)';
+                    this.appendProvEntry(
+                        provList,
+                        `<span style="color:${statusColor}">${statusIcon}</span> "${b.content}"<br/><span style="opacity:0.5;font-size:9px">${b.status} · conf ${Math.round((b.confidence || 0) * 100)}% · ${b.created_at || ''}</span>`,
+                        () => this.focusProvenanceNode(b.id),
+                        i * 120 + 100
+                    );
+                });
+                rendered = true;
+            }
+
+            if (provenance?.evidence?.supports?.length) {
+                this.appendProvHeader(provList, 'Supporting Evidence', 'var(--c-green, #7FA38D)');
+                provenance.evidence.supports.forEach((s, i) => {
+                    this.appendProvEntry(
+                        provList,
+                        `"${s.text || s.session_id}"<br/><span style="opacity:0.5;font-size:9px">${s.timestamp || ''}</span>`,
+                        null,
+                        i * 120 + 220
+                    );
+                });
+                rendered = true;
+            }
+
+            if (provenance?.evidence?.weakens?.length) {
+                this.appendProvHeader(provList, 'Weakening Evidence', 'var(--c-red, #A37A87)');
+                provenance.evidence.weakens.forEach((w, i) => {
+                    this.appendProvEntry(
+                        provList,
+                        `"${w.text || w.session_id}"<br/><span style="opacity:0.5;font-size:9px">${w.timestamp || ''}</span>`,
+                        null,
+                        i * 120 + 220
+                    );
+                });
+                rendered = true;
+            }
+
+            if (provenance?.timeline?.length) {
+                this.appendProvHeader(provList, 'Conversation Timeline', 'var(--color-topic)');
+                provenance.timeline.forEach((entry, i) => {
+                    this.appendProvEntry(
+                        provList,
+                        `<span class="highlight">${entry.label}</span> "${entry.text || entry.name}"<br/><span style="opacity:0.5;font-size:9px">turn ${entry.sequence || '?'} · ${entry.timestamp || ''}</span>`,
+                        () => this.focusProvenanceNode(entry.id),
+                        i * 90 + 180
+                    );
+                });
+                rendered = true;
+            }
+
+            if (provenance?.incoming?.length) {
+                this.appendProvHeader(provList, 'Incoming Links');
+                provenance.incoming.forEach((entry, i) => {
+                    this.appendProvEntry(
+                        provList,
+                        `${entry.name} <span class="highlight">(${entry.label})</span><br/><span style="opacity:0.5;font-size:9px">${entry.type}</span>`,
+                        () => this.focusProvenanceNode(entry.id),
+                        i * 90 + 180
+                    );
+                });
+                rendered = true;
+            }
+
+            if (provenance?.outgoing?.length) {
+                this.appendProvHeader(provList, 'Outgoing Links');
+                provenance.outgoing.forEach((entry, i) => {
+                    this.appendProvEntry(
+                        provList,
+                        `${entry.name} <span class="highlight">(${entry.label})</span><br/><span style="opacity:0.5;font-size:9px">${entry.type}</span>`,
+                        () => this.focusProvenanceNode(entry.id),
+                        i * 90 + 180
+                    );
+                });
+                rendered = true;
+            }
+
+            if (!rendered) {
+                this.appendProvEntry(provList, '<span class="dim">No provenance trail yet.</span>');
+            }
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    provSec.classList.remove('slide-out');
+                });
+            });
+            return;
+        } catch (e) {
+            provSec.style.display = 'block';
+            this.appendProvEntry(provList, '<span class="dim">Could not load provenance.</span>');
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    provSec.classList.remove('slide-out');
+                });
+            });
+            return;
+        }
         if (n.label === 'Belief') {
             provSec.style.display = 'block';
 
             try {
-                const trail = await fetch(`/api/graph/belief/${nodeId}/trail`).then(r => r.json());
+                const trail = await getExplorerClient().getBeliefTrail(nodeId);
 
                 // Evolution chain
                 if (trail.chain && trail.chain.length > 1) {
@@ -327,6 +483,7 @@ const StatusManager = {
     _prevNeo4j: null,  // Track previous state for transition detection
 
     init() {
+        if (this._initialized) return;
         this.btn = document.getElementById('refreshStatusBtn');
         this.neo4jBadge = document.getElementById('status-neo4j');
         this.chromaBadge = document.getElementById('status-chroma');
@@ -338,12 +495,19 @@ const StatusManager = {
                 window.GraphManager?.reload?.()
             ]);
         });
-        
-        // Initial fetch
+        this._initialized = true;
+    },
+
+    start() {
+        this.init();
         this.fetchStatus();
-        
-        // Auto refresh every 30s
-        setInterval(() => this.fetchStatus(), 30000);
+        clearInterval(this._timerId);
+        this._timerId = setInterval(() => this.fetchStatus(), 30000);
+    },
+
+    stop() {
+        clearInterval(this._timerId);
+        this._timerId = null;
     },
     
     async fetchStatus() {
@@ -360,7 +524,7 @@ const StatusManager = {
         svg.style.transition = 'transform 0.5s ease';
         svg.style.transform = 'rotate(180deg)';
         
-        const data = await API.getSystemStatus();
+        const data = await getExplorerClient().getSystemStatus();
         
         this.updateBadge(this.neo4jBadge, data.neo4j, data.details?.neo4j);
         this.updateBadge(this.chromaBadge, data.chroma, data.details?.chroma);
@@ -407,15 +571,26 @@ const StatusManager = {
 
 const TaskManager = {
     init() {
+        if (this._initialized) return;
         this.container = document.getElementById('activeTasks');
+        this._initialized = true;
+    },
+
+    start() {
+        this.init();
         this.fetchTasks();
-        setInterval(() => this.fetchTasks(), 60000); // Every minute
+        clearInterval(this._timerId);
+        this._timerId = setInterval(() => this.fetchTasks(), 60000);
+    },
+
+    stop() {
+        clearInterval(this._timerId);
+        this._timerId = null;
     },
 
     async fetchTasks() {
         try {
-            const res = await fetch('/api/tasks/active');
-            const tasks = await res.json();
+            const tasks = await getExplorerClient().getActiveTasks();
             this.render(tasks);
         } catch (e) {
             console.error("Failed to fetch tasks", e);
@@ -441,9 +616,25 @@ const TaskManager = {
     }
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-    Panel.init();
-    // ThemeEngine (app.js) handles theme globally
-    StatusManager.init();
-    TaskManager.init();
-});
+window.ExplorerPageController = {
+    _active: false,
+    activate(shellContext) {
+        this._active = true;
+        this.shellContext = shellContext;
+        Panel.init();
+        StatusManager.start();
+        TaskManager.start();
+        window.GraphManager?.activate?.();
+    },
+
+    deactivate() {
+        this._active = false;
+        StatusManager.stop();
+        TaskManager.stop();
+        window.GraphManager?.deactivate?.();
+    },
+
+    setSearchQuery(query) {
+        window.GraphManager?.setSearchQuery?.(query);
+    },
+};
