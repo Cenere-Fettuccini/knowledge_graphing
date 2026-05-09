@@ -4,6 +4,14 @@ Owns all persistence: ChromaDB (semantic/episodic memory) and Neo4j (knowledge g
 **Apps interact only through `MemoryManager`'s public methods, injected via `get_memory_manager()`.**
 Never access `memory.neo4j.*` or `memory.chroma.*` from app code.
 
+## Storage roles
+- **ChromaDB** is the source of truth for raw conversation history. Every `store()`
+  call lands here with `analyzed: False` so the analyzer pipeline (under
+  `src/agent_platform/analyzers/`) can pick it up later.
+- **Neo4j** holds *only* inferred, durable knowledge — entities, relationships, and
+  beliefs produced by the analyzer. Conversation turns themselves are **not**
+  written to the graph.
+
 ## Files
 | File | Role |
 |------|------|
@@ -11,7 +19,6 @@ Never access `memory.neo4j.*` or `memory.chroma.*` from app code.
 | `protocol.py` | `MemoryProtocol` — structural interface for type hints and test mocks |
 | `stores/chroma_store.py` | ChromaDB client wrapper (internal) |
 | `stores/neo4j_store.py` | Neo4j driver wrapper (internal) |
-| `knowledge_extractor.py` | Extracts belief signals from conversation text (internal) |
 | `embeddings/google.py` | Google embedding model client (internal) |
 
 ## Public Interface — `MemoryManager`
@@ -29,7 +36,8 @@ memory.invalidate_health_cache() -> None
 ### Conversation Memory (ChromaDB)
 ```python
 memory.store(text, role: str, session_id: str, is_ephemeral: bool = False, **extra) -> str | None
-# Stores a turn in Chroma + Neo4j. Returns the chroma memory_id.
+# Stores a turn in Chroma only, with metadata `analyzed: False`. Returns the chroma memory_id.
+# The graph is populated separately by the analyzer pipeline.
 
 memory.search(query: str, k: int = 5, session_id: str | None = None, include_ephemeral: bool = True) -> list
 # Semantic search. Each result: {"id": str, "text": str, "metadata": dict, "distance": float}

@@ -4,7 +4,6 @@ import json
 import logging
 import time
 from src.memory.stores.chroma_store import ChromaStore
-from src.memory.knowledge_extractor import extract_knowledge_signals
 from src.memory.stores.neo4j_store import Neo4jStore
 
 logger = logging.getLogger(__name__)
@@ -112,11 +111,14 @@ class MemoryManager:
 
     def store(self, text, role: str, session_id: str,
               is_ephemeral: bool = False, **extra):
-        """Store a conversation turn with metadata."""
+        """Store a conversation turn in Chroma. Knowledge extraction is handled
+        asynchronously by the analyzer pipeline — rows land here with
+        ``analyzed: False`` and the scheduler picks them up on its next tick."""
         metadata = {
             "role": role,
             "session_id": session_id,
             "is_ephemeral": is_ephemeral,
+            "analyzed": False,
             **extra,
         }
         normalized_text = self._coerce_text(text)
@@ -135,99 +137,7 @@ class MemoryManager:
         else:
             logger.error("ChromaDB is offline, cannot store memory.")
 
-        self._store_graph_memory(
-            text=normalized_text,
-            role=role,
-            session_id=session_id,
-            metadata=metadata,
-            memory_id=memory_id,
-        )
         return memory_id
-
-    def _store_graph_memory(
-        self,
-        *,
-        text: str,
-        role: str,
-        session_id: str,
-        metadata: dict,
-        memory_id: str | None,
-    ) -> None:
-        if not self.neo4j.driver and not self.neo4j.verify_connection():
-            return
-
-        source_section = metadata.get("source_section") or "chat"
-        context = metadata.get("chat_context") or metadata.get("context")
-        graph_metadata = {
-            "chroma_id": memory_id,
-            "is_ephemeral": metadata.get("is_ephemeral", False),
-        }
-        for key in ("timestamp", "app_id", "user_id"):
-            if key in metadata:
-                graph_metadata[key] = metadata[key]
-
-        try:
-            turn_id = self.neo4j.store_conversation_turn(
-                text=text,
-                role=role,
-                session_id=session_id,
-                timestamp=metadata.get("timestamp"),
-                source_section=source_section,
-                context=context if isinstance(context, dict) else None,
-                metadata=graph_metadata,
-            )
-            self._store_knowledge_signals(
-                text=text,
-                role=role,
-                session_id=session_id,
-                context=context if isinstance(context, dict) else None,
-                turn_id=turn_id,
-            )
-        except Exception as e:
-            logger.error("Failed to store memory in Neo4j: %s", e)
-            self._health_cache_time = 0
-
-    def _store_knowledge_signals(
-        self,
-        *,
-        text: str,
-        role: str,
-        session_id: str,
-        context: dict | None,
-        turn_id: str | None,
-    ) -> None:
-        if role != "user":
-            return
-
-        signals = extract_knowledge_signals(text, context=context)
-        if not signals:
-            return
-
-        anchor_entity_id = None
-        anchor_label = (((context or {}).get("context_payload") or {}).get("node") or {}).get("label")
-        if (
-            context
-            and context.get("context_type") == "graph_node"
-            and context.get("context_id")
-            and anchor_label in {"Entity", "Project", "Task"}
-        ):
-            anchor_entity_id = context["context_id"]
-
-        for signal in signals:
-            entity_id = anchor_entity_id or self.neo4j.upsert_entity(
-                signal.entity_name,
-                entity_type=signal.entity_type,
-            )
-            belief_id = self.neo4j.record_belief_signal(
-                content=signal.content,
-                belief_key=signal.belief_key,
-                about_entity_id=entity_id,
-                source_session_id=session_id,
-                source_text=text,
-                confidence=signal.confidence,
-            )
-            if turn_id:
-                self.neo4j.add_edge(belief_id, turn_id, "DERIVED_FROM")
 
     def search(self, query: str, k: int = 5, session_id: str | None = None,
                 include_ephemeral: bool = True):
