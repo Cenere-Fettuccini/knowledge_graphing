@@ -24,6 +24,18 @@ def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:
     return memory.graph_belief_trail(belief_id)
 
 
+def get_bootstrap_status(memory: MemoryManager) -> dict:
+    user = memory.get_user_root()
+    return {"initialized": user is not None, "user": user}
+
+
+def bootstrap_user(name: str, memory: MemoryManager) -> dict:
+    if not name or not name.strip():
+        raise ValueError("name must be a non-empty string")
+    user = memory.bootstrap_user_root(name.strip())
+    return {"user": user}
+
+
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:
     memory.invalidate_health_cache()
     health = memory.status()

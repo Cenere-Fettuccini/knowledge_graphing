@@ -46,6 +46,35 @@ def test_delete_session_removes_from_chroma_and_neo4j():
     assert deleted["session_id"] == "test_session_123"
 
 
+def test_bootstrap_user_root_delegates_to_neo4j():
+    manager = MemoryManager.__new__(MemoryManager)
+    captured = {}
+
+    class FakeNeo4j:
+        def bootstrap_user_root(self, name):
+            captured["name"] = name
+            return {"id": "user:kevin", "label": "User", "labels": ["Person", "User"], "name": name}
+
+    manager.neo4j = FakeNeo4j()
+
+    result = manager.bootstrap_user_root("Kevin")
+    assert captured["name"] == "Kevin"
+    assert result["id"] == "user:kevin"
+    assert "User" in result["labels"]
+    assert "Person" in result["labels"]
+
+
+def test_user_root_exists_delegates_to_neo4j():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    class FakeNeo4j:
+        def user_root_exists(self):
+            return True
+
+    manager.neo4j = FakeNeo4j()
+    assert manager.user_root_exists() is True
+
+
 def test_store_writes_to_chroma_only_with_unanalyzed_flag():
     """Stage-1 cutover: store() writes to Chroma with analyzed=False and never to Neo4j."""
     manager = MemoryManager.__new__(MemoryManager)

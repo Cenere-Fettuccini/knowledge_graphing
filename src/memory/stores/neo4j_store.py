@@ -15,7 +15,8 @@ class Neo4jStore:
     """Interface to the Neo4j Knowledge Graph."""
 
     EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
-    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project", "Entity"}
+    EXPLORER_ROOT_LABELS = {"User", "Person", "Belief", "Task", "Project", "Entity"}
+    USER_ROOT_LABELS = ("Person", "User")
     TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
     TEST_SESSION_PREFIXES = ("test_", "test-", "session_", "pytest_")
 
@@ -309,14 +310,81 @@ class Neo4jStore:
             }
         }
 
+    @staticmethod
+    def _pick_primary_label(labels: list[str]) -> str:
+        if not labels:
+            return "Unknown"
+        # Prefer the user's root label so the centring/coloring code lights up
+        # on the right node when a multi-label root (Person:User) is present.
+        for preferred in ("User", "Person"):
+            if preferred in labels:
+                return preferred
+        return labels[0]
+
     def _serialize_node(self, node) -> dict:
-        label = list(node.labels)[0] if node.labels else "Unknown"
+        labels = list(node.labels) if node.labels else []
+        primary = self._pick_primary_label(labels)
         return {
             "id": node.get("id"),
-            "label": label,
+            "label": primary,
+            "labels": labels or [primary],
             "name": node.get("name", "Unnamed"),
             **{k: v for k, v in node.items() if k not in ["id", "name"]},
         }
+
+    # ── User root / bootstrap ─────────────────────────────────────────────────
+
+    def user_root_exists(self) -> bool:
+        """True if a `:User` root node has been seeded."""
+        if not self.driver and not self.verify_connection():
+            return False
+        cypher = "MATCH (u:User {is_root: true}) RETURN count(u) > 0 AS exists"
+        with self.driver.session() as session:
+            record = session.run(cypher).single()
+            return bool(record and record["exists"])
+
+    def get_user_root(self) -> dict | None:
+        """Return the `:User` root node, or None if not yet bootstrapped."""
+        if not self.driver and not self.verify_connection():
+            return None
+        cypher = "MATCH (u:User {is_root: true}) RETURN u LIMIT 1"
+        with self.driver.session() as session:
+            record = session.run(cypher).single()
+            if not record or record["u"] is None:
+                return None
+            return self._serialize_node(record["u"])
+
+    def bootstrap_user_root(self, name: str) -> dict:
+        """Hard-wipe the graph and seed a single `:Person:User` root node."""
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j is offline; cannot bootstrap user root.")
+
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("name must be a non-empty string")
+
+        slug = self._slugify(clean_name)
+        node_id = f"user:{slug}"
+        now = datetime.now(timezone.utc).isoformat()
+        labels_clause = ":".join(self.USER_ROOT_LABELS)
+
+        wipe = "MATCH (n) DETACH DELETE n"
+        seed = f"""
+        CREATE (u:{labels_clause} {{
+            id: $node_id,
+            name: $name,
+            slug: $slug,
+            is_root: true,
+            created_at: $now,
+            updated_at: $now
+        }})
+        RETURN u
+        """
+
+        with self.driver.session() as session:
+            session.run(wipe)
+            record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
+            return self._serialize_node(record["u"])
 
     def _looks_like_test_artifact(self, node_data: dict) -> bool:
         node_id = str(node_data.get("id") or "").lower()

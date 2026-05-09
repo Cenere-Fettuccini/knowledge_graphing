@@ -59,5 +59,18 @@
                 return [];
             }
         },
+
+        async getBootstrapStatus() {
+            try {
+                return await http.get('/api/explorer/bootstrap/status');
+            } catch (error) {
+                console.error('ExplorerClient.getBootstrapStatus failed', error);
+                return { initialized: false, user: null, _error: true };
+            }
+        },
+
+        async bootstrap(name) {
+            return await http.post('/api/explorer/bootstrap', { name });
+        },
     };
 })();

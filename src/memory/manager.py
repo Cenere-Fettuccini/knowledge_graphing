@@ -262,6 +262,24 @@ class MemoryManager:
         evidence = self.neo4j.get_belief_evidence(belief_id)
         return {"chain": chain, "evidence": evidence}
 
+    # ── Bootstrap ────────────────────────────────────────────────────────────
+
+    def user_root_exists(self) -> bool:
+        """True if the explorer has been bootstrapped with a `:User` root."""
+        return self.neo4j.user_root_exists()
+
+    def get_user_root(self) -> dict | None:
+        """Return the seeded `:User` root node, or None if not yet bootstrapped."""
+        return self.neo4j.get_user_root()
+
+    def bootstrap_user_root(self, name: str) -> dict:
+        """Hard-wipe the graph and seed a `:Person:User` root.
+
+        Chroma is not touched — historical conversations remain queued for the
+        analyzer to re-process against the freshly-seeded graph.
+        """
+        return self.neo4j.bootstrap_user_root(name)
+
 
 _instance: MemoryManager | None = None
 

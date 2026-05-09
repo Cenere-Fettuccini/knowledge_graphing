@@ -40,6 +40,8 @@ async def get_system_status(
 **In `services.py` (business logic):**
 ```python
 def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict: ...
+def get_bootstrap_status(memory: MemoryManager) -> dict: ...
+def bootstrap_user(name: str, memory: MemoryManager) -> dict: ...
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict: ...
 ```
 
@@ -58,6 +60,12 @@ memory.graph_node_detail(node_id: str) -> dict
 memory.graph_node_provenance(node_id: str) -> dict
 memory.graph_active_tasks() -> list[dict]
 memory.graph_belief_trail(belief_id: str) -> dict
+
+memory.user_root_exists() -> bool
+memory.get_user_root() -> dict | None
+memory.bootstrap_user_root(name: str) -> dict
+# Hard-wipes the graph and seeds a `:Person:User` root. Used by the
+# first-run bootstrap modal in the Explorer page.
 ```
 
 ### `AgentService`

@@ -70,6 +70,20 @@ memory.graph_belief_trail(belief_id: str) -> dict
 # {"chain": list[dict], "evidence": list[dict]}
 ```
 
+### Bootstrap (Neo4j)
+```python
+memory.user_root_exists() -> bool
+# True once a `:Person:User {is_root: true}` node has been seeded.
+
+memory.get_user_root() -> dict | None
+# Returns the seeded root node, or None if not yet bootstrapped.
+
+memory.bootstrap_user_root(name: str) -> dict
+# Hard-wipes Neo4j and seeds a single `:Person:User` root with the given name.
+# Chroma is left intact — historical conversations remain queued for the
+# analyzer to re-process against the fresh graph.
+```
+
 ## Adding New Graph Queries
 Add the method to `MemoryManager` in `manager.py` — it wraps the appropriate
 `self.neo4j.*` call. Never expose `self.neo4j` or `self.chroma` to callers.

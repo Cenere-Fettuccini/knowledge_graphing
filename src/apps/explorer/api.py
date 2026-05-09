@@ -1,12 +1,31 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from src.agent_platform.public.agent_service import AgentService, get_agent_service
 from src.apps.explorer import services
 from src.memory.manager import MemoryManager, get_memory_manager
 
 router = APIRouter()
+
+
+@router.get("/bootstrap/status")
+async def get_bootstrap_status(memory: MemoryManager = Depends(get_memory_manager)):
+    return services.get_bootstrap_status(memory)
+
+
+@router.post("/bootstrap")
+async def bootstrap_user(
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    name = (payload or {}).get("name", "")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail="`name` is required and must be a non-empty string.")
+    try:
+        return services.bootstrap_user(name, memory)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/graph/overview")
