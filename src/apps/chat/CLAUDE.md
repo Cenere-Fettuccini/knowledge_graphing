@@ -7,55 +7,61 @@ the Explorer app.
 ## Files
 | File | Role |
 |------|------|
-| `api.py` | FastAPI router — thin HTTP layer, delegates everything to `services.py` |
+| `api.py` | FastAPI router — injects deps via `Depends()`, delegates to `services.py` |
 | `services.py` | All business logic: session management, context building, message dispatch |
 | `app.py` | `AppDefinition` registration (metadata only) |
 
 ## Allowed Imports (what this app may use)
 ```python
-from src.agent_platform.public.agent_service import agent_service
+from fastapi import Depends
+from src.agent_platform.public.agent_service import get_agent_service, AgentService
 from src.agent_platform.public.contracts import AgentRunRequest
-from src.memory.manager import memory_manager
+from src.memory.manager import get_memory_manager, MemoryManager
 ```
 
-## Public Methods Used from Each Import
+## Usage Pattern
 
-### `agent_service`
+**In `api.py` (routes):**
 ```python
-await agent_service.arun(request: AgentRunRequest) -> AgentRunResult
+@router.post("/message")
+async def post_message(
+    body: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+    service: AgentService = Depends(get_agent_service),
+):
+    return await services.send_chat_message(..., memory=memory, service=service)
+```
+
+**In `services.py` (business logic):**
+```python
+def list_chat_sessions(memory: MemoryManager) -> dict: ...
+async def send_chat_message(..., memory: MemoryManager, service: AgentService) -> dict: ...
+```
+
+## Public Methods Used from Each Dependency
+
+### `AgentService`
+```python
+await service.arun(request: AgentRunRequest) -> AgentRunResult
 # .reply: str   .session_id: str   .reply_timestamp: str | None
 ```
 
-### `memory_manager` (public methods only)
+### `MemoryManager` (public methods only)
 ```python
-memory_manager.get_history(session_id: str, limit: int = 20) -> list[dict]
+memory.get_history(session_id: str, limit: int = 20) -> list[dict]
 # each item: {"id": str, "text": str, "metadata": {"role": str, "timestamp": str, ...}}
 
-memory_manager.list_sessions(limit: int = 500) -> dict
+memory.list_sessions(limit: int = 500) -> dict
 # {"documents": list[str], "metadatas": list[dict]}
 
-memory_manager.graph_node_detail(node_id: str) -> dict
+memory.graph_node_detail(node_id: str) -> dict
 # {"node": {id, label, name, ...}, "connections": [{type, target}, ...]}
 
-memory_manager.delete_session(session_id: str) -> bool
-```
-
-### `AgentRunRequest` fields
-```python
-AgentRunRequest(
-    app_id="chat",
-    user_id="web_user",
-    session_id=str,
-    message=str,               # raw user text (stored as-is)
-    message_timestamp=str,     # ISO timestamp, optional
-    prompt_text=str,           # assembled prompt (may include context)
-    store_text=str,            # what goes into memory
-    store_metadata=dict,
-    context=dict,
-)
+memory.delete_session(session_id: str) -> bool
 ```
 
 ## What NOT to Do
 - Do not import `src.core.router` or any other `src.core.*` internals
-- Do not access `memory_manager.neo4j.*` or `memory_manager.chroma.*` directly
+- Do not access `memory.neo4j.*` or `memory.chroma.*` directly
 - Do not import from other apps (`src.apps.explorer`, etc.)
+- Do not use module-level singleton imports — always go through `Depends()` in routes

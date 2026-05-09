@@ -18,26 +18,54 @@ Five independent apps. **Apps must never import from each other.**
 | financial_manager | `/apps/financial-manager` | Finance workflows (stub) |
 | routine_scheduler | `/apps/routine-scheduler` | Scheduling/automation (stub) |
 
-## The Three Shared Singletons
+## Shared Infrastructure
+
 Everything flows through these — nothing else should be imported from core internals.
 
-| Singleton | Import path | What it does |
-|-----------|------------|--------------|
+| Factory / Import | Module | What it does |
+|-----------------|--------|--------------|
+| `get_memory_manager()` | `src.memory.manager` | Returns shared ChromaDB + Neo4j facade (lazy, created on first call) |
+| `get_agent_service()` | `src.agent_platform.public.agent_service` | Returns shared agent gateway (lazy, created on first call) |
 | `settings` | `src.core.config` | All config (env vars, API keys, DB URIs) |
-| `memory_manager` | `src.memory.manager` | ChromaDB + Neo4j facade |
-| `agent_service` | `src.agent_platform.public.agent_service` | Agent gateway for apps |
 
 ## The Golden Rule for Apps
-**Apps import from:**
-- `src.agent_platform.public.contracts` — `AgentRunRequest`, `AgentRunResult`
-- `src.agent_platform.public.agent_service` — `agent_service`
-- `src.memory.manager` — `memory_manager` (public methods only, no `.neo4j.*` or `.chroma.*`)
-- `src.core.config` — `settings`
+
+**FastAPI routes** inject dependencies via `Depends()`:
+```python
+from fastapi import Depends
+from src.memory.manager import get_memory_manager, MemoryManager
+from src.agent_platform.public.agent_service import get_agent_service, AgentService
+
+@router.get("/endpoint")
+async def my_endpoint(
+    memory: MemoryManager = Depends(get_memory_manager),
+    service: AgentService = Depends(get_agent_service),
+):
+    return services.my_func(memory, service)
+```
+
+**Service functions** accept dependencies as parameters:
+```python
+from src.memory.manager import MemoryManager
+from src.agent_platform.public.agent_service import AgentService
+
+def my_func(memory: MemoryManager, service: AgentService) -> dict:
+    ...
+```
+
+**Non-FastAPI code** (tools, workers, bot) calls the factory directly:
+```python
+from src.memory.manager import get_memory_manager
+
+def my_tool(param: str) -> str:
+    memory = get_memory_manager()
+    ...
+```
 
 **Apps do NOT import from:**
 - `src.core.router`, `src.core.agent`, `src.core.context`, `src.core.limiter`
 - Other apps (`src.apps.*`)
-- `memory_manager.neo4j.*` or `memory_manager.chroma.*` — always use the public methods
+- `memory.neo4j.*` or `memory.chroma.*` — always use the public methods on `MemoryManager`
 
 ## Project Structure
 ```

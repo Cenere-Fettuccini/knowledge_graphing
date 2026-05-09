@@ -7,7 +7,7 @@ It hides all internals: prompt assembly, memory retrieval, model routing, tool e
 | File | Role |
 |------|------|
 | `contracts.py` | Frozen dataclasses: `AgentRunRequest`, `AgentRunResult`, `AgentStatus`, `MemorySearchRequest` |
-| `agent_service.py` | `AgentService` class + `agent_service` singleton |
+| `agent_service.py` | `AgentService` class + `get_agent_service()` lazy factory |
 
 ## Contracts (`contracts.py`)
 
@@ -45,37 +45,54 @@ class MemorySearchRequest:
     include_ephemeral: bool = True
 ```
 
-## Agent Service (`agent_service`)
+## Agent Service API
 
 ```python
 # Synchronous
-agent_service.run(request: AgentRunRequest) -> AgentRunResult
-agent_service.status(force: bool = False) -> AgentStatus
-agent_service.get_history(session_id: str, limit: int = 20) -> list[dict]
-agent_service.clear_session(session_id: str) -> None
+service.run(request: AgentRunRequest) -> AgentRunResult
+service.status(force: bool = False) -> AgentStatus
+service.get_history(session_id: str, limit: int = 20) -> list[dict]
+service.clear_session(session_id: str) -> None
 
 # Async (prefer these in FastAPI endpoints)
-await agent_service.arun(request: AgentRunRequest) -> AgentRunResult
-await agent_service.astatus(force: bool = False) -> AgentStatus
-await agent_service.aquota_status() -> list[dict]
+await service.arun(request: AgentRunRequest) -> AgentRunResult
+await service.astatus(force: bool = False) -> AgentStatus
+await service.aquota_status() -> list[dict]
 # aquota_status returns: [{"model": str, "project_scope": str, "headroom": float,
 #                          "rpm_limit": int, "rpd_limit": int}, ...]
 ```
 
 ## Typical App Usage Pattern
+
+**In routes (api.py):**
 ```python
-from src.agent_platform.public.agent_service import agent_service
+from fastapi import Depends
+from src.agent_platform.public.agent_service import get_agent_service, AgentService
+from src.agent_platform.public.contracts import AgentRunRequest
+from src.apps.my_app import services
+
+@router.post("/message")
+async def post_message(
+    body: dict,
+    service: AgentService = Depends(get_agent_service),
+):
+    return await services.handle_message(body, service)
+```
+
+**In services (services.py):**
+```python
+from src.agent_platform.public.agent_service import AgentService
 from src.agent_platform.public.contracts import AgentRunRequest
 
-result = await agent_service.arun(AgentRunRequest(
-    app_id="my_app",
-    user_id="web_user",
-    session_id=session_id,
-    message=user_text,
-    prompt_text=assembled_prompt,   # optional override
-    store_text=user_text,
-    store_metadata={"app_id": "my_app", ...},
-))
-# result.reply  — the agent's response string
-# result.reply_timestamp  — ISO timestamp
+async def handle_message(body: dict, service: AgentService) -> dict:
+    result = await service.arun(AgentRunRequest(
+        app_id="my_app",
+        user_id="web_user",
+        session_id=body["session_id"],
+        message=body["text"],
+        prompt_text=assembled_prompt,
+        store_text=body["text"],
+        store_metadata={"app_id": "my_app"},
+    ))
+    return {"reply": result.reply}
 ```
