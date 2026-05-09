@@ -2,6 +2,7 @@
 
 import uuid
 import logging
+import re
 from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
@@ -14,7 +15,7 @@ class Neo4jStore:
     """Interface to the Neo4j Knowledge Graph."""
 
     EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
-    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project"}
+    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project", "Entity"}
     TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
     TEST_SESSION_PREFIXES = ("test_", "test-", "session_", "pytest_")
 
@@ -48,6 +49,11 @@ class Neo4jStore:
     def close(self):
         if self.driver:
             self.driver.close()
+
+    @staticmethod
+    def _slugify(value: str) -> str:
+        value = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+        return value or "general"
 
     # ── Write Operations ──────────────────────────────────────────────────────
 
@@ -92,6 +98,43 @@ class Neo4jStore:
         
         with self.driver.session() as session:
             session.run(query, source_id=source_id, target_id=target_id, props=props)
+
+    def upsert_entity(
+        self,
+        name: str,
+        entity_type: str = "Topic",
+        description: str | None = None,
+        properties: dict | None = None,
+    ) -> str:
+        """Create or update a canonical entity node keyed by a normalized name."""
+        if not self.driver:
+            return ""
+
+        props = properties.copy() if properties else {}
+        entity_key = props.get("entity_key") or self._slugify(name)
+        entity_id = props.get("id", str(uuid.uuid4()))
+        props["entity_key"] = entity_key
+        props["entity_type"] = entity_type
+        if description:
+            props["description"] = description
+
+        query = """
+        MERGE (e:Entity {entity_key: $entity_key})
+        ON CREATE SET e.id = $entity_id
+        SET e.name = $name, e.entity_type = $entity_type, e += $props
+        RETURN e.id AS id
+        """
+
+        with self.driver.session() as session:
+            record = session.run(
+                query,
+                entity_key=entity_key,
+                entity_id=entity_id,
+                name=name,
+                entity_type=entity_type,
+                props=props,
+            ).single()
+            return record["id"] if record else entity_id
 
     # ── Read Operations (Explorer API format) ──────────────────────────────────
 
@@ -615,6 +658,7 @@ class Neo4jStore:
         about_entity_id: str = None,
         source_session_id: str = None,
         source_text: str = None,
+        belief_key: str | None = None,
     ) -> str:
         """
         Create a new :Belief node with optional evidence links.
@@ -635,12 +679,20 @@ class Neo4jStore:
         cypher = """
         CREATE (b:Belief {
             id: $bid, name: $content, content: $content,
-            confidence: $conf, status: 'active', created_at: $now
+            confidence: $conf, status: 'active', created_at: $now,
+            updated_at: $now, belief_key: $belief_key
         })
         RETURN b.id AS id
         """
         with self.driver.session() as session:
-            session.run(cypher, bid=belief_id, content=content, conf=confidence, now=now)
+            session.run(
+                cypher,
+                bid=belief_id,
+                content=content,
+                conf=confidence,
+                now=now,
+                belief_key=belief_key,
+            )
 
             # Link to the entity it's about
             if about_entity_id:
@@ -665,12 +717,91 @@ class Neo4jStore:
 
         return belief_id
 
+    def _find_active_belief(self, belief_key: str) -> dict | None:
+        if not self.driver or not belief_key:
+            return None
+
+        cypher = """
+        MATCH (b:Belief {belief_key: $belief_key, status: 'active'})
+        OPTIONAL MATCH (b)-[:ABOUT]->(e)
+        RETURN b.id AS id, b.content AS content, e.id AS entity_id
+        ORDER BY b.created_at DESC
+        LIMIT 1
+        """
+        with self.driver.session() as session:
+            record = session.run(cypher, belief_key=belief_key).single()
+            return dict(record) if record else None
+
+    def record_belief_signal(
+        self,
+        *,
+        content: str,
+        belief_key: str,
+        about_entity_id: str | None = None,
+        source_session_id: str | None = None,
+        source_text: str | None = None,
+        confidence: float = 0.76,
+    ) -> str:
+        """Upsert or evolve a belief keyed to a durable opinion slot."""
+        if not self.driver:
+            return ""
+
+        existing = self._find_active_belief(belief_key)
+        now = datetime.now(timezone.utc).isoformat()
+
+        if existing and existing.get("content", "").strip().lower() == content.strip().lower():
+            belief_id = existing["id"]
+            if about_entity_id and about_entity_id != existing.get("entity_id"):
+                self.add_edge(belief_id, about_entity_id, "ABOUT")
+            if source_session_id and source_text:
+                self.add_belief_evidence(belief_id, "supports", source_session_id, source_text)
+            with self.driver.session() as session:
+                session.run(
+                    """
+                    MATCH (b:Belief {id: $belief_id})
+                    SET b.updated_at = $now,
+                        b.confidence = CASE
+                            WHEN b.confidence IS NULL THEN $confidence
+                            ELSE (b.confidence + $confidence) / 2.0
+                        END
+                    """,
+                    belief_id=belief_id,
+                    now=now,
+                    confidence=confidence,
+                )
+            return belief_id
+
+        if existing:
+            new_id = self.evolve_belief(
+                old_belief_id=existing["id"],
+                new_content=content,
+                new_confidence=confidence,
+                reason="Updated from a newer user opinion signal",
+                belief_key=belief_key,
+            )
+            if source_session_id and source_text:
+                self.add_belief_evidence(new_id, "supports", source_session_id, source_text)
+            return new_id
+
+        belief_id = self.upsert_belief(
+            content=content,
+            confidence=confidence,
+            about_entity_id=about_entity_id,
+            source_session_id=source_session_id,
+            source_text=source_text,
+            belief_key=belief_key,
+        )
+        if source_session_id and source_text:
+            self.add_belief_evidence(belief_id, "supports", source_session_id, source_text)
+        return belief_id
+
     def evolve_belief(
         self,
         old_belief_id: str,
         new_content: str,
         new_confidence: float = 0.8,
         reason: str = "",
+        belief_key: str | None = None,
     ) -> str:
         """
         Create a new belief that supersedes an old one.
@@ -691,7 +822,8 @@ class Neo4jStore:
 
         CREATE (new:Belief {
             id: $new_id, name: $content, content: $content,
-            confidence: $conf, status: 'active', created_at: $now
+            confidence: $conf, status: 'active', created_at: $now,
+            updated_at: $now, belief_key: coalesce($belief_key, old.belief_key)
         })
         CREATE (new)-[:EVOLVED_FROM {reason: $reason, timestamp: $now}]->(old)
 
@@ -707,7 +839,7 @@ class Neo4jStore:
             result = session.run(
                 cypher, old_id=old_belief_id, new_id=new_id,
                 content=new_content, conf=new_confidence,
-                reason=reason, now=now,
+                reason=reason, now=now, belief_key=belief_key,
             )
             record = result.single()
             return record["id"] if record else new_id
