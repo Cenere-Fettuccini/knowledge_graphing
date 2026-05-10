@@ -25,7 +25,8 @@ neo4j_data/
 DESIGN.md
 implementation_plan.md
 stublist.py
-.claude/
+.claude/worktrees/
+.claude/settings.local.json
 
 # chroma db data
 data/
