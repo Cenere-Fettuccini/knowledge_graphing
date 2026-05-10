@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
 
+    # ── Web search (Google Custom Search) ────────────────────────────────────
+    google_cse_id: str = ""          # Custom Search Engine ID from cse.google.com
+
+    # ── Google Calendar ───────────────────────────────────────────────────────
+    google_calendar_credentials_path: str = "./data/google_calendar_creds.json"
+    google_calendar_token_path: str = "./data/google_calendar_token.json"
+
+    # ── Rumination Engine ─────────────────────────────────────────────────────
+    rumination_enabled: bool = False       # off by default — heavy LLM workload
+    deep_pass_tick_seconds: int = 3600     # belief deep-analysis interval
+    rabbit_hole_tick_seconds: int = 7200   # creative synthesis interval
+
     # ── Agent ─────────────────────────────────────────────────────────────────
     context_window_turns: int = 20
     rag_top_k: int = 5
