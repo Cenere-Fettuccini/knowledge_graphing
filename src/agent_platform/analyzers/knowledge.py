@@ -265,55 +265,62 @@ class KnowledgeAnalyzer:
         entities_written = 0
         relationships_written = 0
 
-        for entity in extraction.get("entities") or []:
-            try:
-                proposed_id = (entity.get("id") or "").strip()
-                name = (entity.get("name") or "").strip()
-                labels = [str(label).strip() for label in (entity.get("labels") or []) if label]
-                if not name or not labels:
-                    continue
-                stable_id = proposed_id or self._stable_entity_id(labels[0], name)
-                if stable_id == user_root_id:
-                    id_map[proposed_id or stable_id] = user_root_id
-                    continue
-                props = dict(entity.get("props") or {})
-                props.setdefault("provenance_run_ids", [])
-                if run_id not in props["provenance_run_ids"]:
-                    props["provenance_run_ids"] = [*props["provenance_run_ids"], run_id]
-                self._memory.upsert_node(
-                    node_id=stable_id,
-                    labels=labels,
-                    name=name,
-                    properties=props,
-                )
-                id_map[proposed_id] = stable_id if proposed_id else stable_id
-                id_map[stable_id] = stable_id
-                entities_written += 1
-            except Exception as exc:  # pragma: no cover - defensive
-                errors.append(f"entity {entity.get('id')!r}: {exc}")
+        # All graph writes for this batch are queued in a single transaction.
+        # If anything inside the block raises, or the commit itself fails, the
+        # whole batch is rolled back and the ops are spilled for replay — the
+        # graph never gets a partially-written batch.
+        with self._memory.batch_graph_writes() as batch:
+            for entity in extraction.get("entities") or []:
+                try:
+                    proposed_id = (entity.get("id") or "").strip()
+                    name = (entity.get("name") or "").strip()
+                    labels = [str(label).strip() for label in (entity.get("labels") or []) if label]
+                    if not name or not labels:
+                        continue
+                    stable_id = proposed_id or self._stable_entity_id(labels[0], name)
+                    if stable_id == user_root_id:
+                        id_map[proposed_id or stable_id] = user_root_id
+                        continue
+                    props = dict(entity.get("props") or {})
+                    props.setdefault("provenance_run_ids", [])
+                    if run_id not in props["provenance_run_ids"]:
+                        props["provenance_run_ids"] = [*props["provenance_run_ids"], run_id]
+                    batch.upsert_node(
+                        node_id=stable_id,
+                        labels=labels,
+                        name=name,
+                        properties=props,
+                    )
+                    id_map[proposed_id] = stable_id if proposed_id else stable_id
+                    id_map[stable_id] = stable_id
+                    entities_written += 1
+                except Exception as exc:  # pragma: no cover - defensive
+                    errors.append(f"entity {entity.get('id')!r}: {exc}")
 
-        for rel in extraction.get("relationships") or []:
-            try:
-                src = id_map.get((rel.get("from") or "").strip()) or rel.get("from")
-                tgt = id_map.get((rel.get("to") or "").strip()) or rel.get("to")
-                rel_type = (rel.get("type") or "").strip()
-                if not src or not tgt or not rel_type:
-                    continue
-                props = dict(rel.get("props") or {})
-                props.setdefault("provenance_run_id", run_id)
-                if self._memory.upsert_relationship(
-                    source_id=src,
-                    target_id=tgt,
-                    rel_type=rel_type,
-                    properties=props,
-                ):
+            for rel in extraction.get("relationships") or []:
+                try:
+                    src = id_map.get((rel.get("from") or "").strip()) or rel.get("from")
+                    tgt = id_map.get((rel.get("to") or "").strip()) or rel.get("to")
+                    rel_type = (rel.get("type") or "").strip()
+                    if not src or not tgt or not rel_type:
+                        continue
+                    props = dict(rel.get("props") or {})
+                    props.setdefault("provenance_run_id", run_id)
+                    batch.upsert_relationship(
+                        source_id=src,
+                        target_id=tgt,
+                        rel_type=rel_type,
+                        properties=props,
+                    )
                     relationships_written += 1
-            except Exception as exc:  # pragma: no cover - defensive
-                errors.append(f"relationship {rel.get('type')!r}: {exc}")
+                except Exception as exc:  # pragma: no cover - defensive
+                    errors.append(f"relationship {rel.get('type')!r}: {exc}")
 
         # Mark every Chroma row in the batch as analyzed, regardless of whether
         # the LLM extracted anything from it — empty extraction is a valid
-        # answer and we don't want to retry the same turns forever.
+        # answer and we don't want to retry the same turns forever. Even when
+        # the graph commit failed and the ops are sitting in spillover, the
+        # source rows are durable in Chroma; replay will write them later.
         marked = self._memory.mark_analyzed(batch_ids, run_id=run_id)
 
         return AnalysisResult(
