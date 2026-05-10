@@ -20,8 +20,8 @@ from src.core.config import settings
 from src.core.context import ContextManager
 from src.core.prompts import CONTEXT_BLOCK, HISTORY_BLOCK, SYSTEM_PROMPT
 from src.core.router import ModelSpec, llm_router
-from src.core.tools import tools
-from src.memory.manager import MemoryManager
+from src.agent_platform.tools.registry import tools
+from src.memory.manager import MemoryManager, get_memory_manager
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class Agent(BaseAgent):
     """Memory-aware conversational agent implemented with native PydanticAI patterns."""
 
     def __init__(self, memory: MemoryManager | None = None):
-        self.memory = memory or MemoryManager()
+        self.memory = memory or get_memory_manager()
         self.context_manager = ContextManager(self.memory)
         self.router = llm_router
         self._agent_cache: Dict[str, PydanticAgent] = {}
