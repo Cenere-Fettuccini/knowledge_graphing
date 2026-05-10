@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
@@ -19,7 +20,13 @@ def create_task(title: str, due_date: str = None, priority: str = "medium"):
             "priority": priority,
             "created_at": datetime.now().isoformat(),
         }
-        node_id = get_memory_manager().neo4j.add_node("Task", title, properties)
+        node_id = str(uuid.uuid4())
+        get_memory_manager().upsert_node(
+            node_id=node_id,
+            labels=["Task"],
+            name=title,
+            properties=properties,
+        )
         return f"Task created: '{title}' (ID: {node_id})"
     except Exception as e:
         return f"Error creating task: {str(e)}"
@@ -37,36 +44,13 @@ def list_tasks(status_filter: str = ""):
         if offline:
             return offline
 
+        tasks = get_memory_manager().graph_active_tasks()
         if status_filter:
-            cypher = """
-            MATCH (t:Task)
-            WHERE toLower(t.status) = toLower($status)
-            RETURN t.id AS id, t.name AS title, t.status AS status,
-                   t.priority AS priority, t.due_date AS due_date
-            ORDER BY t.created_at DESC
-            """
-            params = {"status": status_filter}
-        else:
-            cypher = """
-            MATCH (t:Task)
-            RETURN t.id AS id, t.name AS title, t.status AS status,
-                   t.priority AS priority, t.due_date AS due_date
-            ORDER BY t.created_at DESC
-            """
-            params = {}
-
-        results = []
-        with get_memory_manager().neo4j.driver.session() as session:
-            records = session.run(cypher, **params)
-            for record in records:
-                results.append({
-                    "id": record["id"],
-                    "title": record["title"],
-                    "status": record["status"],
-                    "priority": record["priority"],
-                    "due_date": record["due_date"],
-                })
-        return results if results else "No tasks found."
+            tasks = [
+                t for t in tasks
+                if t.get("status", "").upper() == status_filter.upper()
+            ]
+        return tasks if tasks else "No tasks found."
     except Exception as e:
         return f"Error listing tasks: {str(e)}"
 
@@ -83,28 +67,6 @@ def update_task(task_title: str, new_status: str = "", notes: str = ""):
         if offline:
             return offline
 
-        set_parts = ["t.updated_at = $now"]
-        params = {"title": task_title, "now": datetime.now().isoformat()}
-        if new_status:
-            set_parts.append("t.status = $status")
-            params["status"] = new_status.upper()
-        if notes:
-            set_parts.append("t.notes = $notes")
-            params["notes"] = notes
-
-        cypher = f"""
-        MATCH (t:Task)
-        WHERE toLower(t.name) CONTAINS toLower($title)
-        SET {', '.join(set_parts)}
-        RETURN t.name AS title, t.status AS status
-        LIMIT 1
-        """
-
-        with get_memory_manager().neo4j.driver.session() as session:
-            result = session.run(cypher, **params)
-            record = result.single()
-            if record:
-                return f"Updated task '{record['title']}' -> status: {record['status']}"
-            return f"No task found matching '{task_title}'"
+        return get_memory_manager().update_task(task_title, new_status, notes)
     except Exception as e:
         return f"Error updating task: {str(e)}"
