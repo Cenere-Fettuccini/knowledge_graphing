@@ -344,6 +344,177 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Rumination support ────────────────────────────────────────────────────
+
+    def get_recent_memories(self, n: int = 100) -> list[dict]:
+        """Most recent *n* Chroma entries across all sessions, newest-first."""
+        if not self._is_chroma_available():
+            return []
+        try:
+            return self.chroma.get_recent(n=n)
+        except Exception as e:
+            logger.error("Failed to get recent memories: %s", e)
+            return []
+
+    def get_unanalyzed_beliefs(self, limit: int = 10) -> list[dict]:
+        """Return Belief nodes from Neo4j that haven't been deep-analyzed yet."""
+        if not self.neo4j.driver:
+            return []
+        query = """
+        MATCH (b:Belief)
+        WHERE b.deep_analyzed IS NULL OR b.deep_analyzed = false
+        RETURN b.id AS id, b.content AS content, b.confidence AS confidence
+        LIMIT $limit
+        """
+        try:
+            records, _, _ = self.neo4j.driver.execute_query(query, limit=limit)
+            return [
+                {"id": r["id"], "content": r["content"], "confidence": r["confidence"]}
+                for r in records
+            ]
+        except Exception as e:
+            logger.error("Failed to fetch unanalyzed beliefs: %s", e)
+            return []
+
+    def mark_belief_deep_analyzed(self, belief_id: str) -> None:
+        """Stamp a Belief node so the deep-pass engine doesn't reprocess it."""
+        if not self.neo4j.driver:
+            return
+        query = """
+        MATCH (b:Belief {id: $id})
+        SET b.deep_analyzed = true, b.last_deep_analyzed = $now
+        """
+        try:
+            self.neo4j.driver.execute_query(
+                query, id=belief_id,
+                now=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+        except Exception as e:
+            logger.error("Failed to mark belief %s as deep-analyzed: %s", belief_id, e)
+
+    def upsert_belief(
+        self,
+        content: str,
+        confidence: float = 0.8,
+        *,
+        about_entity_id: str | None = None,
+        source_text: str | None = None,
+    ) -> str:
+        """Create a Belief node, optionally linked to an entity and source text."""
+        try:
+            return self.neo4j.upsert_belief(
+                content,
+                confidence,
+                about_entity_id=about_entity_id,
+                source_text=source_text,
+            )
+        except Exception as e:
+            logger.error("Failed to upsert belief: %s", e)
+            return ""
+
+    def is_graph_online(self) -> bool:
+        """True if Neo4j is reachable (uses the 60s cached health status)."""
+        return "online" in self.status().get("neo4j", "")
+
+    def find_entity(self, name: str) -> str | None:
+        """Return the id of the first node whose name contains *name*, or None."""
+        results = self.search_nodes(name, limit=1)
+        return results[0]["id"] if results else None
+
+    def find_belief(self, keyword: str, *, active_only: bool = False) -> dict | None:
+        """Return the most recent Belief whose content contains *keyword*, or None."""
+        if not self.neo4j.driver:
+            return None
+        status_clause = "AND b.status = 'active'" if active_only else ""
+        cypher = f"""
+        MATCH (b:Belief)
+        WHERE toLower(b.content) CONTAINS toLower($keyword) {status_clause}
+        RETURN b.id AS id, b.content AS content,
+               b.confidence AS confidence, b.status AS status
+        ORDER BY b.created_at DESC LIMIT 1
+        """
+        try:
+            records, _, _ = self.neo4j.driver.execute_query(cypher, keyword=keyword)
+            if not records:
+                return None
+            r = records[0]
+            return {
+                "id": r["id"],
+                "content": r["content"],
+                "confidence": r["confidence"],
+                "status": r["status"],
+            }
+        except Exception as e:
+            logger.error("Failed to find belief for keyword '%s': %s", keyword, e)
+            return None
+
+    def evolve_belief(self, old_id: str, new_content: str, reason: str = "") -> str:
+        """Supersede an existing Belief and return the new belief's id."""
+        try:
+            return self.neo4j.evolve_belief(old_id, new_content, reason=reason)
+        except Exception as e:
+            logger.error("Failed to evolve belief %s: %s", old_id, e)
+            return ""
+
+    def search_nodes(self, query: str, limit: int = 10) -> list[dict]:
+        """Name-contains search across all graph nodes."""
+        if not self.neo4j.driver:
+            return []
+        cypher = """
+        MATCH (n)
+        WHERE toLower(n.name) CONTAINS toLower($query)
+        RETURN n.id AS id, n.name AS name,
+               labels(n)[0] AS label, n.description AS description
+        LIMIT $limit
+        """
+        try:
+            records, _, _ = self.neo4j.driver.execute_query(cypher, query=query, limit=limit)
+            return [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "label": r["label"],
+                    "description": r["description"],
+                }
+                for r in records
+            ]
+        except Exception as e:
+            logger.error("Node search failed for query '%s': %s", query, e)
+            return []
+
+    def update_task(
+        self, title_fragment: str, new_status: str = "", notes: str = ""
+    ) -> str:
+        """Update a Task node matched by a title fragment. Returns a status string."""
+        if not self.neo4j.driver:
+            return "Graph is offline."
+        set_parts = ["t.updated_at = $now"]
+        params: dict = {
+            "title": title_fragment,
+            "now": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if new_status:
+            set_parts.append("t.status = $status")
+            params["status"] = new_status.upper()
+        if notes:
+            set_parts.append("t.notes = $notes")
+            params["notes"] = notes
+        cypher = f"""
+        MATCH (t:Task)
+        WHERE toLower(t.name) CONTAINS toLower($title)
+        SET {", ".join(set_parts)}
+        RETURN t.name AS name, t.status AS status
+        LIMIT 1
+        """
+        try:
+            records, _, _ = self.neo4j.driver.execute_query(cypher, **params)
+            if records:
+                return f"Updated '{records[0]['name']}' → {records[0]['status']}"
+            return f"No task found matching '{title_fragment}'"
+        except Exception as e:
+            logger.error("Failed to update task '%s': %s", title_fragment, e)
+            return f"Error: {e}"
+
 
 _instance: MemoryManager | None = None
 
