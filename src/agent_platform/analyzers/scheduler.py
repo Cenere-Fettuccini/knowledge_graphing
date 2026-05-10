@@ -80,6 +80,7 @@ class AnalyzerScheduler:
 
     def tick(self) -> dict:
         """Run one analyzer pass. Logs a one-line summary and returns the dict."""
+        self._replay_spillover()
         analyzer = self._analyzer_factory(self._memory)
         result = analyzer.analyze_pending(batch_size=self._batch_size)
         payload = result.as_dict()
@@ -93,3 +94,16 @@ class AnalyzerScheduler:
                 result.relationships_written,
             )
         return payload
+
+    def _replay_spillover(self) -> None:
+        """Drain any pending spilled writes so recovered data lands before analysis."""
+        replay = getattr(self._memory, "replay_spillover", None)
+        if not callable(replay):
+            return
+        try:
+            stats = replay()
+        except Exception:
+            logger.warning("Spillover replay raised", exc_info=True)
+            return
+        if any(v for v in stats.values()):
+            logger.info("Spillover replay stats: %s", stats)
