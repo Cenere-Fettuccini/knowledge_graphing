@@ -81,6 +81,10 @@ src/
   frontend/          # Static UI assets
 ```
 
+# Setup
+If .env is missing, symlink from the main repo root:
+ln -s /c/Users/Kevin/Desktop/AIManager/.env .env
+
 ## Running
 ```bash
 python src/main.py    # Web platform
