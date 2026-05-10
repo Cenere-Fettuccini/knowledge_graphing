@@ -114,6 +114,7 @@ class KnowledgeAnalyzer:
         """Lightweight status — used by the explorer panel to render a badge."""
         return {
             "unanalyzed_count": self._memory.count_unanalyzed(),
+            "failed_count": self._memory.count_failed(),
             "local_llm_available": self._llm.is_available(),
             "default_model": self._llm.default_model,
         }
@@ -167,6 +168,14 @@ class KnowledgeAnalyzer:
 
         parsed = self._parse_json(raw)
         if parsed is None:
+            # Move the batch to the dead-letter queue so it doesn't loop the
+            # analyzer forever, but stays queryable and retryable.
+            batch_ids = [m["id"] for m in batch]
+            self._memory.mark_failed(
+                batch_ids,
+                reason="invalid_json_response",
+                run_id=run_id,
+            )
             return AnalysisResult(
                 run_id=run_id,
                 processed_messages=0,

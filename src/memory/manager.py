@@ -294,10 +294,67 @@ class MemoryManager:
         """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""
         if not memory_ids or not self._is_chroma_available():
             return 0
-        patch = {"analyzed": True}
+        patch = {"analyzed": True, "analyzer_status": "success"}
         if run_id:
             patch["analysis_run_id"] = run_id
             patch["analyzed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return self.chroma.update_metadata(memory_ids, patch)
+
+    def mark_failed(
+        self,
+        memory_ids: list[str],
+        reason: str,
+        run_id: str | None = None,
+    ) -> int:
+        """Mark rows as processed-but-failed so they leave the live queue but
+        remain queryable for retry. Used by the analyzer when the LLM returns
+        unusable output."""
+        if not memory_ids or not self._is_chroma_available():
+            return 0
+        patch = {
+            "analyzed": True,
+            "analyzer_status": "failed",
+            "analyzer_failure_reason": reason or "unknown",
+            "analyzer_failed_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            ),
+        }
+        if run_id:
+            patch["analysis_run_id"] = run_id
+        return self.chroma.update_metadata(memory_ids, patch)
+
+    def list_failed(self, limit: int = 50) -> list[dict]:
+        """Return Chroma rows the analyzer flagged as failed (dead-letter queue)."""
+        if not self._is_chroma_available():
+            return []
+        where = {"analyzer_status": "failed"}
+        return self.chroma.list_where(where=where, limit=limit)
+
+    def count_failed(self) -> int:
+        """Number of rows currently in the analyzer dead-letter queue."""
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.count_where(where={"analyzer_status": "failed"})
+
+    def retry_failed(self, memory_ids: list[str] | None = None) -> int:
+        """Reset failed rows so the analyzer picks them up on the next tick.
+
+        With ``memory_ids=None`` retries every failed row. Returns the number
+        of rows whose metadata was reset.
+        """
+        if not self._is_chroma_available():
+            return 0
+        if memory_ids is None:
+            failed = self.list_failed(limit=10_000)
+            memory_ids = [row["id"] for row in failed]
+        if not memory_ids:
+            return 0
+        patch = {
+            "analyzed": False,
+            "analyzer_status": "pending",
+            "analyzer_failure_reason": "",
+            "analyzer_failed_at": "",
+        }
         return self.chroma.update_metadata(memory_ids, patch)
 
     # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────

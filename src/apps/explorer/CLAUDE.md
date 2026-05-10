@@ -76,6 +76,13 @@ memory.mark_analyzed(ids: list[str], run_id: str | None = None) -> int
 # Used by the KnowledgeAnalyzer (under src/agent_platform/analyzers/) to drain
 # the ChromaDB analysis queue.
 
+memory.list_failed(limit: int = 50) -> list[dict]
+memory.count_failed() -> int
+memory.mark_failed(ids: list[str], reason: str, run_id: str | None = None) -> int
+memory.retry_failed(memory_ids: list[str] | None = None) -> int
+# Dead-letter queue for items the analyzer couldn't process (e.g. malformed
+# LLM JSON). Used by /analyze/failed and /analyze/retry-failed.
+
 memory.graph_schema_snapshot() -> dict
 memory.upsert_node(*, node_id, labels, name, properties=None) -> str
 memory.upsert_relationship(*, source_id, target_id, rel_type, properties=None) -> bool

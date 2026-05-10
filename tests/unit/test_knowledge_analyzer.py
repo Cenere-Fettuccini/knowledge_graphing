@@ -18,6 +18,8 @@ class _FakeMemory:
         self.upserted_nodes: list[dict] = []
         self.upserted_relationships: list[dict] = []
         self.marked_analyzed: list[tuple[list, str | None]] = []
+        self.marked_failed: list[tuple[list, str, str | None]] = []
+        self.failed_count_value = 0
 
     def get_user_root(self):
         return self._user_root
@@ -30,6 +32,9 @@ class _FakeMemory:
 
     def count_unanalyzed(self):
         return len(self._batch)
+
+    def count_failed(self):
+        return self.failed_count_value
 
     def upsert_node(self, *, node_id, labels, name, properties=None):
         self.upserted_nodes.append(
@@ -45,6 +50,10 @@ class _FakeMemory:
 
     def mark_analyzed(self, ids, run_id=None):
         self.marked_analyzed.append((list(ids), run_id))
+        return len(ids)
+
+    def mark_failed(self, ids, reason, run_id=None):
+        self.marked_failed.append((list(ids), reason, run_id))
         return len(ids)
 
 
@@ -190,24 +199,36 @@ def test_analyze_pending_handles_fenced_json():
     assert result.relationships_written == 1
 
 
-def test_analyze_pending_bails_on_invalid_json():
+def test_analyze_pending_routes_invalid_json_to_dead_letter_queue():
     memory = _FakeMemory(
         user_root=_user_root(),
-        batch=[{"id": "c1", "text": "x", "metadata": {"role": "user"}}],
+        batch=[
+            {"id": "c1", "text": "x", "metadata": {"role": "user"}},
+            {"id": "c2", "text": "y", "metadata": {"role": "user"}},
+        ],
     )
     analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(response="not json at all"))
     result = analyzer.analyze_pending(batch_size=10)
     assert result.skipped is True
     assert result.reason == "invalid_json_response"
-    # Queue NOT marked — we want to retry once we have a working JSON-mode model.
+    # Queue is NOT in the live queue (mark_analyzed was not called)…
     assert memory.marked_analyzed == []
+    # …but the rows are routed to the dead-letter queue so they can be
+    # inspected and retried instead of looping the analyzer forever.
+    assert len(memory.marked_failed) == 1
+    failed_ids, reason, run_id = memory.marked_failed[0]
+    assert sorted(failed_ids) == ["c1", "c2"]
+    assert reason == "invalid_json_response"
+    assert run_id == result.run_id
 
 
-def test_queue_status_includes_local_llm_health():
+def test_queue_status_includes_local_llm_health_and_dlq_count():
     memory = _FakeMemory(user_root=_user_root(), batch=[{"id": "a"}, {"id": "b"}])
+    memory.failed_count_value = 3
     analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(available=True))
     status = analyzer.queue_status()
     assert status["unanalyzed_count"] == 2
+    assert status["failed_count"] == 3
     assert status["local_llm_available"] is True
     assert status["default_model"] == "qwen2.5-3b-instruct"
 

@@ -90,6 +90,32 @@ async def run_analyzer(
     return services.run_analyzer(memory, batch_size=batch_size, model=model)
 
 
+@router.get("/analyze/failed")
+async def list_analyzer_failures(
+    limit: int = Query(50, ge=1, le=500),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.list_analyzer_failures(memory, limit=limit)
+
+
+@router.post("/analyze/retry-failed")
+async def retry_analyzer_failures(
+    payload: dict | None = Body(default=None),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    payload = payload or {}
+    memory_ids = payload.get("memory_ids")
+    if memory_ids is not None and not (
+        isinstance(memory_ids, list)
+        and all(isinstance(x, str) for x in memory_ids)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="memory_ids must be a list of strings if provided",
+        )
+    return services.retry_analyzer_failures(memory, memory_ids=memory_ids)
+
+
 @router.get("/system/status")
 async def get_system_status(
     memory: MemoryManager = Depends(get_memory_manager),

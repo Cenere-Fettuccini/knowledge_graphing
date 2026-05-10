@@ -75,6 +75,148 @@ def test_user_root_exists_delegates_to_neo4j():
     assert manager.user_root_exists() is True
 
 
+def test_mark_failed_stamps_failure_metadata():
+    """Failed rows must leave the live queue but carry a reason for inspection."""
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def update_metadata(self, ids, patch):
+            captured["ids"] = list(ids)
+            captured["patch"] = dict(patch)
+            return len(ids)
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    n = manager.mark_failed(["c1", "c2"], reason="invalid_json_response", run_id="r-123")
+    assert n == 2
+    assert captured["ids"] == ["c1", "c2"]
+    assert captured["patch"]["analyzed"] is True
+    assert captured["patch"]["analyzer_status"] == "failed"
+    assert captured["patch"]["analyzer_failure_reason"] == "invalid_json_response"
+    assert captured["patch"]["analysis_run_id"] == "r-123"
+    assert "analyzer_failed_at" in captured["patch"]
+
+
+def test_list_failed_filters_on_analyzer_status():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def list_where(self, where, limit=50, offset=0):
+            captured["where"] = where
+            captured["limit"] = limit
+            return [
+                {"id": "c1", "text": "x", "metadata": {"analyzer_status": "failed"}},
+            ]
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    rows = manager.list_failed(limit=25)
+    assert len(rows) == 1
+    assert captured["where"] == {"analyzer_status": "failed"}
+    assert captured["limit"] == 25
+
+
+def test_count_failed_uses_chroma_filter():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    class FakeChroma:
+        def count_where(self, where=None):
+            assert where == {"analyzer_status": "failed"}
+            return 7
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    assert manager.count_failed() == 7
+
+
+def test_retry_failed_resets_status_so_queue_picks_them_up():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def update_metadata(self, ids, patch):
+            captured["ids"] = list(ids)
+            captured["patch"] = dict(patch)
+            return len(ids)
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    n = manager.retry_failed(["c1", "c2"])
+    assert n == 2
+    assert captured["ids"] == ["c1", "c2"]
+    assert captured["patch"]["analyzed"] is False
+    assert captured["patch"]["analyzer_status"] == "pending"
+    assert captured["patch"]["analyzer_failure_reason"] == ""
+
+
+def test_retry_failed_with_no_ids_drains_entire_dlq():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def list_where(self, where, limit=50, offset=0):
+            return [
+                {"id": "c1", "metadata": {"analyzer_status": "failed"}},
+                {"id": "c2", "metadata": {"analyzer_status": "failed"}},
+            ]
+
+        def update_metadata(self, ids, patch):
+            captured["ids"] = list(ids)
+            return len(ids)
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    n = manager.retry_failed()  # no ids → drain everything
+    assert n == 2
+    assert captured["ids"] == ["c1", "c2"]
+
+
+def test_retry_failed_returns_zero_when_dlq_is_empty():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    class FakeChroma:
+        def list_where(self, where, limit=50, offset=0):
+            return []
+
+        def update_metadata(self, ids, patch):
+            raise AssertionError("update_metadata must not be called when DLQ is empty")
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    assert manager.retry_failed() == 0
+
+
+def test_mark_analyzed_records_success_status():
+    """The success path should also stamp analyzer_status so old/new rows have a uniform shape."""
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def update_metadata(self, ids, patch):
+            captured["patch"] = dict(patch)
+            return len(ids)
+
+    manager.chroma = FakeChroma()
+    manager._is_chroma_available = lambda: True
+
+    manager.mark_analyzed(["c1"], run_id="r")
+    assert captured["patch"]["analyzed"] is True
+    assert captured["patch"]["analyzer_status"] == "success"
+
+
 def test_store_writes_to_chroma_only_with_unanalyzed_flag():
     """Stage-1 cutover: store() writes to Chroma with analyzed=False and never to Neo4j."""
     manager = MemoryManager.__new__(MemoryManager)
