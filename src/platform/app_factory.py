@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from src.agent_platform.analyzers.scheduler import AnalyzerScheduler
 from src.api.routes import router as legacy_api_router
 from src.apps.chat.app import get_chat_app
 from src.apps.credits.app import get_credits_app
 from src.apps.explorer.app import get_explorer_app
 from src.apps.financial_manager.app import get_financial_manager_app
 from src.apps.routine_scheduler.app import get_routine_scheduler_app
+from src.core.config import settings
 from src.core.logging_config import setup_logging
+from src.memory.manager import get_memory_manager
 from src.platform.registry import AppRegistry
 from src.platform.shell import build_shell_router
+
+logger = logging.getLogger(__name__)
 
 
 def build_registry() -> AppRegistry:
@@ -30,11 +37,37 @@ def build_registry() -> AppRegistry:
     return registry
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start background services when FastAPI boots; stop them on shutdown."""
+    scheduler: AnalyzerScheduler | None = None
+    if settings.analyzer_enabled:
+        try:
+            scheduler = AnalyzerScheduler(
+                memory=get_memory_manager(),
+                tick_seconds=settings.analyzer_tick_seconds,
+                batch_size=settings.analyzer_batch_size,
+            )
+            scheduler.start()
+            app.state.analyzer_scheduler = scheduler
+        except Exception:  # pragma: no cover - never block startup on a scheduler failure
+            logger.exception("AnalyzerScheduler failed to start; continuing without it.")
+            scheduler = None
+    else:
+        logger.info("Analyzer scheduler disabled via settings.analyzer_enabled=False")
+
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.stop()
+
+
 def create_platform_app() -> FastAPI:
     setup_logging()
 
     registry = build_registry()
-    app = FastAPI(title="AIManager App Platform")
+    app = FastAPI(title="AIManager App Platform", lifespan=_lifespan)
     app.state.app_registry = registry
 
     app.add_middleware(

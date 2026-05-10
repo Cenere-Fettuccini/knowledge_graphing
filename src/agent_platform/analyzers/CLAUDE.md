@@ -10,6 +10,7 @@ that queue.
 |------|------|
 | `local_llm.py` | `LMStudioClient` — OpenAI-compatible client for the local LLM server |
 | `knowledge.py` | `KnowledgeAnalyzer` — extracts durable facts about the user, people, preferences |
+| `scheduler.py` | `AnalyzerScheduler` — apscheduler-driven periodic auto-drain of the queue |
 
 ## Adding a New Analyzer
 Each analyzer is a class that:
@@ -19,9 +20,13 @@ Each analyzer is a class that:
 4. Never imports from `src.apps.*` — analyzers are infrastructure, apps consume their output via the explorer's read endpoints.
 
 ## Triggers (where analyzers get invoked from)
-- **Manual** — `POST /api/explorer/analyze/run` (Stage 3, this commit).
-- **Scheduled** — periodic ticking via `apscheduler` (Stage 4).
-- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` queues rows; the next scheduler tick drains them (Stage 4).
+- **Manual** — `POST /api/explorer/analyze/run` from the explorer panel.
+- **Scheduled** — `AnalyzerScheduler` ticks every `settings.analyzer_tick_seconds`
+  (default 900s). Started from the FastAPI lifespan in `platform.app_factory`.
+  Disable via `ANALYZER_ENABLED=false`.
+- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` drains the queue
+  inline after writing the chunks. Pass `analyze=False` to suppress, e.g. in
+  tests, and let the scheduler pick it up later.
 
 ## LM Studio
 `LMStudioClient` is an OpenAI-compatible REST wrapper around `httpx`. Default
