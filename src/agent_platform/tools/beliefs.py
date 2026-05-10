@@ -20,20 +20,11 @@ def save_belief(
         if offline:
             return offline
 
-        entity_id = None
-        if about_entity:
-            cypher = """
-            MATCH (e) WHERE toLower(e.name) CONTAINS toLower($name)
-            RETURN e.id AS id LIMIT 1
-            """
-            with get_memory_manager().neo4j.driver.session() as session:
-                record = session.run(cypher, name=about_entity).single()
-                if record:
-                    entity_id = record["id"]
-
-        belief_id = get_memory_manager().neo4j.upsert_belief(
-            content=content,
-            confidence=confidence,
+        memory = get_memory_manager()
+        entity_id = memory.find_entity(about_entity) if about_entity else None
+        belief_id = memory.upsert_belief(
+            content,
+            confidence,
             about_entity_id=entity_id,
             source_text=source_text or None,
         )
@@ -53,31 +44,20 @@ def get_belief_trail(belief_query: str):
         if offline:
             return offline
 
-        cypher = """
-        MATCH (b:Belief)
-        WHERE toLower(b.content) CONTAINS toLower($q)
-        RETURN b.id AS id, b.content AS content,
-               b.confidence AS confidence, b.status AS status
-        ORDER BY b.created_at DESC
-        LIMIT 1
-        """
-        with get_memory_manager().neo4j.driver.session() as session:
-            record = session.run(cypher, q=belief_query).single()
-
-        if not record:
+        memory = get_memory_manager()
+        belief = memory.find_belief(belief_query)
+        if not belief:
             return f"No beliefs found matching '{belief_query}'"
 
-        belief_id = record["id"]
-        chain = get_memory_manager().neo4j.get_belief_chain(belief_id)
-        evidence = get_memory_manager().neo4j.get_belief_evidence(belief_id)
+        trail = memory.graph_belief_trail(belief["id"])
         return {
             "current": {
-                "content": record["content"],
-                "confidence": record["confidence"],
-                "status": record["status"],
+                "content": belief["content"],
+                "confidence": belief["confidence"],
+                "status": belief["status"],
             },
-            "evolution_chain": chain,
-            "evidence": evidence,
+            "evolution_chain": trail["chain"],
+            "evidence": trail["evidence"],
         }
     except Exception as e:
         return f"Error retrieving belief trail: {str(e)}"
@@ -93,26 +73,15 @@ def evolve_belief_tool(old_belief_query: str, new_content: str, reason: str = ""
         if offline:
             return offline
 
-        cypher = """
-        MATCH (b:Belief {status: 'active'})
-        WHERE toLower(b.content) CONTAINS toLower($q)
-        RETURN b.id AS id, b.content AS content
-        ORDER BY b.created_at DESC LIMIT 1
-        """
-        with get_memory_manager().neo4j.driver.session() as session:
-            record = session.run(cypher, q=old_belief_query).single()
-
-        if not record:
+        memory = get_memory_manager()
+        old = memory.find_belief(old_belief_query, active_only=True)
+        if not old:
             return f"No active belief found matching '{old_belief_query}'"
 
-        new_id = get_memory_manager().neo4j.evolve_belief(
-            old_belief_id=record["id"],
-            new_content=new_content,
-            reason=reason,
-        )
+        new_id = memory.evolve_belief(old["id"], new_content, reason=reason)
         return (
             f"Belief evolved:\n"
-            f"  OLD (superseded): '{record['content'][:60]}'\n"
+            f"  OLD (superseded): '{old['content'][:60]}'\n"
             f"  NEW (active): '{new_content[:60]}' (ID: {new_id})"
         )
     except Exception as e:

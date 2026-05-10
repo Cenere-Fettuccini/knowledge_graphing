@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import get_memory_manager
 
@@ -15,23 +17,7 @@ def search_knowledge_graph(query: str):
         if offline:
             return offline
 
-        cypher = """
-        MATCH (n)
-        WHERE toLower(n.name) CONTAINS toLower($query)
-        RETURN n.id AS id, n.name AS name, labels(n)[0] AS label,
-               n.description AS description
-        LIMIT 10
-        """
-        results = []
-        with get_memory_manager().neo4j.driver.session() as session:
-            records = session.run(cypher, query=query)
-            for record in records:
-                results.append({
-                    "id": record["id"],
-                    "name": record["name"],
-                    "label": record["label"],
-                    "description": record["description"],
-                })
+        results = get_memory_manager().search_nodes(query, limit=10)
         return results if results else f"No entities found matching '{query}'"
     except Exception as e:
         return f"Error searching graph: {str(e)}"
@@ -44,10 +30,12 @@ def store_knowledge(entity_name: str, entity_label: str, fact: str):
     """
     logger.info("Tool Call: store_knowledge -> %s is a %s", entity_name, entity_label)
     try:
-        node_id = get_memory_manager().neo4j.add_node(
-            entity_label,
-            entity_name,
-            {"description": fact},
+        node_id = str(uuid.uuid4())
+        get_memory_manager().upsert_node(
+            node_id=node_id,
+            labels=[entity_label],
+            name=entity_name,
+            properties={"description": fact},
         )
         return f"Successfully stored {entity_name} (ID: {node_id})"
     except Exception as e:

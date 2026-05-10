@@ -961,7 +961,7 @@ async function fetchCredits() {
     refreshSvg.style.transform = 'rotate(180deg)';
 
     try {
-        const res = await fetch('/api/credits');
+        const res = await fetch('/api/credits-app');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
@@ -1021,7 +1021,7 @@ document.getElementById('submitPasteBtn').addEventListener('click', async () => 
     statusEl.textContent = 'Parsing...';
     statusEl.className = 'import-status';
     try {
-        const res = await fetch('/api/credits/limits/import', {
+        const res = await fetch('/api/credits-app/limits/import', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ text })
@@ -1044,7 +1044,7 @@ document.getElementById('submitPasteBtn').addEventListener('click', async () => 
 // ── Mismatch log ────────────────────────────────────────────────────────────
 async function fetchMismatches() {
     try {
-        const res = await fetch('/api/credits/mismatches');
+        const res = await fetch('/api/credits-app/mismatches');
         const data = await res.json();
         const el = document.getElementById('mismatchList');
         if (!data.events || data.events.length === 0) {
