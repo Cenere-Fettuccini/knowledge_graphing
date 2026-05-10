@@ -3,6 +3,8 @@
 import json
 import logging
 import time
+from src.core.config import settings
+from src.memory.spillover import SpilloverWriter
 from src.memory.stores.chroma_store import ChromaStore
 from src.memory.stores.neo4j_store import Neo4jStore
 
@@ -15,10 +17,11 @@ class MemoryManager:
     Hides backend details (Chroma, Neo4j) behind a clean API.
     """
 
-    def __init__(self, persist_path=None):
+    def __init__(self, persist_path=None, spillover_dir: str | None = None):
         self.chroma = ChromaStore(persist_path=persist_path)
         self.neo4j = Neo4jStore()
-        
+        self.spillover = SpilloverWriter(spillover_dir or settings.spillover_dir)
+
         # Cached health status to avoid pinging backends on every call
         self._health_cache = {}
         self._health_cache_time = 0
@@ -134,8 +137,14 @@ class MemoryManager:
             except Exception as e:
                 logger.error("Failed to store memory in Chroma: %s", e)
                 self._health_cache_time = 0
+                self.spillover.record_chroma_store(
+                    text=normalized_text, metadata=chroma_metadata
+                )
         else:
-            logger.error("ChromaDB is offline, cannot store memory.")
+            logger.error("ChromaDB is offline; spilling memory to disk for replay.")
+            self.spillover.record_chroma_store(
+                text=normalized_text, metadata=chroma_metadata
+            )
 
         return memory_id
 
@@ -305,10 +314,32 @@ class MemoryManager:
         name: str,
         properties: dict | None = None,
     ) -> str:
-        """Create-or-update a multi-label node, keyed on stable id."""
-        return self.neo4j.upsert_node_with_labels(
-            node_id=node_id, labels=labels, name=name, properties=properties
-        )
+        """Create-or-update a multi-label node, keyed on stable id.
+
+        On Neo4j connection failure the operation is spilled to disk so it
+        can be replayed once the graph backend recovers. Returns ``node_id``
+        in that case so callers see a stable identifier.
+        """
+        try:
+            result = self.neo4j.upsert_node_with_labels(
+                node_id=node_id, labels=labels, name=name, properties=properties
+            )
+        except Exception as e:
+            logger.error("Neo4j upsert_node raised; spilling: %s", e)
+            self.spillover.record_neo4j_node(
+                node_id=node_id, labels=labels, name=name, properties=properties
+            )
+            self._health_cache_time = 0
+            return node_id
+
+        if not result:
+            logger.warning("Neo4j upsert_node returned empty; spilling for replay.")
+            self.spillover.record_neo4j_node(
+                node_id=node_id, labels=labels, name=name, properties=properties
+            )
+            self._health_cache_time = 0
+            return node_id
+        return result
 
     def upsert_relationship(
         self,
@@ -318,13 +349,97 @@ class MemoryManager:
         rel_type: str,
         properties: dict | None = None,
     ) -> bool:
-        """MERGE a typed relationship between two existing nodes."""
-        return self.neo4j.upsert_relationship(
-            source_id=source_id,
-            target_id=target_id,
-            rel_type=rel_type,
-            properties=properties,
+        """MERGE a typed relationship between two existing nodes.
+
+        On Neo4j connection failure the operation is spilled to disk so the
+        next replay can reapply it.
+        """
+        try:
+            ok = self.neo4j.upsert_relationship(
+                source_id=source_id,
+                target_id=target_id,
+                rel_type=rel_type,
+                properties=properties,
+            )
+        except Exception as e:
+            logger.error("Neo4j upsert_relationship raised; spilling: %s", e)
+            self.spillover.record_neo4j_relationship(
+                source_id=source_id,
+                target_id=target_id,
+                rel_type=rel_type,
+                properties=properties,
+            )
+            self._health_cache_time = 0
+            return False
+
+        if not ok:
+            logger.warning("Neo4j upsert_relationship returned False; spilling for replay.")
+            self.spillover.record_neo4j_relationship(
+                source_id=source_id,
+                target_id=target_id,
+                rel_type=rel_type,
+                properties=properties,
+            )
+            self._health_cache_time = 0
+        return ok
+
+    # ── Spillover replay ─────────────────────────────────────────────────────
+
+    def replay_spillover(self) -> dict[str, int]:
+        """Drain pending spillover writes back into Chroma/Neo4j.
+
+        Designed to be called from the analyzer scheduler tick. Records
+        whose target backend is still offline are left on disk for the
+        next attempt.
+        """
+        chroma_apply = self._make_chroma_apply() if self._is_chroma_available() else None
+        neo4j_apply = self._make_neo4j_apply() if self.is_graph_online() else None
+        return self.spillover.replay(
+            chroma_apply=chroma_apply, neo4j_apply=neo4j_apply
         )
+
+    def _make_chroma_apply(self):
+        def apply(record: dict) -> bool:
+            if record.get("op") != "chroma.store":
+                return False
+            payload = record.get("payload") or {}
+            text = payload.get("text", "")
+            metadata = payload.get("metadata") or {}
+            if not text:
+                return True  # nothing to do; treat as drained
+            try:
+                self.chroma.add_memory(text, dict(metadata))
+                return True
+            except Exception as e:
+                logger.warning("Chroma replay failed: %s", e)
+                return False
+        return apply
+
+    def _make_neo4j_apply(self):
+        def apply(record: dict) -> bool:
+            op = record.get("op")
+            payload = record.get("payload") or {}
+            try:
+                if op == "neo4j.upsert_node":
+                    result = self.neo4j.upsert_node_with_labels(
+                        node_id=payload["node_id"],
+                        labels=payload["labels"],
+                        name=payload["name"],
+                        properties=payload.get("properties") or {},
+                    )
+                    return bool(result)
+                if op == "neo4j.upsert_relationship":
+                    return bool(self.neo4j.upsert_relationship(
+                        source_id=payload["source_id"],
+                        target_id=payload["target_id"],
+                        rel_type=payload["rel_type"],
+                        properties=payload.get("properties") or {},
+                    ))
+            except Exception as e:
+                logger.warning("Neo4j replay failed for op=%s: %s", op, e)
+                return False
+            return False
+        return apply
 
     # ── Bootstrap ────────────────────────────────────────────────────────────
 

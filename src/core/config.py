@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/chroma"
     chroma_collection: str = "conversations"
 
+    # ── Spillover (write-ahead for DB failures) ───────────────────────────────
+    spillover_dir: str = "./data/spillover"
+
     # ── Neo4j ─────────────────────────────────────────────────────────────────
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
