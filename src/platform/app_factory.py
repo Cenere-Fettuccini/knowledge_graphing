@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 
 from src.agent_platform.analyzers.scheduler import AnalyzerScheduler
 from src.rumination.engine import RuminationScheduler
-from src.api.routes import router as legacy_api_router
 from src.apps.chat.app import get_chat_app
 from src.apps.credits.app import get_credits_app
 from src.apps.explorer.app import get_explorer_app
@@ -100,7 +99,6 @@ def create_platform_app() -> FastAPI:
     )
 
     app.include_router(build_shell_router(registry))
-    app.include_router(legacy_api_router, prefix="/api")
     app.mount(
         "/shell-assets",
         StaticFiles(directory=str(Path(__file__).resolve().parents[1] / "explorer")),
