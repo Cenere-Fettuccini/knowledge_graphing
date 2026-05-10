@@ -4,13 +4,12 @@ import asyncio
 import json
 import logging
 import random
-from datetime import datetime, timezone
 
 from google import genai
 from google.genai.types import GenerateContentConfig
 
 from src.core.config import settings
-from src.memory.manager import MemoryManager
+from src.memory.manager import MemoryManager, get_memory_manager
 
 logger = logging.getLogger(__name__)
 
@@ -63,36 +62,10 @@ Return ONLY the raw JSON object. Do not use markdown code blocks.
 
 class DeepSynthesisEngine:
     def __init__(self, memory: MemoryManager = None):
-        self.memory = memory or MemoryManager()
+        self.memory = memory or get_memory_manager()
         api_key = settings.api_keys[0] if settings.api_keys else ""
         self.client = genai.Client(api_key=api_key)
         self.model_name = "gemini-2.5-flash"
-
-    def _get_unanalyzed_beliefs(self):
-        """Fetch beliefs from Neo4j that haven't been deeply analyzed yet."""
-        query = """
-        MATCH (b:Belief)
-        WHERE b.deep_analyzed IS NULL OR b.deep_analyzed = false
-        RETURN b.id AS id, b.content AS content, b.confidence AS conf
-        LIMIT 10
-        """
-        try:
-            records, _, _ = self.memory.neo4j.driver.execute_query(query)
-            return [{"id": r["id"], "content": r["content"], "confidence": r["conf"]} for r in records]
-        except Exception as e:
-            logger.error("Failed to fetch beliefs for deep pass: %s", e)
-            return []
-
-    def _mark_belief_analyzed(self, belief_id: str):
-        """Mark a belief as analyzed so we don't process it again."""
-        query = """
-        MATCH (b:Belief {id: $id})
-        SET b.deep_analyzed = true, b.last_analyzed = $now
-        """
-        try:
-            self.memory.neo4j.driver.execute_query(query, id=belief_id, now=datetime.now(timezone.utc).isoformat())
-        except Exception as e:
-            logger.error("Failed to mark belief analyzed: %s", e)
 
     async def _generate_json(self, system_prompt: str, user_prompt: str, *, temperature: float) -> dict:
         response = await self.client.aio.models.generate_content(
@@ -109,10 +82,10 @@ class DeepSynthesisEngine:
         return json.loads(raw_json)
 
     async def run_batch(self):
-        """Run a single batch of deep synthesis."""
+        """Run a single batch of deep synthesis over un-analyzed beliefs."""
         logger.info("Starting Deep Synthesis batch...")
 
-        beliefs = self._get_unanalyzed_beliefs()
+        beliefs = self.memory.get_unanalyzed_beliefs(limit=10)
         if not beliefs:
             logger.info("No un-analyzed beliefs found. Night Shift resting.")
             return 0
@@ -122,9 +95,9 @@ class DeepSynthesisEngine:
         for belief in beliefs:
             logger.info("Deep analyzing belief: %s...", belief["content"][:50])
 
-            memories = self.memory.chroma.query_memory(belief["content"], k=30)
+            memories = self.memory.search(belief["content"], k=30)
             if not memories:
-                self._mark_belief_analyzed(belief["id"])
+                self.memory.mark_belief_deep_analyzed(belief["id"])
                 continue
 
             context = f"CURRENT BELIEF TO ANALYZE:\n{belief['content']} (Confidence: {belief['confidence']})\n\n"
@@ -152,8 +125,8 @@ class DeepSynthesisEngine:
                     )
                     insights_generated += 1
 
-                    for new_belief in new_beliefs:
-                        self.memory.neo4j.upsert_belief(new_belief["content"], new_belief.get("confidence", 0.5))
+                    for nb in new_beliefs:
+                        self.memory.upsert_belief(nb["content"], nb.get("confidence", 0.5))
 
                     for reframing in reframings:
                         logger.info("INSIGHT: %s", reframing["insight"])
@@ -161,7 +134,7 @@ class DeepSynthesisEngine:
             except Exception as e:
                 logger.error("Error during LLM synthesis for belief %s: %s", belief["id"], e)
             finally:
-                self._mark_belief_analyzed(belief["id"])
+                self.memory.mark_belief_deep_analyzed(belief["id"])
 
             await asyncio.sleep(2)
 
@@ -171,7 +144,7 @@ class DeepSynthesisEngine:
         """Pick a random recent memory, find a tangent, and ruminate on it."""
         logger.info("Entering the Rabbit Hole (Late Night Thoughts)...")
 
-        recent = self.memory.chroma.get_recent(n=100)
+        recent = self.memory.get_recent_memories(n=100)
         if not recent:
             logger.info("No recent memories to ruminate on.")
             return 0
@@ -188,10 +161,7 @@ class DeepSynthesisEngine:
             tangent_response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=tangent_prompt,
-                config=GenerateContentConfig(
-                    temperature=0.8,
-                    max_output_tokens=64,
-                ),
+                config=GenerateContentConfig(temperature=0.8, max_output_tokens=64),
             )
             tangent = (tangent_response.text or "").strip()
             logger.info("Tangent concept generated: %s", tangent)
@@ -199,7 +169,7 @@ class DeepSynthesisEngine:
             logger.error("Failed to generate tangent: %s", e)
             return 0
 
-        tangent_memories = self.memory.chroma.query_memory(tangent, k=15)
+        tangent_memories = self.memory.search(tangent, k=15)
         context = f"SEED MEMORY:\n{seed_memory['text']}\n\nTANGENT CONCEPT: {tangent}\n\nTANGENT MEMORIES:\n"
         for i, mem in enumerate(tangent_memories):
             context += f"--- {i + 1} ---\n{mem['text']}\n\n"
@@ -215,9 +185,9 @@ class DeepSynthesisEngine:
             if epiphany:
                 logger.info("\n%s\nEPIPHANY:\n%s\n%s\n", "=" * 50, epiphany, "=" * 50)
 
-            for new_belief in analysis.get("new_beliefs", []):
-                self.memory.neo4j.upsert_belief(new_belief["content"], new_belief.get("confidence", 0.7))
-                logger.info("Graph Updated with Insight: %s", new_belief["content"])
+            for nb in analysis.get("new_beliefs", []):
+                self.memory.upsert_belief(nb["content"], nb.get("confidence", 0.7))
+                logger.info("Graph Updated with Insight: %s", nb["content"])
 
             return 1
         except Exception as e:
