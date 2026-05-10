@@ -15,7 +15,8 @@ class Neo4jStore:
     """Interface to the Neo4j Knowledge Graph."""
 
     EXPLORER_HIDDEN_LABELS = {"Conversation", "Note", "Thought"}
-    EXPLORER_ROOT_LABELS = {"Belief", "Task", "Project", "Entity"}
+    EXPLORER_ROOT_LABELS = {"User", "Person", "Belief", "Task", "Project", "Entity"}
+    USER_ROOT_LABELS = ("Person", "User")
     TEST_ID_PREFIXES = ("test_", "test-", "src_", "tgt_", "upd_", "topic_")
     TEST_SESSION_PREFIXES = ("test_", "test-", "session_", "pytest_")
 
@@ -309,14 +310,185 @@ class Neo4jStore:
             }
         }
 
+    @staticmethod
+    def _pick_primary_label(labels: list[str]) -> str:
+        if not labels:
+            return "Unknown"
+        # Prefer the user's root label so the centring/coloring code lights up
+        # on the right node when a multi-label root (Person:User) is present.
+        for preferred in ("User", "Person"):
+            if preferred in labels:
+                return preferred
+        return labels[0]
+
     def _serialize_node(self, node) -> dict:
-        label = list(node.labels)[0] if node.labels else "Unknown"
+        labels = list(node.labels) if node.labels else []
+        primary = self._pick_primary_label(labels)
         return {
             "id": node.get("id"),
-            "label": label,
+            "label": primary,
+            "labels": labels or [primary],
             "name": node.get("name", "Unnamed"),
             **{k: v for k, v in node.items() if k not in ["id", "name"]},
         }
+
+    # ── Schema snapshot ───────────────────────────────────────────────────────
+
+    def get_schema_snapshot(self, sample_entities: int = 25) -> dict:
+        """Return labels, relationship types, and a sample of named entities.
+
+        Fed into the analyzer's prompt so the LLM prefers reusing what's
+        already in the graph instead of inventing parallel labels.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"labels": [], "relationship_types": [], "entities": []}
+
+        with self.driver.session() as session:
+            labels = [r["label"] for r in session.run("CALL db.labels() YIELD label RETURN label ORDER BY label")]
+            rels = [r["rel"] for r in session.run("CALL db.relationshipTypes() YIELD relationshipType AS rel RETURN rel ORDER BY rel")]
+            entities = []
+            for record in session.run(
+                """
+                MATCH (n)
+                WHERE n.name IS NOT NULL
+                RETURN n.id AS id, n.name AS name, labels(n) AS labels
+                ORDER BY coalesce(n.updated_at, n.created_at, n.name) DESC
+                LIMIT $sample
+                """,
+                sample=sample_entities,
+            ):
+                entities.append(
+                    {"id": record["id"], "name": record["name"], "labels": list(record["labels"] or [])}
+                )
+
+        return {"labels": labels, "relationship_types": rels, "entities": entities}
+
+    # ── Multi-label upsert (used by the analyzer) ────────────────────────────
+
+    def upsert_node_with_labels(
+        self,
+        *,
+        node_id: str,
+        labels: list[str],
+        name: str,
+        properties: dict | None = None,
+    ) -> str:
+        """Create-or-update a node with one or more labels, keyed on ``node_id``.
+
+        If the node already exists (matched by id), additional labels are
+        merged in via ``SET n:Label`` so the analyzer can layer new labels
+        onto existing entities without recreating them.
+        """
+        if not self.driver and not self.verify_connection():
+            return ""
+        if not labels:
+            raise ValueError("At least one label is required.")
+        if not node_id:
+            raise ValueError("node_id is required.")
+
+        props = dict(properties or {})
+        props["id"] = node_id
+        props["name"] = name
+        labels_clause = ":".join(labels)
+
+        cypher = f"""
+        MERGE (n {{id: $node_id}})
+        ON CREATE SET n:{labels_clause}, n.created_at = $now
+        SET n:{labels_clause}, n += $props, n.updated_at = $now
+        RETURN n.id AS id
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            record = session.run(cypher, node_id=node_id, now=now, props=props).single()
+            return record["id"] if record else node_id
+
+    def upsert_relationship(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: dict | None = None,
+    ) -> bool:
+        """MERGE a relationship by (source, target, type). Returns True on success."""
+        if not self.driver and not self.verify_connection():
+            return False
+        clean_type = re.sub(r"[^A-Z0-9_]", "_", (rel_type or "RELATED_TO").upper())
+        if not clean_type:
+            clean_type = "RELATED_TO"
+        props = dict(properties or {})
+        cypher = f"""
+        MATCH (a {{id: $source_id}})
+        MATCH (b {{id: $target_id}})
+        MERGE (a)-[r:{clean_type}]->(b)
+        ON CREATE SET r += $props, r.created_at = $now
+        SET r += $props, r.updated_at = $now
+        RETURN r
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            result = session.run(
+                cypher,
+                source_id=source_id,
+                target_id=target_id,
+                now=now,
+                props=props,
+            ).single()
+            return result is not None
+
+    # ── User root / bootstrap ─────────────────────────────────────────────────
+
+    def user_root_exists(self) -> bool:
+        """True if a `:User` root node has been seeded."""
+        if not self.driver and not self.verify_connection():
+            return False
+        cypher = "MATCH (u:User {is_root: true}) RETURN count(u) > 0 AS exists"
+        with self.driver.session() as session:
+            record = session.run(cypher).single()
+            return bool(record and record["exists"])
+
+    def get_user_root(self) -> dict | None:
+        """Return the `:User` root node, or None if not yet bootstrapped."""
+        if not self.driver and not self.verify_connection():
+            return None
+        cypher = "MATCH (u:User {is_root: true}) RETURN u LIMIT 1"
+        with self.driver.session() as session:
+            record = session.run(cypher).single()
+            if not record or record["u"] is None:
+                return None
+            return self._serialize_node(record["u"])
+
+    def bootstrap_user_root(self, name: str) -> dict:
+        """Hard-wipe the graph and seed a single `:Person:User` root node."""
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j is offline; cannot bootstrap user root.")
+
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("name must be a non-empty string")
+
+        slug = self._slugify(clean_name)
+        node_id = f"user:{slug}"
+        now = datetime.now(timezone.utc).isoformat()
+        labels_clause = ":".join(self.USER_ROOT_LABELS)
+
+        wipe = "MATCH (n) DETACH DELETE n"
+        seed = f"""
+        CREATE (u:{labels_clause} {{
+            id: $node_id,
+            name: $name,
+            slug: $slug,
+            is_root: true,
+            created_at: $now,
+            updated_at: $now
+        }})
+        RETURN u
+        """
+
+        with self.driver.session() as session:
+            session.run(wipe)
+            record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
+            return self._serialize_node(record["u"])
 
     def _looks_like_test_artifact(self, node_data: dict) -> bool:
         node_id = str(node_data.get("id") or "").lower()

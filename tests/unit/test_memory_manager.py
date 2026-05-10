@@ -46,32 +46,64 @@ def test_delete_session_removes_from_chroma_and_neo4j():
     assert deleted["session_id"] == "test_session_123"
 
 
-def test_store_knowledge_signals_creates_entity_belief_and_turn_link():
+def test_bootstrap_user_root_delegates_to_neo4j():
     manager = MemoryManager.__new__(MemoryManager)
-    created = []
+    captured = {}
 
     class FakeNeo4j:
-        def upsert_entity(self, name, entity_type="Topic", description=None, properties=None):
-            created.append(("entity", name, entity_type))
-            return "entity-1"
-
-        def record_belief_signal(self, **kwargs):
-            created.append(("belief", kwargs["content"], kwargs["belief_key"], kwargs["about_entity_id"]))
-            return "belief-1"
-
-        def add_edge(self, source_id, target_id, rel_type, properties=None):
-            created.append(("edge", source_id, target_id, rel_type))
+        def bootstrap_user_root(self, name):
+            captured["name"] = name
+            return {"id": "user:kevin", "label": "User", "labels": ["Person", "User"], "name": name}
 
     manager.neo4j = FakeNeo4j()
 
-    manager._store_knowledge_signals(
-        text="I prefer exploring beliefs instead of raw chat logs.",
+    result = manager.bootstrap_user_root("Kevin")
+    assert captured["name"] == "Kevin"
+    assert result["id"] == "user:kevin"
+    assert "User" in result["labels"]
+    assert "Person" in result["labels"]
+
+
+def test_user_root_exists_delegates_to_neo4j():
+    manager = MemoryManager.__new__(MemoryManager)
+
+    class FakeNeo4j:
+        def user_root_exists(self):
+            return True
+
+    manager.neo4j = FakeNeo4j()
+    assert manager.user_root_exists() is True
+
+
+def test_store_writes_to_chroma_only_with_unanalyzed_flag():
+    """Stage-1 cutover: store() writes to Chroma with analyzed=False and never to Neo4j."""
+    manager = MemoryManager.__new__(MemoryManager)
+
+    captured = {}
+
+    class FakeChroma:
+        def add_memory(self, text, metadata):
+            captured["text"] = text
+            captured["metadata"] = metadata
+            return "chroma-id-1"
+
+    class FakeNeo4j:
+        def __getattr__(self, name):
+            raise AssertionError(f"Neo4j must not be touched on store(); attempted to access {name!r}")
+
+    manager.chroma = FakeChroma()
+    manager.neo4j = FakeNeo4j()
+    manager._is_chroma_available = lambda: True
+    manager._health_cache_time = 0
+
+    memory_id = manager.store(
+        "I prefer exploring beliefs instead of raw chat logs.",
         role="user",
         session_id="session-1",
-        context=None,
-        turn_id="turn-1",
     )
 
-    assert created[0][0] == "entity"
-    assert created[1][0] == "belief"
-    assert created[2] == ("edge", "belief-1", "turn-1", "DERIVED_FROM")
+    assert memory_id == "chroma-id-1"
+    assert captured["metadata"]["role"] == "user"
+    assert captured["metadata"]["session_id"] == "session-1"
+    assert captured["metadata"]["analyzed"] is False
+    assert captured["metadata"]["is_ephemeral"] is False

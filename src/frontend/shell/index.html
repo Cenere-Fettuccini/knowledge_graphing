@@ -111,6 +111,25 @@
                                     Model Headroom</h4>
                                 <div id="quotaList"></div>
                             </div>
+                            <div class="status-divider"></div>
+                            <div id="analyzerCard">
+                                <div class="analyzer-card__header">
+                                    <h4 class="dim analyzer-card__title">Knowledge Analyzer</h4>
+                                    <span class="status-badge connecting" id="analyzerLLMBadge">PINGING...</span>
+                                </div>
+                                <p class="analyzer-card__queue">
+                                    <span id="analyzerQueueCount">—</span>
+                                    <span class="dim"> messages pending</span>
+                                </p>
+                                <label class="analyzer-card__label" for="analyzerModelSelect">Model</label>
+                                <select id="analyzerModelSelect" class="analyzer-card__select">
+                                    <option value="">Default</option>
+                                </select>
+                                <button id="analyzerRunBtn" class="btn btn-ghost analyzer-card__run">
+                                    Run analyzer
+                                </button>
+                                <p class="analyzer-card__result dim" id="analyzerResult"></p>
+                            </div>
                         </div>
                     </aside>
 
@@ -548,6 +567,25 @@
     <script src="/shell-assets/credits-page.js"></script>
     <script src="/shell-assets/panel.js"></script>
     <script src="/shell-assets/graph.js"></script>
+
+    <!-- First-run bootstrap modal — shown when no :User root exists yet -->
+    <div class="bootstrap-modal" id="bootstrapModal" hidden>
+        <div class="bootstrap-modal__backdrop"></div>
+        <div class="bootstrap-modal__card" role="dialog" aria-modal="true" aria-labelledby="bootstrapTitle">
+            <h2 id="bootstrapTitle">Set up your knowledge graph</h2>
+            <p class="dim">
+                There's no root node yet. Tell us your name and we'll seed the graph with a
+                <code>:Person:User</code> node centered on you. Everything else gets analyzed
+                and connected to this root over time.
+            </p>
+            <label for="bootstrapNameInput" class="bootstrap-modal__label">Your name</label>
+            <input type="text" id="bootstrapNameInput" autocomplete="off" placeholder="e.g. Kevin" />
+            <div class="bootstrap-modal__error" id="bootstrapError" hidden></div>
+            <div class="bootstrap-modal__actions">
+                <button class="btn" id="bootstrapSubmit">Create root node</button>
+            </div>
+        </div>
+    </div>
 
 </body>
 

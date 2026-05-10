@@ -1,5 +1,6 @@
 """ChromaDB episodic memory storage and semantic retrieval."""
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,56 @@ import chromadb
 
 from src.core.config import settings
 from src.memory.embeddings.google import get_embedding_model
+
+logger = logging.getLogger(__name__)
+
+
+# Exceptions that have shown up in the wild during PersistentClient bootstrap.
+# These come from a partially-failed init that leaves stale state in
+# chromadb's SharedSystemClient cache or a half-loaded Rust binding.
+_CHROMA_INIT_TRANSIENTS = (AttributeError, KeyError, ValueError)
+
+
+def _clear_chroma_shared_cache() -> None:
+    """Wipe chromadb's process-wide SharedSystemClient cache.
+
+    Reaches into a private symbol on purpose — this is the documented escape
+    hatch when an earlier init failed midway and left a stale identifier
+    behind. Safe because we only call it from the retry path.
+    """
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient._identifier_to_system.clear()
+    except Exception:  # pragma: no cover - best-effort
+        logger.debug("Could not clear chromadb SharedSystemClient cache.", exc_info=True)
+
+
+def _create_persistent_client(path: str) -> chromadb.api.client.Client:
+    """Create a PersistentClient, retrying once if the first init blows up.
+
+    Observed failure mode (chromadb >= 0.5):
+      1. First call dies with AttributeError on RustBindingsAPI.bindings
+         because the Rust binding failed to initialise.
+      2. Second call dies with KeyError on the persist path, because step 1
+         registered a half-baked entry in SharedSystemClient's cache.
+
+    Pre-creating the directory + clearing the shared cache between attempts
+    defuses both. If the second attempt also fails, the caller decides what
+    to do (production raises, pytest falls back to EphemeralClient).
+    """
+    os.makedirs(path, exist_ok=True)
+    try:
+        return chromadb.PersistentClient(path=path)
+    except _CHROMA_INIT_TRANSIENTS as exc:
+        logger.warning(
+            "ChromaDB PersistentClient init failed (%s: %s) — clearing the "
+            "shared-system cache and retrying once.",
+            type(exc).__name__,
+            exc,
+        )
+        _clear_chroma_shared_cache()
+        return chromadb.PersistentClient(path=path)
 
 
 class GoogleChromaEmbedder(chromadb.EmbeddingFunction):
@@ -41,9 +92,13 @@ class ChromaStore:
             self.client = chromadb.EphemeralClient()
         else:
             try:
-                self.client = chromadb.PersistentClient(path=path)
+                self.client = _create_persistent_client(path)
             except Exception:
                 if persist_path and os.environ.get("PYTEST_CURRENT_TEST"):
+                    logger.warning(
+                        "ChromaDB persistent init failed under pytest — "
+                        "falling back to EphemeralClient."
+                    )
                     self.client = chromadb.EphemeralClient()
                 else:
                     raise
@@ -123,3 +178,58 @@ class ChromaStore:
     def count(self) -> int:
         """Total documents in the collection."""
         return self.collection.count()
+
+    def list_where(
+        self,
+        where: dict | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return documents matching ``where`` (no embedding lookup), oldest-first.
+
+        Used by the analyzer pipeline to drain the ``analyzed: false`` queue in
+        chronological order so the LLM sees conversation turns in the same
+        sequence the user lived them.
+        """
+        results = self.collection.get(where=where, limit=limit, offset=offset)
+        if not results.get("documents"):
+            return []
+        memories = [
+            {
+                "id": results["ids"][i],
+                "text": results["documents"][i],
+                "metadata": results["metadatas"][i],
+            }
+            for i in range(len(results["documents"]))
+        ]
+        memories.sort(
+            key=lambda m: (
+                m.get("metadata", {}).get("timestamp", ""),
+                int(m.get("metadata", {}).get("turn_order", 0) or 0),
+            )
+        )
+        return memories
+
+    def update_metadata(self, ids: list[str], patch: dict) -> int:
+        """Merge ``patch`` into the metadata of every doc in ``ids``. Returns count touched."""
+        if not ids:
+            return 0
+        existing = self.collection.get(ids=ids)
+        new_metadatas = []
+        for current in existing.get("metadatas", []) or []:
+            merged = dict(current or {})
+            merged.update(patch)
+            new_metadatas.append(merged)
+        if not new_metadatas:
+            return 0
+        self.collection.update(ids=existing["ids"], metadatas=new_metadatas)
+        return len(existing["ids"])
+
+    def count_where(self, where: dict | None = None) -> int:
+        """Approximate count of documents matching ``where``.
+
+        Chroma has no native count-with-filter, so this fetches just the ids;
+        cheap enough for queue-status displays.
+        """
+        results = self.collection.get(where=where, include=[])
+        return len(results.get("ids") or [])

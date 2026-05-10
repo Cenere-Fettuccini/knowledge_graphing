@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model: str = "qwen2.5-3b-instruct"
 
+    # ── Knowledge analyzer ───────────────────────────────────────────────────
+    analyzer_enabled: bool = True
+    analyzer_tick_seconds: int = 900   # how often the auto-drain scheduler ticks
+    analyzer_batch_size: int = 20      # Chroma rows per LLM call
+
     # ── Session persistence ───────────────────────────────────────────────────
     session_store_path: str = "./data/sessions.json"
 

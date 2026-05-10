@@ -624,6 +624,111 @@ const TaskManager = {
     }
 };
 
+const AnalyzerManager = {
+    init() {
+        if (this._initialized) return;
+        this.card = document.getElementById('analyzerCard');
+        this.queueCount = document.getElementById('analyzerQueueCount');
+        this.llmBadge = document.getElementById('analyzerLLMBadge');
+        this.modelSelect = document.getElementById('analyzerModelSelect');
+        this.runBtn = document.getElementById('analyzerRunBtn');
+        this.resultBox = document.getElementById('analyzerResult');
+        this._initialized = true;
+
+        if (this.runBtn) {
+            this.runBtn.addEventListener('click', () => this.run());
+        }
+    },
+
+    async start() {
+        this.init();
+        await this.refresh();
+        clearInterval(this._timerId);
+        this._timerId = setInterval(() => this.refresh(), 30000);
+    },
+
+    stop() {
+        clearInterval(this._timerId);
+        this._timerId = null;
+    },
+
+    async refresh() {
+        const client = getExplorerClient();
+        if (!client || !this.card) return;
+
+        const [status, models] = await Promise.all([
+            client.getAnalyzerStatus(),
+            client.listAnalyzerModels(),
+        ]);
+
+        if (this.queueCount) this.queueCount.textContent = status.unanalyzed_count ?? 0;
+
+        if (this.llmBadge) {
+            const online = !!status.local_llm_available;
+            this.llmBadge.className = `status-badge ${online ? 'online' : 'offline'}`;
+            this.llmBadge.textContent = online ? 'LM STUDIO' : 'OFFLINE';
+            this.llmBadge.title = online
+                ? `Local LLM ready · default: ${status.default_model || '—'}`
+                : 'LM Studio is not reachable. Start it to enable bulk analysis.';
+        }
+
+        // Refresh the model picker without clobbering the user's current selection.
+        if (this.modelSelect) {
+            const previous = this.modelSelect.value;
+            const options = ['<option value="">Default</option>'];
+            (models || []).forEach((m) => {
+                const id = m && m.id ? String(m.id) : '';
+                if (!id) return;
+                options.push(`<option value="${id}">${id}</option>`);
+            });
+            this.modelSelect.innerHTML = options.join('');
+            if (previous && Array.from(this.modelSelect.options).some((o) => o.value === previous)) {
+                this.modelSelect.value = previous;
+            }
+        }
+
+        if (this.runBtn) {
+            this.runBtn.disabled = (status.unanalyzed_count ?? 0) === 0;
+        }
+    },
+
+    async run() {
+        const client = getExplorerClient();
+        if (!client || !this.runBtn) return;
+        this.runBtn.disabled = true;
+        this.runBtn.textContent = 'Running…';
+        if (this.resultBox) this.resultBox.textContent = '';
+
+        try {
+            const model = this.modelSelect && this.modelSelect.value ? this.modelSelect.value : null;
+            const result = await client.runAnalyzer({ batchSize: 20, model });
+            this._renderResult(result);
+            window.GraphManager?.reload?.();
+        } catch (e) {
+            console.error('Analyzer run failed', e);
+            if (this.resultBox) {
+                this.resultBox.textContent = 'Run failed — check the console.';
+                this.resultBox.style.color = 'var(--c-red, #A37A87)';
+            }
+        } finally {
+            this.runBtn.textContent = 'Run analyzer';
+            await this.refresh();
+        }
+    },
+
+    _renderResult(result) {
+        if (!this.resultBox || !result) return;
+        if (result.skipped) {
+            this.resultBox.textContent = `Skipped (${result.reason || 'no work to do'})`;
+            this.resultBox.style.color = '';
+            return;
+        }
+        const { processed_messages: msgs = 0, entities_written: ents = 0, relationships_written: rels = 0 } = result;
+        this.resultBox.textContent = `Processed ${msgs} message${msgs === 1 ? '' : 's'} · ${ents} entit${ents === 1 ? 'y' : 'ies'} · ${rels} relationship${rels === 1 ? '' : 's'}`;
+        this.resultBox.style.color = '';
+    },
+};
+
 window.ExplorerPageController = {
     _active: false,
     activate(shellContext) {
@@ -632,6 +737,7 @@ window.ExplorerPageController = {
         Panel.init();
         StatusManager.start();
         TaskManager.start();
+        AnalyzerManager.start();
         window.GraphManager?.activate?.();
     },
 
@@ -639,6 +745,7 @@ window.ExplorerPageController = {
         this._active = false;
         StatusManager.stop();
         TaskManager.stop();
+        AnalyzerManager.stop();
         window.GraphManager?.deactivate?.();
     },
 

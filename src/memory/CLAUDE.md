@@ -4,6 +4,14 @@ Owns all persistence: ChromaDB (semantic/episodic memory) and Neo4j (knowledge g
 **Apps interact only through `MemoryManager`'s public methods, injected via `get_memory_manager()`.**
 Never access `memory.neo4j.*` or `memory.chroma.*` from app code.
 
+## Storage roles
+- **ChromaDB** is the source of truth for raw conversation history. Every `store()`
+  call lands here with `analyzed: False` so the analyzer pipeline (under
+  `src/agent_platform/analyzers/`) can pick it up later.
+- **Neo4j** holds *only* inferred, durable knowledge — entities, relationships, and
+  beliefs produced by the analyzer. Conversation turns themselves are **not**
+  written to the graph.
+
 ## Files
 | File | Role |
 |------|------|
@@ -11,7 +19,6 @@ Never access `memory.neo4j.*` or `memory.chroma.*` from app code.
 | `protocol.py` | `MemoryProtocol` — structural interface for type hints and test mocks |
 | `stores/chroma_store.py` | ChromaDB client wrapper (internal) |
 | `stores/neo4j_store.py` | Neo4j driver wrapper (internal) |
-| `knowledge_extractor.py` | Extracts belief signals from conversation text (internal) |
 | `embeddings/google.py` | Google embedding model client (internal) |
 
 ## Public Interface — `MemoryManager`
@@ -29,7 +36,8 @@ memory.invalidate_health_cache() -> None
 ### Conversation Memory (ChromaDB)
 ```python
 memory.store(text, role: str, session_id: str, is_ephemeral: bool = False, **extra) -> str | None
-# Stores a turn in Chroma + Neo4j. Returns the chroma memory_id.
+# Stores a turn in Chroma only, with metadata `analyzed: False`. Returns the chroma memory_id.
+# The graph is populated separately by the analyzer pipeline.
 
 memory.search(query: str, k: int = 5, session_id: str | None = None, include_ephemeral: bool = True) -> list
 # Semantic search. Each result: {"id": str, "text": str, "metadata": dict, "distance": float}
@@ -60,6 +68,46 @@ memory.graph_active_tasks() -> list[dict]
 
 memory.graph_belief_trail(belief_id: str) -> dict
 # {"chain": list[dict], "evidence": list[dict]}
+```
+
+### Analyzer queue (Chroma)
+```python
+memory.list_unanalyzed(limit: int = 50) -> list[dict]
+# Returns the next batch of conversation turns awaiting analysis.
+# Filters to `analyzed: false` and excludes ephemeral rows; ordered oldest-first.
+
+memory.count_unanalyzed() -> int
+# Cheap-ish count for queue-status displays.
+
+memory.mark_analyzed(memory_ids: list[str], run_id: str | None = None) -> int
+# Stamps each Chroma row with `analyzed: true` (and `analysis_run_id`).
+```
+
+### Analyzer graph writes (Neo4j)
+```python
+memory.graph_schema_snapshot() -> dict
+# {"labels": [...], "relationship_types": [...], "entities": [...]}
+# Fed into the analyzer prompt so the LLM reuses existing labels and edge types.
+
+memory.upsert_node(*, node_id: str, labels: list[str], name: str, properties: dict | None = None) -> str
+# Multi-label MERGE on stable id. Layered labels are accepted on first sighting.
+
+memory.upsert_relationship(*, source_id: str, target_id: str, rel_type: str, properties: dict | None = None) -> bool
+# MERGE a typed relationship between two existing nodes.
+```
+
+### Bootstrap (Neo4j)
+```python
+memory.user_root_exists() -> bool
+# True once a `:Person:User {is_root: true}` node has been seeded.
+
+memory.get_user_root() -> dict | None
+# Returns the seeded root node, or None if not yet bootstrapped.
+
+memory.bootstrap_user_root(name: str) -> dict
+# Hard-wipes Neo4j and seeds a single `:Person:User` root with the given name.
+# Chroma is left intact — historical conversations remain queued for the
+# analyzer to re-process against the fresh graph.
 ```
 
 ## Adding New Graph Queries

@@ -59,5 +59,42 @@
                 return [];
             }
         },
+
+        async getBootstrapStatus() {
+            try {
+                return await http.get('/api/explorer/bootstrap/status');
+            } catch (error) {
+                console.error('ExplorerClient.getBootstrapStatus failed', error);
+                return { initialized: false, user: null, _error: true };
+            }
+        },
+
+        async bootstrap(name) {
+            return await http.post('/api/explorer/bootstrap', { name });
+        },
+
+        async getAnalyzerStatus() {
+            try {
+                return await http.get('/api/explorer/analyze/status');
+            } catch (error) {
+                console.error('ExplorerClient.getAnalyzerStatus failed', error);
+                return { unanalyzed_count: 0, local_llm_available: false, default_model: '' };
+            }
+        },
+
+        async listAnalyzerModels() {
+            try {
+                return await http.get('/api/explorer/analyze/models');
+            } catch (error) {
+                console.error('ExplorerClient.listAnalyzerModels failed', error);
+                return [];
+            }
+        },
+
+        async runAnalyzer({ batchSize = 20, model = null } = {}) {
+            const body = { batch_size: batchSize };
+            if (model) body.model = model;
+            return await http.post('/api/explorer/analyze/run', body);
+        },
     };
 })();

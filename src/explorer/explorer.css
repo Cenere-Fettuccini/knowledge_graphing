@@ -281,6 +281,123 @@ h3 {
 }
 .graph-controls select.theme-btn:focus { outline: none; color: var(--fg-primary); }
 
+/* ── First-run bootstrap modal ──────────────────────────────────────────── */
+.bootstrap-modal[hidden] { display: none; }
+.bootstrap-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.bootstrap-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+}
+.bootstrap-modal__card {
+    position: relative;
+    background: var(--bg-app);
+    color: var(--fg-primary);
+    border: 1px solid var(--border-main);
+    border-radius: var(--radius-md, 8px);
+    box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.35));
+    padding: 24px;
+    width: min(420px, 92vw);
+}
+.bootstrap-modal__card h2 {
+    margin: 0 0 8px;
+    font-size: 16px;
+    font-weight: 600;
+}
+.bootstrap-modal__card p { margin: 0 0 16px; font-size: 12px; line-height: 1.5; }
+.bootstrap-modal__label {
+    display: block;
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.bootstrap-modal__card input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    background: transparent;
+    color: var(--fg-primary);
+    border: 1px solid var(--border-main);
+    border-radius: var(--radius-sm, 4px);
+    font: inherit;
+    font-size: 13px;
+}
+.bootstrap-modal__card input[type="text"]:focus {
+    outline: none;
+    border-color: var(--border-focus, var(--fg-primary));
+}
+.bootstrap-modal__error {
+    color: var(--c-red, #A37A87);
+    font-size: 11px;
+    margin-top: 8px;
+}
+.bootstrap-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+/* ── Analyzer card (system status column) ───────────────────────────────── */
+#analyzerCard { padding-top: 4px; }
+.analyzer-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.analyzer-card__title {
+    margin: 0;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.analyzer-card__queue {
+    margin: 4px 0 10px;
+    font-size: 13px;
+    font-weight: 500;
+}
+.analyzer-card__label {
+    display: block;
+    font-size: 10px;
+    color: var(--fg-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.analyzer-card__select {
+    width: 100%;
+    padding: 5px 8px;
+    background: transparent;
+    color: var(--fg-primary);
+    border: 1px solid var(--border-main);
+    border-radius: var(--radius-sm, 4px);
+    font: inherit;
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+.analyzer-card__select:focus { outline: none; border-color: var(--border-focus, var(--fg-primary)); }
+.analyzer-card__run {
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+.analyzer-card__run[disabled] { opacity: 0.6; cursor: not-allowed; }
+.analyzer-card__result {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.4;
+    min-height: 14px;
+}
+
 /* ── Placeholders ───────────────────────────────────────────────────────── */
 .placeholder-module { padding: 16px; }
 .placeholder-content {
