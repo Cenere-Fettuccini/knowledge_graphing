@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.agent_platform.analyzers.scheduler import AnalyzerScheduler
+from src.rumination.engine import RuminationScheduler
 from src.api.routes import router as legacy_api_router
 from src.apps.chat.app import get_chat_app
 from src.apps.credits.app import get_credits_app
@@ -40,27 +41,48 @@ def build_registry() -> AppRegistry:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start background services when FastAPI boots; stop them on shutdown."""
-    scheduler: AnalyzerScheduler | None = None
+    analyzer: AnalyzerScheduler | None = None
+    ruminator: RuminationScheduler | None = None
+
+    memory = get_memory_manager()
+
     if settings.analyzer_enabled:
         try:
-            scheduler = AnalyzerScheduler(
-                memory=get_memory_manager(),
+            analyzer = AnalyzerScheduler(
+                memory=memory,
                 tick_seconds=settings.analyzer_tick_seconds,
                 batch_size=settings.analyzer_batch_size,
             )
-            scheduler.start()
-            app.state.analyzer_scheduler = scheduler
+            analyzer.start()
+            app.state.analyzer_scheduler = analyzer
         except Exception:  # pragma: no cover - never block startup on a scheduler failure
             logger.exception("AnalyzerScheduler failed to start; continuing without it.")
-            scheduler = None
+            analyzer = None
     else:
         logger.info("Analyzer scheduler disabled via settings.analyzer_enabled=False")
+
+    if settings.rumination_enabled:
+        try:
+            ruminator = RuminationScheduler(
+                memory=memory,
+                deep_pass_tick_seconds=settings.deep_pass_tick_seconds,
+                rabbit_hole_tick_seconds=settings.rabbit_hole_tick_seconds,
+            )
+            ruminator.start()
+            app.state.rumination_scheduler = ruminator
+        except Exception:  # pragma: no cover - never block startup on a scheduler failure
+            logger.exception("RuminationScheduler failed to start; continuing without it.")
+            ruminator = None
+    else:
+        logger.info("Rumination scheduler disabled via settings.rumination_enabled=False")
 
     try:
         yield
     finally:
-        if scheduler is not None:
-            scheduler.stop()
+        if analyzer is not None:
+            analyzer.stop()
+        if ruminator is not None:
+            ruminator.stop()
 
 
 def create_platform_app() -> FastAPI:
