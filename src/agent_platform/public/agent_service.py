@@ -30,11 +30,14 @@ class AgentService:
             store_text=request.store_text or request.message,
             store_metadata=request.store_metadata,
         )
+        health = self._memory_health_snapshot()
         return AgentRunResult(
             app_id=request.app_id,
             session_id=request.session_id,
             reply=reply,
             reply_timestamp=datetime.now(timezone.utc).isoformat(),
+            memory_degraded=bool(health and health.get("degraded")),
+            memory_health=health,
         )
 
     async def arun(self, request: AgentRunRequest) -> AgentRunResult:
@@ -48,12 +51,28 @@ class AgentService:
             store_text=request.store_text or request.message,
             store_metadata=request.store_metadata,
         )
+        health = self._memory_health_snapshot()
         return AgentRunResult(
             app_id=request.app_id,
             session_id=request.session_id,
             reply=reply,
             reply_timestamp=datetime.now(timezone.utc).isoformat(),
+            memory_degraded=bool(health and health.get("degraded")),
+            memory_health=health,
         )
+
+    def _memory_health_snapshot(self) -> dict | None:
+        """Best-effort memory health snapshot for the response. Never raises."""
+        memory = getattr(self._agent, "memory", None)
+        if memory is None:
+            return None
+        snapshot = getattr(memory, "snapshot_health", None)
+        if not callable(snapshot):
+            return None
+        try:
+            return snapshot()
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     def status(self, force: bool = False) -> AgentStatus:
         health = self._agent.status(force=force)

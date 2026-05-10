@@ -302,6 +302,37 @@ class MemoryManager:
         """Force the next ``status()`` call to re-probe backends."""
         self._health_cache_time = 0
 
+    def snapshot_health(self) -> dict:
+        """Compact health snapshot for surfacing degradation in agent responses.
+
+        Combines :meth:`status` with the on-disk spillover counts so callers
+        can render a single ``memory_degraded`` indicator without separately
+        polling each backend. ``degraded`` is True if either backend is
+        non-healthy or any spillover is pending.
+        """
+        live = self.status()
+        try:
+            pending = self.spillover.pending_counts()
+        except Exception:
+            pending = {"chroma": 0, "neo4j": 0}
+        chroma_online = "online" in (live.get("chroma") or "")
+        neo4j_online = "online" in (live.get("neo4j") or "")
+        spillover_pending = bool(pending.get("chroma") or pending.get("neo4j"))
+        degraded = (
+            (live.get("status") or "online") != "online" or spillover_pending
+        )
+        return {
+            "status": live.get("status", "online"),
+            "chroma": "online" if chroma_online else "offline",
+            "neo4j": "online" if neo4j_online else "offline",
+            "spillover_pending": dict(pending),
+            "degraded": degraded,
+            "details": {
+                "chroma": live.get("chroma"),
+                "neo4j": live.get("neo4j"),
+            },
+        }
+
     # ── Knowledge graph public queries ────────────────────────────────────────
 
     def graph_overview(self, limit: int = 100) -> dict:

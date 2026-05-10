@@ -236,6 +236,31 @@
     letter-spacing: 0.5px;
 }
 
+.chat-stage__memory-warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 1.4;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(180, 95, 30, 0.12);
+    color: #b45f1e;
+    border: 1px solid rgba(180, 95, 30, 0.3);
+}
+
+.chat-stage__memory-warning[hidden] {
+    display: none;
+}
+
+.chat-stage__memory-warning-icon {
+    font-size: 11px;
+    line-height: 1;
+}
+
 /* ── Anchor Box ─────────────────────────────────────────────────────────── */
 .chat-anchor {
     margin: 24px auto 0;

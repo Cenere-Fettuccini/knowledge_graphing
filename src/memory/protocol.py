@@ -13,6 +13,8 @@ class MemoryProtocol(Protocol):
 
     def invalidate_health_cache(self) -> None: ...
 
+    def snapshot_health(self) -> dict: ...
+
     # ── Conversation memory (ChromaDB) ────────────────────────────────────────
 
     def store(
