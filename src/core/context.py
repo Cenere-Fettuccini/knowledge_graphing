@@ -18,7 +18,6 @@ class ContextManager:
         """
         Dynamically builds context based on the task type and entity mentions.
         """
-        # 1. Determine retrieval depth
         k_map = {
             "QA": 5,
             "REASONING": 8,
@@ -28,22 +27,19 @@ class ContextManager:
         }
         k = k_map.get(task_type, 3)
 
-        # 2. Episodic RAG (ChromaDB)
         rag_memories = []
         try:
             rag_memories = self.memory.search(query, k=k)
         except Exception as e:
             logger.error("RAG search failed: %s", e)
 
-        # 3. Entity Linking (Neo4j) — targeted Cypher search, not full scan
         entities = []
         try:
-            if self.memory.neo4j.driver:
+            if self.memory.is_graph_online():
                 entities = self._find_entities(query)
         except Exception as e:
             logger.error("Entity linking failed: %s", e)
 
-        # 4. Session History
         history = []
         try:
             history = self.memory.get_history(session_id, limit=settings.context_window_turns)
@@ -58,37 +54,20 @@ class ContextManager:
 
     def _find_entities(self, query: str) -> list:
         """
-        Search Neo4j for entities mentioned in the query using a Cypher
-        case-insensitive CONTAINS filter instead of pulling the entire graph.
+        Search the graph for entities mentioned in the query and return their details.
         """
-        # Extract candidate words (3+ chars to avoid noise)
         words = [w.strip(".,!?\"'()") for w in query.split() if len(w.strip(".,!?\"'()")) >= 3]
         if not words:
             return []
 
-        # Build a Cypher WHERE clause that checks node names against query words
-        conditions = " OR ".join([f"toLower(n.name) CONTAINS toLower($w{i})" for i in range(len(words))])
-        params = {f"w{i}": w for i, w in enumerate(words)}
-        
-        cypher = f"""
-        MATCH (n)
-        WHERE {conditions}
-        RETURN n.id AS id
-        LIMIT 5
-        """
-        
+        seen_ids: set[str] = set()
         results = []
-        try:
-            with self.memory.neo4j.driver.session() as session:
-                records = session.run(cypher, **params)
-                for record in records:
-                    node_id = record["id"]
-                    if node_id:
-                        details = self.memory.neo4j.get_node_detail(node_id)
-                        if details.get("node"):
-                            results.append(details)
-        except Exception as e:
-            logger.error("Neo4j entity search failed: %s", e)
-        
+        for word in words:
+            for node in self.memory.search_nodes(word, limit=5):
+                node_id = node.get("id")
+                if node_id and node_id not in seen_ids:
+                    seen_ids.add(node_id)
+                    details = self.memory.graph_node_detail(node_id)
+                    if details.get("node"):
+                        results.append(details)
         return results
-
