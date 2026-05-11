@@ -39,7 +39,11 @@ class Neo4jStore:
                 self.driver = None
 
         try:
-            self.driver = GraphDatabase.driver(self._uri, auth=(self._user, self._password))
+            self.driver = GraphDatabase.driver(
+                self._uri,
+                auth=(self._user, self._password),
+                notifications_disabled_categories=["UNRECOGNIZED"],
+            )
             self.driver.verify_connectivity()
             return True
         except Exception as e:
