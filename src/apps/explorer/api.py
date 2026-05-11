@@ -116,6 +116,36 @@ async def retry_analyzer_failures(
     return services.retry_analyzer_failures(memory, memory_ids=memory_ids)
 
 
+@router.post("/bulk/import")
+async def run_bulk_import(
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    path = (payload or {}).get("path")
+    fmt = (payload or {}).get("format", "jsonl")
+    source = (payload or {}).get("source")
+    chunk_size = (payload or {}).get("chunk_size", 1000)
+    chunk_overlap = (payload or {}).get("chunk_overlap", 100)
+    if not isinstance(path, str) or not path.strip():
+        raise HTTPException(status_code=400, detail="`path` is required and must be a non-empty string")
+    if fmt not in ("jsonl", "directory"):
+        raise HTTPException(status_code=400, detail="`format` must be 'jsonl' or 'directory'")
+    if source is not None and not isinstance(source, str):
+        raise HTTPException(status_code=400, detail="`source` must be a string if provided")
+    if not isinstance(chunk_size, int) or chunk_size <= 0 or chunk_size > 10000:
+        raise HTTPException(status_code=400, detail="`chunk_size` must be an integer in 1..10000")
+    if not isinstance(chunk_overlap, int) or chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise HTTPException(status_code=400, detail="`chunk_overlap` must be a non-negative integer less than chunk_size")
+    return services.run_bulk_import(
+        memory,
+        path=path,
+        format=fmt,
+        source=source,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+
+
 @router.get("/system/status")
 async def get_system_status(
     memory: MemoryManager = Depends(get_memory_manager),

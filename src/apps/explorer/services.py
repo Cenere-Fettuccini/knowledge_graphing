@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.agent_platform.analyzers.knowledge import KnowledgeAnalyzer
 from src.agent_platform.public.agent_service import AgentService
+from src.ingestion.bulk_importer import BulkImporter
 from src.memory.manager import MemoryManager
 
 
@@ -88,6 +89,39 @@ def retry_analyzer_failures(
     """Reset failed rows so the next analyzer tick picks them up."""
     reset = memory.retry_failed(memory_ids)
     return {"reset": reset, "remaining": memory.count_failed()}
+
+
+def run_bulk_import(
+    memory: MemoryManager,
+    *,
+    path: str,
+    format: str = "jsonl",
+    source: str | None = None,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 100,
+) -> dict:
+    """Drop a historical archive into Chroma so the analyzer can backfill the graph.
+
+    ``format`` is either ``"jsonl"`` (one row per line, ``text`` key required)
+    or ``"directory"`` (recursive walk over ``.txt`` / ``.md`` files, chunked).
+    The function never raises on bad input — bad rows / unreadable files are
+    counted as skipped and the user sees the totals in the response.
+    """
+    importer = BulkImporter(memory=memory)
+    if format == "jsonl":
+        result = importer.import_jsonl(path, source=source)
+    elif format == "directory":
+        result = importer.import_directory(
+            path, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        )
+    else:
+        return {
+            "imported": 0,
+            "skipped": 0,
+            "errors": [f"unknown format: {format!r} (expected 'jsonl' or 'directory')"],
+            "source_path": path,
+        }
+    return result.as_dict()
 
 
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:
