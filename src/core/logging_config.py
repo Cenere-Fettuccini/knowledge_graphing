@@ -41,18 +41,23 @@ class RedactSecretsFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003 - stdlib API
         try:
-            if isinstance(record.msg, str) and ("=" in record.msg or "Bearer" in record.msg):
-                record.msg = _redact(record.msg)
-            if record.args:
-                if isinstance(record.args, tuple):
-                    record.args = tuple(
-                        _redact(a) if isinstance(a, str) else a for a in record.args
-                    )
-                elif isinstance(record.args, dict):
-                    record.args = {
-                        k: (_redact(v) if isinstance(v, str) else v)
-                        for k, v in record.args.items()
-                    }
+            if not record.args:
+                if isinstance(record.msg, str) and ("=" in record.msg or "Bearer" in record.msg):
+                    record.msg = _redact(record.msg)
+                return True
+            # With args, redact the *formatted* message and freeze it. This catches
+            # non-string args like httpx.URL whose __str__ contains "?key=..." —
+            # those would otherwise be stringified by logging *after* this filter
+            # ran, leaking the secret into the final output.
+            try:
+                formatted = record.getMessage()
+            except Exception:
+                return True
+            if "=" in formatted or "Bearer" in formatted:
+                redacted = _redact(formatted)
+                if redacted != formatted:
+                    record.msg = redacted
+                    record.args = None
         except Exception:  # pragma: no cover - filters must never raise
             pass
         return True

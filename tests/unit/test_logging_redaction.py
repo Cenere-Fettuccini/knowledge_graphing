@@ -49,6 +49,31 @@ def test_filter_redacts_string_args():
     assert "key=REDACTED" in formatted
 
 
+def test_filter_redacts_non_string_url_arg():
+    """Regression: httpx logs request.url as a URL *object*, not a str. The filter
+    must still strip the api key out of the formatted message — otherwise logging
+    stringifies the URL *after* the filter runs and the secret leaks."""
+
+    class FakeURL:
+        def __init__(self, value: str) -> None:
+            self._value = value
+
+        def __str__(self) -> str:
+            return self._value
+
+    record = logging.LogRecord(
+        name="httpx", level=logging.INFO, pathname=__file__, lineno=1,
+        msg='HTTP Request: %s %s "%s %d %s"',
+        args=("GET", FakeURL("https://api.example.com/v1?key=LEAKEDKEY"),
+              "HTTP/1.1", 200, "OK"),
+        exc_info=None,
+    )
+    RedactSecretsFilter().filter(record)
+    formatted = record.getMessage()
+    assert "LEAKEDKEY" not in formatted
+    assert "key=REDACTED" in formatted
+
+
 def test_filter_passes_non_string_args_unchanged():
     record = logging.LogRecord(
         name="x", level=logging.INFO, pathname=__file__, lineno=1,
