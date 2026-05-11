@@ -903,6 +903,351 @@ class Neo4jStore:
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 
+    # ── Canonicalization (S2.4) ──────────────────────────────────────────────
+
+    # Internal labels the canonicalizer should never propose merges across.
+    # Beliefs get their own pass (S2.5); the rest are scaffolding/system types.
+    CANONICALIZATION_HIDDEN_LABELS = frozenset({
+        "MergeProposal",
+        "Belief",
+        "PendingBelief",
+        "RejectedHypothesis",
+        "RejectedBelief",
+        "Era",
+    })
+
+    def list_distinct_labels(self) -> list[str]:
+        """Return every label currently in the graph, sorted alphabetically."""
+        if not self.driver and not self.verify_connection():
+            return []
+        with self.driver.session() as session:
+            return [
+                r["label"]
+                for r in session.run(
+                    "CALL db.labels() YIELD label RETURN label ORDER BY label"
+                )
+            ]
+
+    def list_named_nodes_by_label(
+        self,
+        label: str,
+        *,
+        exclude_roots: bool = True,
+    ) -> list[dict]:
+        """Return ``[{"id", "name", "created_at"}]`` for nodes carrying ``label``.
+
+        Skips nodes flagged ``is_root: true`` so the user-root never participates
+        in canonicalization clustering, and skips nodes without a name (clustering
+        them by string similarity is meaningless).
+        """
+        if not label or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", label):
+            raise ValueError(f"Invalid label: {label!r}")
+        if not self.driver and not self.verify_connection():
+            return []
+        where_clauses = ["n.name IS NOT NULL"]
+        if exclude_roots:
+            where_clauses.append("coalesce(n.is_root, false) = false")
+        where = " AND ".join(where_clauses)
+        cypher = (
+            f"MATCH (n:{label}) "
+            f"WHERE {where} "
+            "RETURN n.id AS id, n.name AS name, n.created_at AS created_at"
+        )
+        with self.driver.session() as session:
+            return [
+                {"id": r["id"], "name": r["name"], "created_at": r["created_at"]}
+                for r in session.run(cypher)
+            ]
+
+    def list_active_beliefs(self, limit: int = 1000) -> list[dict]:
+        """Return ``[{id, content, confidence, created_at}]`` for active beliefs.
+
+        Used by the belief-dedup pass — superseded beliefs are excluded
+        because they're already historical and can't be merged further.
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (b:Belief)
+        WHERE coalesce(b.status, 'active') = 'active'
+          AND b.content IS NOT NULL
+        RETURN b.id AS id,
+               b.content AS content,
+               b.confidence AS confidence,
+               b.created_at AS created_at
+        ORDER BY coalesce(b.created_at, '') ASC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            return [
+                {
+                    "id": r["id"],
+                    "content": r["content"],
+                    "confidence": r["confidence"],
+                    "created_at": r["created_at"],
+                }
+                for r in session.run(cypher, limit=int(limit))
+            ]
+
+    def count_node_connections(self, node_ids: list[str]) -> dict[str, int]:
+        """Return ``{node_id: degree}`` (in + out) for the given ids."""
+        if not node_ids or (not self.driver and not self.verify_connection()):
+            return {}
+        cypher = (
+            "UNWIND $ids AS nid "
+            "OPTIONAL MATCH (n {id: nid})-[r]-() "
+            "RETURN nid AS id, count(r) AS degree"
+        )
+        with self.driver.session() as session:
+            return {
+                r["id"]: int(r["degree"] or 0)
+                for r in session.run(cypher, ids=list(node_ids))
+            }
+
+    def create_merge_proposal(
+        self,
+        *,
+        proposal_id: str,
+        label: str,
+        primary_id: str,
+        duplicate_ids: list[str],
+        scores: list[float],
+        canonical_name: str,
+    ) -> str:
+        """Persist a pending :MergeProposal node. Replaces any existing one with the same id."""
+        if not self.driver and not self.verify_connection():
+            return ""
+        now = datetime.now(timezone.utc).isoformat()
+        cypher = """
+        MERGE (p:MergeProposal {id: $proposal_id})
+        SET p.label = $label,
+            p.primary_id = $primary_id,
+            p.duplicate_ids = $duplicate_ids,
+            p.scores = $scores,
+            p.canonical_name = $canonical_name,
+            p.status = 'pending',
+            p.created_at = coalesce(p.created_at, $now),
+            p.updated_at = $now
+        RETURN p.id AS id
+        """
+        with self.driver.session() as session:
+            record = session.run(
+                cypher,
+                proposal_id=proposal_id,
+                label=label,
+                primary_id=primary_id,
+                duplicate_ids=list(duplicate_ids),
+                scores=[float(s) for s in scores],
+                canonical_name=canonical_name,
+                now=now,
+            ).single()
+            return record["id"] if record else proposal_id
+
+    def list_merge_proposals(
+        self,
+        *,
+        status: str = "pending",
+        limit: int = 200,
+    ) -> list[dict]:
+        """List :MergeProposal nodes filtered by status (default: pending)."""
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (p:MergeProposal {status: $status})
+        OPTIONAL MATCH (primary {id: p.primary_id})
+        RETURN p, primary.name AS primary_name
+        ORDER BY coalesce(p.created_at, p.updated_at, '') DESC
+        LIMIT $limit
+        """
+        proposals = []
+        with self.driver.session() as session:
+            for record in session.run(cypher, status=status, limit=int(limit)):
+                node = record["p"]
+                proposals.append({
+                    "id": node.get("id"),
+                    "label": node.get("label"),
+                    "primary_id": node.get("primary_id"),
+                    "primary_name": record["primary_name"] or node.get("canonical_name"),
+                    "duplicate_ids": list(node.get("duplicate_ids") or []),
+                    "scores": list(node.get("scores") or []),
+                    "canonical_name": node.get("canonical_name"),
+                    "status": node.get("status"),
+                    "created_at": node.get("created_at"),
+                    "updated_at": node.get("updated_at"),
+                })
+        return proposals
+
+    def get_merge_proposal(self, proposal_id: str) -> dict | None:
+        """Fetch a single :MergeProposal by id."""
+        if not self.driver and not self.verify_connection():
+            return None
+        cypher = "MATCH (p:MergeProposal {id: $id}) RETURN p"
+        with self.driver.session() as session:
+            record = session.run(cypher, id=proposal_id).single()
+            if not record:
+                return None
+            node = record["p"]
+            return {
+                "id": node.get("id"),
+                "label": node.get("label"),
+                "primary_id": node.get("primary_id"),
+                "duplicate_ids": list(node.get("duplicate_ids") or []),
+                "scores": list(node.get("scores") or []),
+                "canonical_name": node.get("canonical_name"),
+                "status": node.get("status"),
+                "created_at": node.get("created_at"),
+                "updated_at": node.get("updated_at"),
+            }
+
+    def dismiss_merge_proposal(self, proposal_id: str) -> bool:
+        """Flip a pending proposal to ``status: dismissed`` (no graph changes)."""
+        if not self.driver and not self.verify_connection():
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        cypher = """
+        MATCH (p:MergeProposal {id: $id})
+        WHERE p.status = 'pending'
+        SET p.status = 'dismissed', p.updated_at = $now
+        RETURN p.id AS id
+        """
+        with self.driver.session() as session:
+            record = session.run(cypher, id=proposal_id, now=now).single()
+            return record is not None
+
+    def apply_merge_proposal(self, proposal_id: str) -> dict:
+        """Merge duplicate nodes into the primary and mark the proposal applied.
+
+        Returns ``{"merged": int, "skipped": int, "rels_rewired": int}``.
+        All work runs in a single transaction; any failure rolls everything
+        back (including the status flip) so an interrupted merge leaves the
+        graph untouched.
+        """
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j unavailable")
+        proposal = self.get_merge_proposal(proposal_id)
+        if not proposal:
+            raise ValueError(f"Unknown merge proposal: {proposal_id}")
+        if proposal["status"] != "pending":
+            raise ValueError(
+                f"Merge proposal {proposal_id} is already {proposal['status']!r}"
+            )
+
+        primary_id = proposal["primary_id"]
+        duplicate_ids = [d for d in proposal["duplicate_ids"] if d and d != primary_id]
+        if not duplicate_ids:
+            return {"merged": 0, "skipped": 0, "rels_rewired": 0}
+
+        stats = {"merged": 0, "skipped": 0, "rels_rewired": 0}
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            with session.begin_transaction() as tx:
+                primary = tx.run(
+                    "MATCH (n {id: $id}) RETURN n", id=primary_id
+                ).single()
+                if primary is None:
+                    raise ValueError(f"Primary node {primary_id} not found")
+
+                for dup_id in duplicate_ids:
+                    dup_record = tx.run(
+                        "MATCH (n {id: $id}) RETURN n", id=dup_id
+                    ).single()
+                    if dup_record is None:
+                        stats["skipped"] += 1
+                        continue
+
+                    rels_in = tx.run(
+                        "MATCH (src)-[r]->(dup {id: $id}) "
+                        "RETURN DISTINCT type(r) AS t",
+                        id=dup_id,
+                    )
+                    in_types = [r["t"] for r in rels_in]
+                    rels_out = tx.run(
+                        "MATCH (dup {id: $id})-[r]->(tgt) "
+                        "RETURN DISTINCT type(r) AS t",
+                        id=dup_id,
+                    )
+                    out_types = [r["t"] for r in rels_out]
+
+                    for rel_type in in_types:
+                        clean = re.sub(r"[^A-Z0-9_]", "_", rel_type.upper())
+                        if not clean:
+                            continue
+                        rewire_in = f"""
+                        MATCH (src)-[r:{clean}]->(dup {{id: $dup_id}})
+                        WHERE src.id <> $primary_id
+                        MATCH (primary {{id: $primary_id}})
+                        MERGE (src)-[new_r:{clean}]->(primary)
+                          ON CREATE SET new_r = properties(r), new_r.created_at = $now
+                          ON MATCH  SET new_r += properties(r), new_r.updated_at = $now
+                        DELETE r
+                        RETURN count(new_r) AS c
+                        """
+                        rec = tx.run(
+                            rewire_in,
+                            dup_id=dup_id,
+                            primary_id=primary_id,
+                            now=now,
+                        ).single()
+                        stats["rels_rewired"] += int(rec["c"]) if rec else 0
+
+                    for rel_type in out_types:
+                        clean = re.sub(r"[^A-Z0-9_]", "_", rel_type.upper())
+                        if not clean:
+                            continue
+                        rewire_out = f"""
+                        MATCH (dup {{id: $dup_id}})-[r:{clean}]->(tgt)
+                        WHERE tgt.id <> $primary_id
+                        MATCH (primary {{id: $primary_id}})
+                        MERGE (primary)-[new_r:{clean}]->(tgt)
+                          ON CREATE SET new_r = properties(r), new_r.created_at = $now
+                          ON MATCH  SET new_r += properties(r), new_r.updated_at = $now
+                        DELETE r
+                        RETURN count(new_r) AS c
+                        """
+                        rec = tx.run(
+                            rewire_out,
+                            dup_id=dup_id,
+                            primary_id=primary_id,
+                            now=now,
+                        ).single()
+                        stats["rels_rewired"] += int(rec["c"]) if rec else 0
+
+                    # Capture the duplicate's name as an alternate so search and
+                    # provenance can still find the merged entity by either alias.
+                    tx.run(
+                        """
+                        MATCH (primary {id: $primary_id})
+                        MATCH (dup {id: $dup_id})
+                        WITH primary, dup,
+                             coalesce(primary.alternate_names, []) AS aliases,
+                             dup.name AS dup_name
+                        SET primary.alternate_names =
+                            CASE WHEN dup_name IN aliases OR dup_name IS NULL
+                                 THEN aliases
+                                 ELSE aliases + dup_name END,
+                            primary.canonicalized_at = $now
+                        DETACH DELETE dup
+                        """,
+                        primary_id=primary_id,
+                        dup_id=dup_id,
+                        now=now,
+                    )
+                    stats["merged"] += 1
+
+                tx.run(
+                    """
+                    MATCH (p:MergeProposal {id: $id})
+                    SET p.status = 'applied',
+                        p.applied_at = $now,
+                        p.updated_at = $now
+                    """,
+                    id=proposal_id,
+                    now=now,
+                )
+                tx.commit()
+
+        return stats
+
     def count_nodes(self) -> int:
         """Quick check of database size for status reporting."""
         if not self.driver and not self.verify_connection():

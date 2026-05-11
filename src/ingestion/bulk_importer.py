@@ -15,9 +15,12 @@ Two entry points cover the common shapes a user is likely to have on hand:
   file via :func:`src.ingestion.chunker.chunk_text` and storing one row
   per chunk.
 
-Each row's metadata carries ``source: "bulk"`` and an ``imported_at``
-timestamp so the analyzer can spot bulk-imported rows later (e.g. when
-S2.3 wires in chronological queue ordering for backfills).
+Each row's metadata carries ``source: "bulk"``, ``bulk_imported: True``,
+and an ``imported_at`` timestamp. The ``bulk_imported`` flag is what
+:meth:`MemoryManager.list_unanalyzed` uses to keep bulk rows behind
+live conversation turns in the analyzer queue — the live pool is always
+drained first, then bulk rows surface oldest-first by their source
+``timestamp``.
 """
 
 from __future__ import annotations
