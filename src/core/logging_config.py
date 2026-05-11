@@ -58,25 +58,51 @@ class RedactSecretsFilter(logging.Filter):
         return True
 
 
-def setup_logging(level: str | int | None = None, *, force: bool = False) -> None:
-    """Initialize root logging once for the whole app."""
-    if logging.getLogger().handlers and not force:
-        return
+def _attach_redactor() -> None:
+    """Attach the redactor filter idempotently to every handler and known logger.
 
+    Doing this on handlers (not just loggers) is what actually catches every
+    leaked secret — a Logger's filters only run for records originating at
+    that logger, while handler filters run for every record the handler emits
+    (including records that propagated up from any descendant logger).
+    """
+    redactor = RedactSecretsFilter()
+
+    def _has_redactor(target) -> bool:
+        return any(isinstance(f, RedactSecretsFilter) for f in target.filters)
+
+    # All current handlers on the root logger emit records from every source.
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if not _has_redactor(handler):
+            handler.addFilter(redactor)
+
+    # Belt-and-braces: also attach at the logger level so unit tests that
+    # bypass handlers (or call Filter.filter directly) still get redaction.
+    for name in ("", "httpx", "httpcore", "urllib3", "requests", "google"):
+        logger = logging.getLogger(name)
+        if not _has_redactor(logger):
+            logger.addFilter(redactor)
+
+
+def setup_logging(level: str | int | None = None, *, force: bool = False) -> None:
+    """Initialize root logging once for the whole app.
+
+    Safe to call multiple times: the basic-config step is skipped if handlers
+    already exist (unless ``force=True``), but the redactor filter is
+    re-attached idempotently every call so a process that touched logging
+    *before* importing this module still ends up with redaction wired in.
+    """
     log_level = level or settings.log_level
     if isinstance(log_level, str):
         log_level = getattr(logging, log_level.upper(), logging.INFO)
 
-    logging.basicConfig(
-        level=log_level,
-        format=LOG_FORMAT,
-        handlers=[logging.StreamHandler(sys.stdout)],
-        force=force,
-    )
+    if not logging.getLogger().handlers or force:
+        logging.basicConfig(
+            level=log_level,
+            format=LOG_FORMAT,
+            handlers=[logging.StreamHandler(sys.stdout)],
+            force=force,
+        )
 
-    # Apply on the root logger so every handler downstream gets redacted records.
-    redactor = RedactSecretsFilter()
-    logging.getLogger().addFilter(redactor)
-    # Belt-and-braces: also attach directly to the loudest known sources.
-    for noisy in ("httpx", "httpcore", "urllib3", "requests"):
-        logging.getLogger(noisy).addFilter(redactor)
+    _attach_redactor()
