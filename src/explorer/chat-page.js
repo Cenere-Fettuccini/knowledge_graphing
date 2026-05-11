@@ -45,6 +45,29 @@
         if (el) el.textContent = text;
     }
 
+    function setMemoryWarning(degraded, health) {
+        const wrap = document.getElementById('chatMemoryWarning');
+        const text = document.getElementById('chatMemoryWarningText');
+        if (!wrap) return;
+        if (!degraded) {
+            wrap.hidden = true;
+            return;
+        }
+        let label = 'Memory degraded';
+        const pending = (health && health.spillover_pending) || null;
+        const pendingTotal = pending ? (Number(pending.chroma) || 0) + (Number(pending.neo4j) || 0) : 0;
+        const offline = [];
+        if (health && health.chroma === 'offline') offline.push('Chroma');
+        if (health && health.neo4j === 'offline') offline.push('Neo4j');
+        if (offline.length) {
+            label = `${offline.join(' + ')} offline — your message is queued`;
+        } else if (pendingTotal > 0) {
+            label = `Memory degraded — ${pendingTotal} write${pendingTotal === 1 ? '' : 's'} pending replay`;
+        }
+        if (text) text.textContent = label;
+        wrap.hidden = false;
+    }
+
     function getPendingDeleteSession() {
         return state.sessions.find((session) => session.session_id === state.pendingDeleteSessionId) || null;
     }
@@ -331,6 +354,7 @@
                 renderContext();
             }
             setStatus('Replied successfully');
+            setMemoryWarning(Boolean(result.memory_degraded), result.memory_health);
             await refreshSessions();
         } else {
             appendMessage('assistant', `**Error:** ${result.error || 'Unknown network error occurred.'}`);

@@ -202,4 +202,6 @@ async def send_chat_message(
         "context": normalized_context,
         "timestamp": result.reply_timestamp or datetime.now(timezone.utc).isoformat(),
         "message_timestamp": message_timestamp,
+        "memory_degraded": result.memory_degraded,
+        "memory_health": result.memory_health,
     }

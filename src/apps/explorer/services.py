@@ -62,6 +62,34 @@ def run_analyzer(
     return result.as_dict()
 
 
+def list_analyzer_failures(memory: MemoryManager, limit: int = 50) -> dict:
+    """Return the analyzer's dead-letter queue for the explorer panel."""
+    items = memory.list_failed(limit=limit)
+    return {
+        "count": memory.count_failed(),
+        "items": [
+            {
+                "id": row.get("id"),
+                "text": row.get("text"),
+                "reason": (row.get("metadata") or {}).get("analyzer_failure_reason"),
+                "failed_at": (row.get("metadata") or {}).get("analyzer_failed_at"),
+                "run_id": (row.get("metadata") or {}).get("analysis_run_id"),
+                "session_id": (row.get("metadata") or {}).get("session_id"),
+            }
+            for row in items
+        ],
+    }
+
+
+def retry_analyzer_failures(
+    memory: MemoryManager,
+    memory_ids: list[str] | None = None,
+) -> dict:
+    """Reset failed rows so the next analyzer tick picks them up."""
+    reset = memory.retry_failed(memory_ids)
+    return {"reset": reset, "remaining": memory.count_failed()}
+
+
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:
     memory.invalidate_health_cache()
     health = memory.status()

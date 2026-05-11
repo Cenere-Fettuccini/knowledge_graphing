@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -10,14 +11,45 @@ from src.agent_platform.analyzers.knowledge import (
 from src.agent_platform.analyzers.local_llm import LocalLLMUnavailable
 
 
+class _FakeBatch:
+    """Test double for ``MemoryManager.batch_graph_writes``'s yielded batch.
+
+    Records ops as they're queued and lets the surrounding fake memory commit
+    them in one shot — mirrors the real semantics where writes are atomic.
+    """
+
+    def __init__(self):
+        self.ops: list[tuple[str, dict]] = []
+        self.committed = False
+
+    def upsert_node(self, *, node_id, labels, name, properties=None):
+        self.ops.append((
+            "node",
+            {"id": node_id, "labels": list(labels), "name": name, "props": dict(properties or {})},
+        ))
+        return node_id
+
+    def upsert_relationship(self, *, source_id, target_id, rel_type, properties=None):
+        self.ops.append((
+            "edge",
+            {"src": source_id, "tgt": target_id, "type": rel_type, "props": dict(properties or {})},
+        ))
+        return True
+
+
 class _FakeMemory:
-    def __init__(self, *, user_root, batch, schema=None):
+    def __init__(self, *, user_root, batch, schema=None, fail_batch_commit=False):
         self._user_root = user_root
         self._batch = batch
         self._schema = schema or {"labels": [], "relationship_types": [], "entities": []}
+        self._fail_batch_commit = fail_batch_commit
         self.upserted_nodes: list[dict] = []
         self.upserted_relationships: list[dict] = []
+        self.batches_committed = 0
+        self.batches_spilled = 0
         self.marked_analyzed: list[tuple[list, str | None]] = []
+        self.marked_failed: list[tuple[list, str, str | None]] = []
+        self.failed_count_value = 0
 
     def get_user_root(self):
         return self._user_root
@@ -31,20 +63,30 @@ class _FakeMemory:
     def count_unanalyzed(self):
         return len(self._batch)
 
-    def upsert_node(self, *, node_id, labels, name, properties=None):
-        self.upserted_nodes.append(
-            {"id": node_id, "labels": list(labels), "name": name, "props": dict(properties or {})}
-        )
-        return node_id
+    def count_failed(self):
+        return self.failed_count_value
 
-    def upsert_relationship(self, *, source_id, target_id, rel_type, properties=None):
-        self.upserted_relationships.append(
-            {"src": source_id, "tgt": target_id, "type": rel_type, "props": dict(properties or {})}
-        )
-        return True
+    @contextmanager
+    def batch_graph_writes(self):
+        batch = _FakeBatch()
+        yield batch
+        if self._fail_batch_commit:
+            self.batches_spilled += 1
+            return
+        for op_type, payload in batch.ops:
+            if op_type == "node":
+                self.upserted_nodes.append(payload)
+            elif op_type == "edge":
+                self.upserted_relationships.append(payload)
+        batch.committed = True
+        self.batches_committed += 1
 
     def mark_analyzed(self, ids, run_id=None):
         self.marked_analyzed.append((list(ids), run_id))
+        return len(ids)
+
+    def mark_failed(self, ids, reason, run_id=None):
+        self.marked_failed.append((list(ids), reason, run_id))
         return len(ids)
 
 
@@ -190,24 +232,84 @@ def test_analyze_pending_handles_fenced_json():
     assert result.relationships_written == 1
 
 
-def test_analyze_pending_bails_on_invalid_json():
+def test_analyze_pending_runs_one_atomic_batch_per_call():
+    """The whole extraction must go through batch_graph_writes once, not as
+    independent upsert_node/upsert_relationship calls — so a mid-batch failure
+    can roll the graph back cleanly."""
+    memory = _FakeMemory(
+        user_root=_user_root(),
+        batch=[{"id": "c1", "text": "I work at Acme.", "metadata": {"role": "user"}}],
+    )
+    payload = {
+        "entities": [
+            {"id": "org:acme-corp", "labels": ["Organisation"], "name": "Acme", "props": {}},
+        ],
+        "relationships": [
+            {"from": "user:kevin", "to": "org:acme-corp", "type": "WORKS_AT"},
+        ],
+    }
+    analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(response=json.dumps(payload)))
+    analyzer.analyze_pending(batch_size=10)
+
+    assert memory.batches_committed == 1
+    assert memory.batches_spilled == 0
+
+
+def test_analyze_pending_handles_failed_batch_commit_without_blocking_queue_drain():
+    """When the graph commit fails, the analyzer must still mark Chroma rows
+    analyzed so the same batch doesn't loop forever — the spilled ops will
+    replay later via the spillover machinery."""
     memory = _FakeMemory(
         user_root=_user_root(),
         batch=[{"id": "c1", "text": "x", "metadata": {"role": "user"}}],
+        fail_batch_commit=True,
+    )
+    payload = {
+        "entities": [{"id": "person:alice", "labels": ["Person"], "name": "Alice", "props": {}}],
+        "relationships": [],
+    }
+    analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(response=json.dumps(payload)))
+    result = analyzer.analyze_pending(batch_size=10)
+
+    # Chroma row was marked analyzed (queue drains)
+    assert memory.marked_analyzed == [(["c1"], result.run_id)]
+    # but the graph batch was NOT committed — spill counter went up.
+    assert memory.batches_committed == 0
+    assert memory.batches_spilled == 1
+    # The result still reports what was queued (spillover replay will land it).
+    assert result.entities_written == 1
+
+
+def test_analyze_pending_routes_invalid_json_to_dead_letter_queue():
+    memory = _FakeMemory(
+        user_root=_user_root(),
+        batch=[
+            {"id": "c1", "text": "x", "metadata": {"role": "user"}},
+            {"id": "c2", "text": "y", "metadata": {"role": "user"}},
+        ],
     )
     analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(response="not json at all"))
     result = analyzer.analyze_pending(batch_size=10)
     assert result.skipped is True
     assert result.reason == "invalid_json_response"
-    # Queue NOT marked — we want to retry once we have a working JSON-mode model.
+    # Queue is NOT in the live queue (mark_analyzed was not called)…
     assert memory.marked_analyzed == []
+    # …but the rows are routed to the dead-letter queue so they can be
+    # inspected and retried instead of looping the analyzer forever.
+    assert len(memory.marked_failed) == 1
+    failed_ids, reason, run_id = memory.marked_failed[0]
+    assert sorted(failed_ids) == ["c1", "c2"]
+    assert reason == "invalid_json_response"
+    assert run_id == result.run_id
 
 
-def test_queue_status_includes_local_llm_health():
+def test_queue_status_includes_local_llm_health_and_dlq_count():
     memory = _FakeMemory(user_root=_user_root(), batch=[{"id": "a"}, {"id": "b"}])
+    memory.failed_count_value = 3
     analyzer = KnowledgeAnalyzer(memory=memory, llm=_FakeLLM(available=True))
     status = analyzer.queue_status()
     assert status["unanalyzed_count"] == 2
+    assert status["failed_count"] == 3
     assert status["local_llm_available"] is True
     assert status["default_model"] == "qwen2.5-3b-instruct"
 

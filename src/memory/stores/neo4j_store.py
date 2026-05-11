@@ -138,6 +138,33 @@ class Neo4jStore:
 
     # ── Multi-label upsert (used by the analyzer) ────────────────────────────
 
+    @staticmethod
+    def _build_node_upsert_cypher(labels: list[str]) -> str:
+        if not labels:
+            raise ValueError("At least one label is required.")
+        labels_clause = ":".join(labels)
+        return f"""
+        MERGE (n {{id: $node_id}})
+        ON CREATE SET n:{labels_clause}, n.created_at = $now
+        SET n:{labels_clause}, n += $props, n.updated_at = $now
+        RETURN n.id AS id
+        """
+
+    @staticmethod
+    def _build_relationship_upsert_cypher(rel_type: str) -> tuple[str, str]:
+        clean_type = re.sub(r"[^A-Z0-9_]", "_", (rel_type or "RELATED_TO").upper())
+        if not clean_type:
+            clean_type = "RELATED_TO"
+        cypher = f"""
+        MATCH (a {{id: $source_id}})
+        MATCH (b {{id: $target_id}})
+        MERGE (a)-[r:{clean_type}]->(b)
+        ON CREATE SET r += $props, r.created_at = $now
+        SET r += $props, r.updated_at = $now
+        RETURN r
+        """
+        return clean_type, cypher
+
     def upsert_node_with_labels(
         self,
         *,
@@ -154,22 +181,13 @@ class Neo4jStore:
         """
         if not self.driver and not self.verify_connection():
             return ""
-        if not labels:
-            raise ValueError("At least one label is required.")
         if not node_id:
             raise ValueError("node_id is required.")
 
         props = dict(properties or {})
         props["id"] = node_id
         props["name"] = name
-        labels_clause = ":".join(labels)
-
-        cypher = f"""
-        MERGE (n {{id: $node_id}})
-        ON CREATE SET n:{labels_clause}, n.created_at = $now
-        SET n:{labels_clause}, n += $props, n.updated_at = $now
-        RETURN n.id AS id
-        """
+        cypher = self._build_node_upsert_cypher(labels)
         now = datetime.now(timezone.utc).isoformat()
         with self.driver.session() as session:
             record = session.run(cypher, node_id=node_id, now=now, props=props).single()
@@ -186,18 +204,8 @@ class Neo4jStore:
         """MERGE a relationship by (source, target, type). Returns True on success."""
         if not self.driver and not self.verify_connection():
             return False
-        clean_type = re.sub(r"[^A-Z0-9_]", "_", (rel_type or "RELATED_TO").upper())
-        if not clean_type:
-            clean_type = "RELATED_TO"
+        _, cypher = self._build_relationship_upsert_cypher(rel_type)
         props = dict(properties or {})
-        cypher = f"""
-        MATCH (a {{id: $source_id}})
-        MATCH (b {{id: $target_id}})
-        MERGE (a)-[r:{clean_type}]->(b)
-        ON CREATE SET r += $props, r.created_at = $now
-        SET r += $props, r.updated_at = $now
-        RETURN r
-        """
         now = datetime.now(timezone.utc).isoformat()
         with self.driver.session() as session:
             result = session.run(
@@ -208,6 +216,54 @@ class Neo4jStore:
                 props=props,
             ).single()
             return result is not None
+
+    def execute_batch(self, ops: list[tuple[str, dict]]) -> None:
+        """Apply a list of ``(op_type, kwargs)`` writes in a single transaction.
+
+        ``op_type`` is ``"node"`` (kwargs match :meth:`upsert_node_with_labels`)
+        or ``"edge"`` (kwargs match :meth:`upsert_relationship`). Any failure
+        rolls back the entire batch — the caller decides what to do with the
+        unwritten ops (typically: spill them to disk and retry on the next
+        scheduler tick).
+
+        Raises if the driver is unreachable or any cypher fails.
+        """
+        if not ops:
+            return
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j unavailable")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            with session.begin_transaction() as tx:
+                for op_type, kwargs in ops:
+                    if op_type == "node":
+                        self._exec_node_in_tx(tx, kwargs, now)
+                    elif op_type == "edge":
+                        self._exec_edge_in_tx(tx, kwargs, now)
+                    else:
+                        raise ValueError(f"Unknown batch op type: {op_type!r}")
+                tx.commit()
+
+    def _exec_node_in_tx(self, tx, kwargs: dict, now: str) -> None:
+        node_id = kwargs.get("node_id")
+        if not node_id:
+            raise ValueError("node_id is required.")
+        cypher = self._build_node_upsert_cypher(kwargs.get("labels") or [])
+        props = dict(kwargs.get("properties") or {})
+        props["id"] = node_id
+        props["name"] = kwargs.get("name", "")
+        tx.run(cypher, node_id=node_id, now=now, props=props)
+
+    def _exec_edge_in_tx(self, tx, kwargs: dict, now: str) -> None:
+        _, cypher = self._build_relationship_upsert_cypher(kwargs.get("rel_type", ""))
+        props = dict(kwargs.get("properties") or {})
+        tx.run(
+            cypher,
+            source_id=kwargs.get("source_id", ""),
+            target_id=kwargs.get("target_id", ""),
+            now=now,
+            props=props,
+        )
 
     # ── User root / bootstrap ─────────────────────────────────────────────────
 

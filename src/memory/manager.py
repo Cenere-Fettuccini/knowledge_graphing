@@ -3,12 +3,67 @@
 import json
 import logging
 import time
+from contextlib import contextmanager
 from src.core.config import settings
 from src.memory.spillover import SpilloverWriter
 from src.memory.stores.chroma_store import ChromaStore
 from src.memory.stores.neo4j_store import Neo4jStore
 
 logger = logging.getLogger(__name__)
+
+
+class GraphWriteBatch:
+    """Buffers graph write ops so they can be committed atomically.
+
+    Mirrors :meth:`MemoryManager.upsert_node` /
+    :meth:`MemoryManager.upsert_relationship` but defers the actual writes
+    until the surrounding ``batch_graph_writes`` context manager exits.
+    Returns the same shapes as the eager methods so existing call sites
+    don't have to change beyond the surrounding ``with`` block.
+    """
+
+    def __init__(self) -> None:
+        self.ops: list[tuple[str, dict]] = []
+        self.committed: bool = False
+        self.spilled: bool = False
+
+    def upsert_node(
+        self,
+        *,
+        node_id: str,
+        labels: list[str],
+        name: str,
+        properties: dict | None = None,
+    ) -> str:
+        self.ops.append((
+            "node",
+            {
+                "node_id": node_id,
+                "labels": list(labels),
+                "name": name,
+                "properties": dict(properties or {}),
+            },
+        ))
+        return node_id
+
+    def upsert_relationship(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: dict | None = None,
+    ) -> bool:
+        self.ops.append((
+            "edge",
+            {
+                "source_id": source_id,
+                "target_id": target_id,
+                "rel_type": rel_type,
+                "properties": dict(properties or {}),
+            },
+        ))
+        return True
 
 
 class MemoryManager:
@@ -247,6 +302,37 @@ class MemoryManager:
         """Force the next ``status()`` call to re-probe backends."""
         self._health_cache_time = 0
 
+    def snapshot_health(self) -> dict:
+        """Compact health snapshot for surfacing degradation in agent responses.
+
+        Combines :meth:`status` with the on-disk spillover counts so callers
+        can render a single ``memory_degraded`` indicator without separately
+        polling each backend. ``degraded`` is True if either backend is
+        non-healthy or any spillover is pending.
+        """
+        live = self.status()
+        try:
+            pending = self.spillover.pending_counts()
+        except Exception:
+            pending = {"chroma": 0, "neo4j": 0}
+        chroma_online = "online" in (live.get("chroma") or "")
+        neo4j_online = "online" in (live.get("neo4j") or "")
+        spillover_pending = bool(pending.get("chroma") or pending.get("neo4j"))
+        degraded = (
+            (live.get("status") or "online") != "online" or spillover_pending
+        )
+        return {
+            "status": live.get("status", "online"),
+            "chroma": "online" if chroma_online else "offline",
+            "neo4j": "online" if neo4j_online else "offline",
+            "spillover_pending": dict(pending),
+            "degraded": degraded,
+            "details": {
+                "chroma": live.get("chroma"),
+                "neo4j": live.get("neo4j"),
+            },
+        }
+
     # ── Knowledge graph public queries ────────────────────────────────────────
 
     def graph_overview(self, limit: int = 100) -> dict:
@@ -294,10 +380,67 @@ class MemoryManager:
         """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""
         if not memory_ids or not self._is_chroma_available():
             return 0
-        patch = {"analyzed": True}
+        patch = {"analyzed": True, "analyzer_status": "success"}
         if run_id:
             patch["analysis_run_id"] = run_id
             patch["analyzed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return self.chroma.update_metadata(memory_ids, patch)
+
+    def mark_failed(
+        self,
+        memory_ids: list[str],
+        reason: str,
+        run_id: str | None = None,
+    ) -> int:
+        """Mark rows as processed-but-failed so they leave the live queue but
+        remain queryable for retry. Used by the analyzer when the LLM returns
+        unusable output."""
+        if not memory_ids or not self._is_chroma_available():
+            return 0
+        patch = {
+            "analyzed": True,
+            "analyzer_status": "failed",
+            "analyzer_failure_reason": reason or "unknown",
+            "analyzer_failed_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            ),
+        }
+        if run_id:
+            patch["analysis_run_id"] = run_id
+        return self.chroma.update_metadata(memory_ids, patch)
+
+    def list_failed(self, limit: int = 50) -> list[dict]:
+        """Return Chroma rows the analyzer flagged as failed (dead-letter queue)."""
+        if not self._is_chroma_available():
+            return []
+        where = {"analyzer_status": "failed"}
+        return self.chroma.list_where(where=where, limit=limit)
+
+    def count_failed(self) -> int:
+        """Number of rows currently in the analyzer dead-letter queue."""
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.count_where(where={"analyzer_status": "failed"})
+
+    def retry_failed(self, memory_ids: list[str] | None = None) -> int:
+        """Reset failed rows so the analyzer picks them up on the next tick.
+
+        With ``memory_ids=None`` retries every failed row. Returns the number
+        of rows whose metadata was reset.
+        """
+        if not self._is_chroma_available():
+            return 0
+        if memory_ids is None:
+            failed = self.list_failed(limit=10_000)
+            memory_ids = [row["id"] for row in failed]
+        if not memory_ids:
+            return 0
+        patch = {
+            "analyzed": False,
+            "analyzer_status": "pending",
+            "analyzer_failure_reason": "",
+            "analyzer_failed_at": "",
+        }
         return self.chroma.update_metadata(memory_ids, patch)
 
     # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────
@@ -382,6 +525,63 @@ class MemoryManager:
             )
             self._health_cache_time = 0
         return ok
+
+    # ── Transactional batch writes ───────────────────────────────────────────
+
+    @contextmanager
+    def batch_graph_writes(self):
+        """Context manager that commits a group of graph writes atomically.
+
+        Inside the ``with`` block, callers use the yielded
+        :class:`GraphWriteBatch` exactly like ``MemoryManager`` (same
+        ``upsert_node`` / ``upsert_relationship`` signatures). On normal
+        exit, all queued ops are applied in one Neo4j transaction. If the
+        transaction fails or the caller raises, every queued op is spilled
+        to disk so the analyzer scheduler can replay them on a later tick —
+        the graph is never left in a partially-written state.
+        """
+        batch = GraphWriteBatch()
+        try:
+            yield batch
+        except Exception:
+            if batch.ops:
+                self._spill_batch_ops(batch.ops)
+                batch.spilled = True
+            raise
+        self._flush_batch(batch)
+
+    def _flush_batch(self, batch: GraphWriteBatch) -> None:
+        if not batch.ops:
+            return
+        try:
+            self.neo4j.execute_batch(batch.ops)
+            batch.committed = True
+        except Exception as e:
+            logger.error(
+                "Batch graph transaction failed (%s) — spilling %d ops for replay",
+                e,
+                len(batch.ops),
+            )
+            self._health_cache_time = 0
+            self._spill_batch_ops(batch.ops)
+            batch.spilled = True
+
+    def _spill_batch_ops(self, ops: list[tuple[str, dict]]) -> None:
+        for op_type, kwargs in ops:
+            if op_type == "node":
+                self.spillover.record_neo4j_node(
+                    node_id=kwargs.get("node_id", ""),
+                    labels=kwargs.get("labels") or [],
+                    name=kwargs.get("name", ""),
+                    properties=kwargs.get("properties") or {},
+                )
+            elif op_type == "edge":
+                self.spillover.record_neo4j_relationship(
+                    source_id=kwargs.get("source_id", ""),
+                    target_id=kwargs.get("target_id", ""),
+                    rel_type=kwargs.get("rel_type", ""),
+                    properties=kwargs.get("properties") or {},
+                )
 
     # ── Spillover replay ─────────────────────────────────────────────────────
 

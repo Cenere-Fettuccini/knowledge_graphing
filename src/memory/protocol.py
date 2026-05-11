@@ -13,6 +13,8 @@ class MemoryProtocol(Protocol):
 
     def invalidate_health_cache(self) -> None: ...
 
+    def snapshot_health(self) -> dict: ...
+
     # ── Conversation memory (ChromaDB) ────────────────────────────────────────
 
     def store(
@@ -60,6 +62,19 @@ class MemoryProtocol(Protocol):
 
     def mark_analyzed(self, memory_ids: list, run_id: str | None = None) -> int: ...
 
+    def mark_failed(
+        self,
+        memory_ids: list,
+        reason: str,
+        run_id: str | None = None,
+    ) -> int: ...
+
+    def list_failed(self, limit: int = 50) -> list: ...
+
+    def count_failed(self) -> int: ...
+
+    def retry_failed(self, memory_ids: list | None = None) -> int: ...
+
     # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────
 
     def graph_schema_snapshot(self) -> dict: ...
@@ -81,6 +96,8 @@ class MemoryProtocol(Protocol):
         rel_type: str,
         properties: dict | None = None,
     ) -> bool: ...
+
+    def batch_graph_writes(self): ...
 
     # ── Bootstrap ─────────────────────────────────────────────────────────────
 

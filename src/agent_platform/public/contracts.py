@@ -23,6 +23,8 @@ class AgentRunResult:
     session_id: str
     reply: str
     reply_timestamp: str | None = None
+    memory_degraded: bool = False
+    memory_health: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
