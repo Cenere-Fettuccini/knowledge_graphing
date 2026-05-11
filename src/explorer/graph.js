@@ -89,6 +89,8 @@
             n.z3d = (rand() - 0.5) * 150;
             n.vx = 0; n.vy = 0; n.vz = 0;
             n.baseR = 2.8 + rand() * 2.2;
+            n.animScale = 0;    // must be set here so tick() can animate isolated nodes
+            n.edgeProgress = 0;
         });
 
         if (!edges || edges.length === 0) return;
@@ -418,26 +420,32 @@
 
             // Outer ring for selected
             if (isSel) {
+                ctx.globalAlpha = 0.33;
                 ctx.beginPath();
                 ctx.arc(p.sx, p.sy, r * 2.8, 0, Math.PI * 2);
-                ctx.strokeStyle = color + '55';
+                ctx.strokeStyle = color;
                 ctx.lineWidth = 1 * dpr;
                 ctx.stroke();
+                ctx.globalAlpha = 1.0;
             }
 
             // Halo for hovered
             if (isHov && !isSel) {
+                ctx.globalAlpha = 0.27;
                 ctx.beginPath();
                 ctx.arc(p.sx, p.sy, r * 2.2, 0, Math.PI * 2);
-                ctx.strokeStyle = color + '44';
+                ctx.strokeStyle = color;
                 ctx.lineWidth = 0.8 * dpr;
                 ctx.stroke();
+                ctx.globalAlpha = 1.0;
             }
 
-            // Node dot — flat fill, no shadow, no gradient
+            // Node dot — fillStyle uses the raw color so it always matches the
+            // filter chip (hex-alpha suffixes break HSL colors and look wrong on
+            // dark backgrounds; use globalAlpha for any opacity variation instead)
             ctx.beginPath();
             ctx.arc(p.sx, p.sy, (isHov || isSel) ? r * 1.55 : r, 0, Math.PI * 2);
-            ctx.fillStyle = color + (isSel ? 'ff' : isHov ? 'ee' : 'bb');
+            ctx.fillStyle = color;
             ctx.fill();
 
             // Label — only on hover or selected

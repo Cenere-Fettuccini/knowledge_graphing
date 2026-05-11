@@ -51,6 +51,9 @@ async def _lifespan(app: FastAPI):
                 memory=memory,
                 tick_seconds=settings.analyzer_tick_seconds,
                 batch_size=settings.analyzer_batch_size,
+                bulk_tick_seconds=settings.analyzer_bulk_tick_seconds,
+                bulk_batch_size=settings.analyzer_bulk_batch_size,
+                bulk_threshold=settings.analyzer_bulk_threshold,
             )
             analyzer.start()
             app.state.analyzer_scheduler = analyzer

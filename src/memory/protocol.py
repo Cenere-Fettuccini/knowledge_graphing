@@ -54,6 +54,45 @@ class MemoryProtocol(Protocol):
 
     def graph_belief_trail(self, belief_id: str) -> dict: ...
 
+    # ── Canonicalization (entity dedup) ──────────────────────────────────────
+
+    def list_distinct_graph_labels(self, *, exclude: set | None = None) -> list: ...
+
+    def list_named_nodes_by_label(
+        self,
+        label: str,
+        *,
+        exclude_roots: bool = True,
+    ) -> list: ...
+
+    def count_node_connections(self, node_ids: list) -> dict: ...
+
+    def list_active_beliefs(self, limit: int = 1000) -> list: ...
+
+    def create_merge_proposal(
+        self,
+        *,
+        proposal_id: str,
+        label: str,
+        primary_id: str,
+        duplicate_ids: list,
+        scores: list,
+        canonical_name: str,
+    ) -> str: ...
+
+    def list_merge_proposals(
+        self,
+        *,
+        status: str = "pending",
+        limit: int = 200,
+    ) -> list: ...
+
+    def get_merge_proposal(self, proposal_id: str) -> dict | None: ...
+
+    def apply_merge_proposal(self, proposal_id: str) -> dict: ...
+
+    def dismiss_merge_proposal(self, proposal_id: str) -> bool: ...
+
     # ── Analyzer queue (Chroma) ──────────────────────────────────────────────
 
     def list_unanalyzed(self, limit: int = 50) -> list: ...

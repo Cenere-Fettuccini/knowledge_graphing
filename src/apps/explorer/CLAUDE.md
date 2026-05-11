@@ -83,6 +83,19 @@ memory.retry_failed(memory_ids: list[str] | None = None) -> int
 # Dead-letter queue for items the analyzer couldn't process (e.g. malformed
 # LLM JSON). Used by /analyze/failed and /analyze/retry-failed.
 
+memory.list_distinct_graph_labels(*, exclude=None) -> list[str]
+memory.list_named_nodes_by_label(label, *, exclude_roots=True) -> list[dict]
+memory.count_node_connections(node_ids) -> dict[str, int]
+memory.list_active_beliefs(limit=1000) -> list[dict]
+memory.create_merge_proposal(...) -> str
+memory.list_merge_proposals(*, status="pending", limit=200) -> list[dict]
+memory.get_merge_proposal(proposal_id) -> dict | None
+memory.apply_merge_proposal(proposal_id) -> dict
+memory.dismiss_merge_proposal(proposal_id) -> bool
+# Entity (S2.4) + belief (S2.5) canonicalization. Drives /canonicalize/run
+# (with target='entities'|'beliefs'), /canonicalize/proposals,
+# /canonicalize/apply/{id}, /canonicalize/dismiss/{id}.
+
 memory.graph_schema_snapshot() -> dict
 memory.upsert_node(*, node_id, labels, name, properties=None) -> str
 memory.upsert_relationship(*, source_id, target_id, rel_type, properties=None) -> bool

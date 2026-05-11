@@ -70,11 +70,39 @@ memory.graph_belief_trail(belief_id: str) -> dict
 # {"chain": list[dict], "evidence": list[dict]}
 ```
 
+### Canonicalization (entity dedup, S2.4)
+```python
+memory.list_distinct_graph_labels(*, exclude: set[str] | None = None) -> list[str]
+memory.list_named_nodes_by_label(label: str, *, exclude_roots: bool = True) -> list[dict]
+memory.count_node_connections(node_ids: list[str]) -> dict[str, int]
+memory.list_active_beliefs(limit: int = 1000) -> list[dict]
+# Used by EntityCanonicalizer / BeliefCanonicalizer to gather candidates and
+# rank merge primaries. list_active_beliefs returns {id, content, confidence,
+# created_at} for :Belief nodes with status='active'.
+
+memory.create_merge_proposal(*, proposal_id, label, primary_id,
+                             duplicate_ids, scores, canonical_name) -> str
+memory.list_merge_proposals(*, status: str = "pending", limit: int = 200) -> list[dict]
+memory.get_merge_proposal(proposal_id: str) -> dict | None
+memory.apply_merge_proposal(proposal_id: str) -> dict
+# Re-points every relationship from each duplicate to the primary (preserving
+# rel-type and props), records duplicate names as primary.alternate_names,
+# deletes the duplicates, and flips status to "applied". Single transaction.
+
+memory.dismiss_merge_proposal(proposal_id: str) -> bool
+# Status flip only; no graph mutation. Stays in the graph so re-runs don't
+# re-propose the same cluster.
+```
+
 ### Analyzer queue (Chroma)
 ```python
 memory.list_unanalyzed(limit: int = 50) -> list[dict]
 # Returns the next batch of conversation turns awaiting analysis.
-# Filters to `analyzed: false` and excludes ephemeral rows; ordered oldest-first.
+# Filters to `analyzed: false` and excludes ephemeral rows.
+# Live conversation turns (`bulk_imported: False`) are served first, FIFO by
+# stored timestamp. Bulk-imported rows only surface once the live pool is
+# empty, and are returned oldest-first by their source `timestamp` so a
+# historical backfill is processed in the order the user lived it.
 
 memory.count_unanalyzed() -> int
 # Cheap-ish count for queue-status displays.

@@ -82,6 +82,10 @@ class MemoryManager:
         self._health_cache_time = 0
         self._health_ttl = 60  # seconds
 
+        # One-time per-process flag flip for legacy chroma rows that predate
+        # the bulk_imported metadata key. See _backfill_bulk_imported_flag.
+        self._bulk_flag_backfilled = False
+
     def status(self) -> dict:
         """Probe all memory backends and return live health info. Cached for 60s."""
         now = time.time()
@@ -177,6 +181,10 @@ class MemoryManager:
             "session_id": session_id,
             "is_ephemeral": is_ephemeral,
             "analyzed": False,
+            # Live writes are explicitly tagged so the analyzer's queue can
+            # serve them ahead of any bulk backfill (see list_unanalyzed).
+            # The bulk importer overrides this via **extra.
+            "bulk_imported": False,
             **extra,
         }
         normalized_text = self._coerce_text(text)
@@ -357,17 +365,114 @@ class MemoryManager:
         evidence = self.neo4j.get_belief_evidence(belief_id)
         return {"chain": chain, "evidence": evidence}
 
+    # ── Canonicalization (entity dedup) ──────────────────────────────────────
+
+    def list_distinct_graph_labels(
+        self,
+        *,
+        exclude: set[str] | None = None,
+    ) -> list[str]:
+        """All distinct labels in Neo4j, optionally minus an exclusion set."""
+        labels = self.neo4j.list_distinct_labels()
+        if exclude:
+            labels = [l for l in labels if l not in exclude]
+        return labels
+
+    def list_named_nodes_by_label(
+        self,
+        label: str,
+        *,
+        exclude_roots: bool = True,
+    ) -> list[dict]:
+        """Return ``[{id, name, created_at}]`` for named nodes carrying ``label``."""
+        return self.neo4j.list_named_nodes_by_label(label, exclude_roots=exclude_roots)
+
+    def count_node_connections(self, node_ids: list[str]) -> dict[str, int]:
+        """Return ``{node_id: degree}`` for the given ids (incoming + outgoing)."""
+        return self.neo4j.count_node_connections(list(node_ids))
+
+    def list_active_beliefs(self, limit: int = 1000) -> list[dict]:
+        """Return active belief nodes as ``[{id, content, confidence, created_at}]``."""
+        return self.neo4j.list_active_beliefs(limit=limit)
+
+    def create_merge_proposal(
+        self,
+        *,
+        proposal_id: str,
+        label: str,
+        primary_id: str,
+        duplicate_ids: list[str],
+        scores: list[float],
+        canonical_name: str,
+    ) -> str:
+        """Persist (or refresh) a pending merge proposal."""
+        return self.neo4j.create_merge_proposal(
+            proposal_id=proposal_id,
+            label=label,
+            primary_id=primary_id,
+            duplicate_ids=duplicate_ids,
+            scores=scores,
+            canonical_name=canonical_name,
+        )
+
+    def list_merge_proposals(
+        self,
+        *,
+        status: str = "pending",
+        limit: int = 200,
+    ) -> list[dict]:
+        """List merge proposals by status (``pending`` | ``applied`` | ``dismissed``)."""
+        return self.neo4j.list_merge_proposals(status=status, limit=limit)
+
+    def get_merge_proposal(self, proposal_id: str) -> dict | None:
+        return self.neo4j.get_merge_proposal(proposal_id)
+
+    def apply_merge_proposal(self, proposal_id: str) -> dict:
+        """Apply a pending proposal: rewire relationships and delete duplicates."""
+        return self.neo4j.apply_merge_proposal(proposal_id)
+
+    def dismiss_merge_proposal(self, proposal_id: str) -> bool:
+        """Mark a pending proposal as dismissed without touching graph data."""
+        return self.neo4j.dismiss_merge_proposal(proposal_id)
+
     # ── Analyzer queue (Chroma) ──────────────────────────────────────────────
 
     def list_unanalyzed(self, limit: int = 50) -> list[dict]:
         """Return the next batch of conversation turns awaiting analysis.
 
-        Filters to ``analyzed: false`` and excludes ephemeral rows.
+        Live conversation turns (``bulk_imported: False``) are served first,
+        FIFO by their stored timestamp. Bulk-imported rows are only drained
+        once the live pool is empty, and are returned oldest-first by their
+        source ``timestamp`` so a historical backfill is processed in the
+        order the user actually lived it.
+
+        This prevents a 10k-entry import from blocking the analyzer's
+        response to a brand-new conversation turn.
         """
         if not self._is_chroma_available():
             return []
-        where = {"$and": [{"analyzed": False}, {"is_ephemeral": False}]}
-        return self.chroma.list_where(where=where, limit=limit)
+        self._backfill_bulk_imported_flag()
+
+        live_where = {
+            "$and": [
+                {"analyzed": False},
+                {"is_ephemeral": False},
+                {"bulk_imported": False},
+            ]
+        }
+        live = self.chroma.list_where(where=live_where, limit=limit)
+        if len(live) >= limit:
+            return live
+
+        bulk_where = {
+            "$and": [
+                {"analyzed": False},
+                {"is_ephemeral": False},
+                {"bulk_imported": True},
+            ]
+        }
+        bulk = self.chroma.list_where(where=bulk_where, limit=limit - len(live))
+        return live + bulk
 
     def count_unanalyzed(self) -> int:
         """Number of non-ephemeral Chroma rows waiting for the analyzer."""
@@ -375,6 +480,47 @@ class MemoryManager:
             return 0
         where = {"$and": [{"analyzed": False}, {"is_ephemeral": False}]}
         return self.chroma.count_where(where=where)
+
+    def _backfill_bulk_imported_flag(self) -> None:
+        """Stamp ``bulk_imported: False`` on legacy unanalyzed rows.
+
+        Rows written before S2.3 don't carry the ``bulk_imported`` flag, so a
+        strict ``bulk_imported: False`` filter would skip them entirely.
+        This runs once per process the first time the analyzer asks for
+        work, patches the missing metadata, and then no-ops thereafter.
+        """
+        if self._bulk_flag_backfilled or not self._is_chroma_available():
+            return
+        self._bulk_flag_backfilled = True
+        try:
+            unanalyzed = self.chroma.list_where(
+                where={"$and": [{"analyzed": False}, {"is_ephemeral": False}]},
+                limit=10000,
+            )
+        except Exception:
+            logger.warning(
+                "bulk_imported backfill: failed to list unanalyzed rows",
+                exc_info=True,
+            )
+            return
+        legacy_ids = [
+            row["id"]
+            for row in unanalyzed
+            if "bulk_imported" not in (row.get("metadata") or {})
+        ]
+        if not legacy_ids:
+            return
+        try:
+            self.chroma.update_metadata(legacy_ids, {"bulk_imported": False})
+            logger.info(
+                "Backfilled bulk_imported=False on %d legacy unanalyzed rows.",
+                len(legacy_ids),
+            )
+        except Exception:
+            logger.warning(
+                "bulk_imported backfill: update_metadata failed",
+                exc_info=True,
+            )
 
     def mark_analyzed(self, memory_ids: list[str], run_id: str | None = None) -> int:
         """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""

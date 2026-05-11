@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+from src.agent_platform.analyzers.canonicalize import (
+    DEFAULT_BELIEF_THRESHOLD,
+    DEFAULT_THRESHOLD,
+    BeliefCanonicalizer,
+    EntityCanonicalizer,
+)
 from src.agent_platform.analyzers.knowledge import KnowledgeAnalyzer
 from src.agent_platform.public.agent_service import AgentService
+from src.ingestion.bulk_importer import BulkImporter
 from src.memory.manager import MemoryManager
 
 
 def _build_analyzer(memory: MemoryManager) -> KnowledgeAnalyzer:
     return KnowledgeAnalyzer(memory=memory)
+
+
+def _build_canonicalizer(memory: MemoryManager) -> EntityCanonicalizer:
+    return EntityCanonicalizer(memory=memory)
+
+
+def _build_belief_canonicalizer(memory: MemoryManager) -> BeliefCanonicalizer:
+    return BeliefCanonicalizer(memory=memory)
 
 
 def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict:
@@ -88,6 +103,87 @@ def retry_analyzer_failures(
     """Reset failed rows so the next analyzer tick picks them up."""
     reset = memory.retry_failed(memory_ids)
     return {"reset": reset, "remaining": memory.count_failed()}
+
+
+def run_bulk_import(
+    memory: MemoryManager,
+    *,
+    path: str,
+    format: str = "jsonl",
+    source: str | None = None,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 100,
+) -> dict:
+    """Drop a historical archive into Chroma so the analyzer can backfill the graph.
+
+    ``format`` is either ``"jsonl"`` (one row per line, ``text`` key required)
+    or ``"directory"`` (recursive walk over ``.txt`` / ``.md`` files, chunked).
+    The function never raises on bad input — bad rows / unreadable files are
+    counted as skipped and the user sees the totals in the response.
+    """
+    importer = BulkImporter(memory=memory)
+    if format == "jsonl":
+        result = importer.import_jsonl(path, source=source)
+    elif format == "directory":
+        result = importer.import_directory(
+            path, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        )
+    else:
+        return {
+            "imported": 0,
+            "skipped": 0,
+            "errors": [f"unknown format: {format!r} (expected 'jsonl' or 'directory')"],
+            "source_path": path,
+        }
+    return result.as_dict()
+
+
+def run_canonicalization(
+    memory: MemoryManager,
+    *,
+    target: str = "entities",
+    threshold: float | None = None,
+) -> dict:
+    """Scan the graph for near-duplicates and write merge proposals.
+
+    ``target`` is ``"entities"`` (default — every label except internal types,
+    threshold defaults to 0.92) or ``"beliefs"`` (active :Belief nodes only,
+    threshold defaults to 0.88). Both targets write into the same
+    :MergeProposal store, so /canonicalize/proposals and /canonicalize/apply
+    work uniformly regardless of how the proposal was generated.
+    """
+    if target == "beliefs":
+        canon = _build_belief_canonicalizer(memory)
+        return canon.propose_merges(
+            threshold=threshold if threshold is not None else DEFAULT_BELIEF_THRESHOLD,
+        ).as_dict()
+    canon = _build_canonicalizer(memory)
+    return canon.propose_merges(
+        threshold=threshold if threshold is not None else DEFAULT_THRESHOLD,
+    ).as_dict()
+
+
+def list_merge_proposals(
+    memory: MemoryManager,
+    *,
+    status: str = "pending",
+    limit: int = 200,
+) -> dict:
+    """Return :MergeProposal nodes for the explorer panel."""
+    proposals = memory.list_merge_proposals(status=status, limit=limit)
+    return {"count": len(proposals), "items": proposals}
+
+
+def apply_merge_proposal(memory: MemoryManager, proposal_id: str) -> dict:
+    """Apply a pending proposal and return the merge stats."""
+    stats = memory.apply_merge_proposal(proposal_id)
+    return {"proposal_id": proposal_id, **stats}
+
+
+def dismiss_merge_proposal(memory: MemoryManager, proposal_id: str) -> dict:
+    """Mark a pending proposal as dismissed; no graph mutation."""
+    ok = memory.dismiss_merge_proposal(proposal_id)
+    return {"proposal_id": proposal_id, "dismissed": bool(ok)}
 
 
 async def get_system_status(memory: MemoryManager, service: AgentService) -> dict:

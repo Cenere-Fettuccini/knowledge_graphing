@@ -116,6 +116,93 @@ async def retry_analyzer_failures(
     return services.retry_analyzer_failures(memory, memory_ids=memory_ids)
 
 
+@router.post("/bulk/import")
+async def run_bulk_import(
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    path = (payload or {}).get("path")
+    fmt = (payload or {}).get("format", "jsonl")
+    source = (payload or {}).get("source")
+    chunk_size = (payload or {}).get("chunk_size", 1000)
+    chunk_overlap = (payload or {}).get("chunk_overlap", 100)
+    if not isinstance(path, str) or not path.strip():
+        raise HTTPException(status_code=400, detail="`path` is required and must be a non-empty string")
+    if fmt not in ("jsonl", "directory"):
+        raise HTTPException(status_code=400, detail="`format` must be 'jsonl' or 'directory'")
+    if source is not None and not isinstance(source, str):
+        raise HTTPException(status_code=400, detail="`source` must be a string if provided")
+    if not isinstance(chunk_size, int) or chunk_size <= 0 or chunk_size > 10000:
+        raise HTTPException(status_code=400, detail="`chunk_size` must be an integer in 1..10000")
+    if not isinstance(chunk_overlap, int) or chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise HTTPException(status_code=400, detail="`chunk_overlap` must be a non-negative integer less than chunk_size")
+    return services.run_bulk_import(
+        memory,
+        path=path,
+        format=fmt,
+        source=source,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+
+
+@router.post("/canonicalize/run")
+async def run_canonicalization(
+    payload: dict | None = Body(default=None),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    payload = payload or {}
+    target = payload.get("target", "entities")
+    if target not in ("entities", "beliefs"):
+        raise HTTPException(
+            status_code=400,
+            detail="target must be 'entities' or 'beliefs'",
+        )
+    threshold = payload.get("threshold")
+    if threshold is not None and (
+        not isinstance(threshold, (int, float)) or not 0.0 < float(threshold) <= 1.0
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="threshold must be a number in (0.0, 1.0] if provided",
+        )
+    return services.run_canonicalization(
+        memory,
+        target=target,
+        threshold=float(threshold) if threshold is not None else None,
+    )
+
+
+@router.get("/canonicalize/proposals")
+async def get_canonicalize_proposals(
+    status: str = Query("pending", pattern="^(pending|applied|dismissed)$"),
+    limit: int = Query(200, ge=1, le=1000),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.list_merge_proposals(memory, status=status, limit=limit)
+
+
+@router.post("/canonicalize/apply/{proposal_id}")
+async def apply_canonicalize_proposal(
+    proposal_id: str,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    try:
+        return services.apply_merge_proposal(memory, proposal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/canonicalize/dismiss/{proposal_id}")
+async def dismiss_canonicalize_proposal(
+    proposal_id: str,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.dismiss_merge_proposal(memory, proposal_id)
+
+
 @router.get("/system/status")
 async def get_system_status(
     memory: MemoryManager = Depends(get_memory_manager),

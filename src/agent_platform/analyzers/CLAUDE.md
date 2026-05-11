@@ -10,6 +10,7 @@ that queue.
 |------|------|
 | `local_llm.py` | `LMStudioClient` — OpenAI-compatible client for the local LLM server |
 | `knowledge.py` | `KnowledgeAnalyzer` — extracts durable facts about the user, people, preferences |
+| `canonicalize.py` | `EntityCanonicalizer` (per-label entity dedup, threshold 0.92) and `BeliefCanonicalizer` (active :Belief content dedup, threshold 0.88); both write `:MergeProposal` nodes for human approval |
 | `scheduler.py` | `AnalyzerScheduler` — apscheduler-driven periodic auto-drain of the queue |
 
 ## Adding a New Analyzer
@@ -27,6 +28,12 @@ Each analyzer is a class that:
 - **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` drains the queue
   inline after writing the chunks. Pass `analyze=False` to suppress, e.g. in
   tests, and let the scheduler pick it up later.
+- **Canonicalization** — `POST /api/explorer/canonicalize/run` calls the
+  canonicalizer for the requested target (`target='entities'` →
+  `EntityCanonicalizer`, `target='beliefs'` → `BeliefCanonicalizer`). Both
+  cold-path, never auto-merge; surface proposals via
+  `GET /canonicalize/proposals` and apply via
+  `POST /canonicalize/apply/{id}`.
 
 ## LM Studio
 `LMStudioClient` is an OpenAI-compatible REST wrapper around `httpx`. Default

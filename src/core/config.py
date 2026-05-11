@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     analyzer_tick_seconds: int = 900   # how often the auto-drain scheduler ticks
     analyzer_batch_size: int = 20      # Chroma rows per LLM call
 
+    # Bulk-mode pacing: when the unanalyzed queue exceeds the threshold the
+    # scheduler switches to tighter ticks and a larger batch so a backfill
+    # (journal import, history dump, etc.) drains in hours rather than days.
+    # Falls back to the normal pacing as soon as the queue is below the
+    # threshold again.
+    analyzer_bulk_threshold: int = 100        # depth that flips bulk mode on
+    analyzer_bulk_tick_seconds: int = 60
+    analyzer_bulk_batch_size: int = 100
+
     # ── Session persistence ───────────────────────────────────────────────────
     session_store_path: str = "./data/sessions.json"
 
