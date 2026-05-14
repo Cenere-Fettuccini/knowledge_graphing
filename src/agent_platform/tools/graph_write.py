@@ -76,6 +76,14 @@ Intent = Annotated[
 ]
 
 
+class IsolatedNodeError(Exception):
+    """Raised when a batch would create one or more nodes with zero edges."""
+
+    def __init__(self, isolated: list[dict]) -> None:
+        super().__init__(f"{len(isolated)} isolated node(s) rejected")
+        self.isolated = isolated
+
+
 def graph_write(intents: list[dict]) -> dict:
     """Write a batch of graph intents to the knowledge graph.
 
@@ -121,6 +129,7 @@ def graph_write(intents: list[dict]) -> dict:
 
     nodes_written: list[dict] = []
     edges_written: list[dict] = []
+    isolated: list[dict] = []
 
     try:
         with memory.batch_graph_writes() as batch:
@@ -137,6 +146,17 @@ def graph_write(intents: list[dict]) -> dict:
                 elif isinstance(intent, EdgeIntent):
                     edge_meta = resolver.create_edge(intent, batch)
                     edges_written.append(edge_meta)
+
+            # Isolation guard (S0.4): reject any batch that would leave a
+            # newly-created node with zero edges. Cleared ops will skip
+            # _flush_batch entirely so Neo4j is left unchanged.
+            isolated = _find_isolated_nodes(batch.ops, nodes_written)
+            if isolated:
+                logger.warning(
+                    "graph_write rejecting batch — %d isolated node(s): %s",
+                    len(isolated), [i["name"] for i in isolated],
+                )
+                batch.ops.clear()
     except Exception as e:
         logger.exception("graph_write batch failed")
         return {
@@ -144,6 +164,17 @@ def graph_write(intents: list[dict]) -> dict:
             "error": f"batch commit failed: {e}",
             "nodes_written": [],
             "edges_written": [],
+            "quarantined": 0,
+        }
+
+    if isolated:
+        return {
+            "ok": False,
+            "error": "isolated nodes rejected",
+            "isolated": isolated,
+            "nodes_written": [],
+            "edges_written": [],
+            "fallbacks": resolver.fallbacks,
             "quarantined": 0,
         }
 
@@ -162,6 +193,36 @@ _INTENT_MODELS: dict[str, type[BaseModel]] = {
     "task": TaskIntent,
     "edge": EdgeIntent,
 }
+
+
+def _find_isolated_nodes(
+    ops: list[tuple[str, dict]], nodes_written: list[dict]
+) -> list[dict]:
+    """Return any nodes upserted in this batch that have zero edges in it.
+
+    A node is considered newly created if it appears as a ``"node"`` op —
+    the resolver only emits node ops for genuinely new uuids (existing
+    nodes are reused by id without re-inserting). So every node op here is
+    a fresh entity/belief/task that must carry at least one edge or be
+    rejected.
+    """
+    new_ids: set[str] = set()
+    for op_type, kwargs in ops:
+        if op_type == "node":
+            new_ids.add(kwargs["node_id"])
+
+    endpoint_ids: set[str] = set()
+    for op_type, kwargs in ops:
+        if op_type == "edge":
+            endpoint_ids.add(kwargs["source_id"])
+            endpoint_ids.add(kwargs["target_id"])
+
+    orphan_ids = new_ids - endpoint_ids
+    if not orphan_ids:
+        return []
+
+    by_id = {n["id"]: n for n in nodes_written}
+    return [by_id[nid] for nid in orphan_ids if nid in by_id]
 
 
 _TOPO_ORDER = {"entity": 0, "task": 1, "belief": 2, "edge": 3}
@@ -246,14 +307,22 @@ class _Resolver:
                 "source_text": intent.source_text or None,
             },
         )
-        if intent.about_entity:
-            anchor = self.resolve_entity_name(intent.about_entity)
-            if anchor:
-                batch.upsert_relationship(
-                    source_id=belief_id, target_id=anchor, rel_type="ABOUT"
-                )
+        anchor = (
+            self.resolve_entity_name(intent.about_entity) if intent.about_entity else None
+        )
+        if anchor is None:
+            # Belief without a resolvable subject is "a belief about myself" —
+            # anchor to root so it can't float. Tracked as a fallback so we can
+            # see how often this happens.
+            anchor = self.root()
+            if intent.about_entity:
+                self._record_fallback("belief", intent.about_entity, "anchor_to_root")
             else:
-                self._record_fallback("belief", intent.about_entity, "no_anchor")
+                self._record_fallback("belief", "<unspecified>", "anchor_to_root")
+        if anchor:
+            batch.upsert_relationship(
+                source_id=belief_id, target_id=anchor, rel_type="ABOUT"
+            )
         return belief_id
 
     def upsert_task(self, intent: TaskIntent, batch: GraphWriteBatch) -> str:
