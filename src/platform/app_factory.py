@@ -18,6 +18,7 @@ from src.apps.routine_scheduler.app import get_routine_scheduler_app
 from src.core.config import settings
 from src.core.logging_config import setup_logging
 from src.memory.manager import get_memory_manager
+from src.platform.graph_ingest import build_graph_ingest_router
 from src.platform.registry import AppRegistry
 from src.platform.shell import build_shell_router
 
@@ -102,6 +103,7 @@ def create_platform_app() -> FastAPI:
     )
 
     app.include_router(build_shell_router(registry))
+    app.include_router(build_graph_ingest_router())
     app.mount(
         "/shell-assets",
         StaticFiles(directory=str(Path(__file__).resolve().parents[1] / "explorer")),

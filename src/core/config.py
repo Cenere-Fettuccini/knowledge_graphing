@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # ── Spillover (write-ahead for DB failures) ───────────────────────────────
     spillover_dir: str = "./data/spillover"
 
+    # ── Graph ingest (shared-secret HTTP entry point for batch writes) ───────
+    # Set to a long random string in .env to enable POST /graph/ingest.
+    # Leave empty to disable the endpoint entirely.
+    graph_ingest_secret: str = ""
+
     # ── Neo4j ─────────────────────────────────────────────────────────────────
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
