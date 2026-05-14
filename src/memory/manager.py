@@ -210,6 +210,16 @@ class MemoryManager:
                 text=normalized_text, metadata=chroma_metadata
             )
 
+        # Count-triggered graph ingestion (S0.6). Import lazily to avoid a
+        # circular import at module load; the trigger itself is a no-op when
+        # the threshold is unset.
+        if memory_id and not is_ephemeral:
+            try:
+                from src.agent_platform.analyzers import graph_ingest_trigger
+                graph_ingest_trigger.maybe_trigger(self)
+            except Exception as e:
+                logger.debug("graph_ingest_trigger.maybe_trigger raised: %s", e)
+
         return memory_id
 
     def search(self, query: str, k: int = 5, session_id: str | None = None,

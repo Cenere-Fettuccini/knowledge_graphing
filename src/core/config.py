@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # Leave empty to disable the endpoint entirely.
     graph_ingest_secret: str = ""
 
+    # When the unanalyzed Chroma queue reaches this depth, the count-triggered
+    # ingestion job fires and routes the backlog through graph_write. Set to
+    # 0 to disable the trigger entirely (the analyzer scheduler still runs).
+    graph_ingest_threshold: int = 20
+
     # ── Neo4j ─────────────────────────────────────────────────────────────────
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
