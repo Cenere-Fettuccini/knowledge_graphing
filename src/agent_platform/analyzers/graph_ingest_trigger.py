@@ -4,11 +4,13 @@ Replaces the time-based analyzer cadence for graph writes: instead of
 waking up every N seconds, the system fires ingestion whenever the
 unanalyzed Chroma queue crosses ``settings.graph_ingest_threshold``.
 
-This module ships the trigger scaffolding — threshold check, lock, and
-the asyncio scheduling hook. The actual extraction (raw conversation
-text → list of graph_write Intent dicts via LLM) lands in a follow-up
-(S0.6b); for now the run is a logged no-op so we can observe the
-trigger firing under real load before committing the extraction prompt.
+Flow per run:
+  1. Pull up to ``threshold`` unanalyzed Chroma rows.
+  2. Convert them to ``graph_write`` Intent dicts via the local LLM
+     (``graph_extraction.extract_intents``).
+  3. Call ``graph_write`` in-process. The isolation guard and
+     reachability sweep run as part of that call.
+  4. Mark the consumed Chroma rows analyzed iff the write succeeded.
 
 Concurrency model: a single asyncio.Lock so concurrent ``MemoryManager.store``
 calls can't double-fire. If the lock is held, late callers skip rather
@@ -20,8 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
+from src.agent_platform.analyzers import graph_extraction
+from src.agent_platform.tools.graph_write import graph_write
 from src.core.config import settings
 
 if TYPE_CHECKING:
@@ -69,16 +74,80 @@ async def _run_once(memory: "MemoryManager", depth_at_trigger: int) -> None:
         )
         return
     async with _lock:
+        run_id = f"graph_ingest_{uuid.uuid4().hex[:12]}"
+        batch_size = max(settings.graph_ingest_threshold, 1)
         logger.info(
-            "graph_ingest trigger: queue=%d (threshold=%d) — S0.6b stub, no extraction yet",
-            depth_at_trigger,
-            settings.graph_ingest_threshold,
+            "graph_ingest %s: starting (queue=%d, batch=%d)",
+            run_id, depth_at_trigger, batch_size,
         )
-        # S0.6b: pull unanalyzed rows, run extraction prompt against an LLM
-        # to produce a list of Intent dicts, POST to /graph/ingest with the
-        # shared secret, then mark_analyzed on success. Until then the
-        # existing analyzer scheduler keeps doing real work; this stub is
-        # just observation.
+
+        try:
+            rows = memory.list_unanalyzed(limit=batch_size)
+        except Exception:
+            logger.exception("graph_ingest %s: list_unanalyzed failed", run_id)
+            return
+
+        if not rows:
+            logger.info("graph_ingest %s: queue drained before run", run_id)
+            return
+
+        row_ids = [r["id"] for r in rows if r.get("id")]
+        schema = _safe_schema(memory)
+
+        try:
+            intents = await graph_extraction.extract_intents(rows, schema)
+        except Exception:
+            logger.exception("graph_ingest %s: extraction crashed", run_id)
+            return
+
+        if not intents:
+            # Either nothing durable was said or the LLM is unavailable.
+            # Mark the rows analyzed so we don't loop on the same backlog
+            # forever; the failure path stays out of the dead-letter queue
+            # because there's nothing actionable to retry.
+            logger.info(
+                "graph_ingest %s: 0 intents produced, marking %d rows analyzed",
+                run_id, len(row_ids),
+            )
+            _mark_analyzed(memory, row_ids, run_id)
+            return
+
+        result = graph_write(intents)
+        if result.get("ok"):
+            logger.info(
+                "graph_ingest %s: wrote %d nodes / %d edges; marking %d rows analyzed",
+                run_id,
+                len(result.get("nodes_written", [])),
+                len(result.get("edges_written", [])),
+                len(row_ids),
+            )
+            _mark_analyzed(memory, row_ids, run_id)
+        else:
+            # Write rejected (isolation guard, validation, etc.) — DON'T
+            # mark analyzed. Let the next trigger retry; if the model
+            # keeps producing the same broken extraction, the dead-letter
+            # path is the right fix, not silent data loss.
+            logger.warning(
+                "graph_ingest %s: graph_write rejected (error=%s); leaving rows for retry",
+                run_id, result.get("error"),
+            )
+
+
+def _safe_schema(memory: "MemoryManager") -> dict:
+    try:
+        return memory.graph_schema_snapshot()
+    except Exception:
+        logger.debug("graph_schema_snapshot failed; running extraction without schema")
+        return {"labels": [], "relationship_types": [], "entities": []}
+
+
+def _mark_analyzed(memory: "MemoryManager", ids: list[str], run_id: str) -> None:
+    if not ids:
+        return
+    try:
+        memory.mark_analyzed(ids, run_id=run_id)
+    except Exception:
+        logger.exception("graph_ingest %s: mark_analyzed failed for %d ids", run_id, len(ids))
 
 
 def is_running() -> bool:

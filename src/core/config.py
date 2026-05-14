@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # ── Local LLM (LM Studio — optional) ─────────────────────────────────────
     lm_studio_base_url: str = "http://localhost:1234/v1"
-    lm_studio_model: str = "qwen2.5-3b-instruct"
+    lm_studio_model: str = "google/gemma-4-e4b"
 
     # ── Knowledge analyzer ───────────────────────────────────────────────────
     analyzer_enabled: bool = True
