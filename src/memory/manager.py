@@ -366,9 +366,21 @@ class MemoryManager:
         """Return the provenance / source chain for a node."""
         return self.neo4j.get_node_provenance(node_id)
 
-    def graph_active_tasks(self) -> list:
-        """Return active task nodes from the knowledge graph."""
-        return self.neo4j.list_active_tasks()
+    def graph_active_tasks(
+        self,
+        *,
+        include_completed: bool = False,
+        since: str | None = None,
+    ) -> list:
+        """Return task nodes from the knowledge graph.
+
+        Defaults to live (non-terminal) tasks. Pass ``include_completed=True``
+        for the scrollback view; combine with ``since`` (ISO timestamp) to
+        bound the lookback window.
+        """
+        return self.neo4j.list_active_tasks(
+            include_completed=include_completed, since=since
+        )
 
     def graph_belief_trail(self, belief_id: str) -> dict:
         """Return the belief chain and supporting evidence for a belief node."""
@@ -990,8 +1002,14 @@ class MemoryManager:
             "now": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if new_status:
+            status_upper = new_status.upper()
             set_parts.append("t.status = $status")
-            params["status"] = new_status.upper()
+            params["status"] = status_upper
+            # Stamp completion time so the explorer can scroll back through
+            # closed tasks chronologically. Tasks are kept in the graph; the
+            # default reads just filter them out (see list_active_tasks).
+            if status_upper in {"DONE", "CANCELLED"}:
+                set_parts.append("t.completed_at = $now")
         if notes:
             set_parts.append("t.notes = $notes")
             params["notes"] = notes

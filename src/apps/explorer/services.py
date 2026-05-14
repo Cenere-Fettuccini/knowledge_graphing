@@ -36,8 +36,13 @@ def get_node_provenance(node_id: str, memory: MemoryManager) -> dict:
     return memory.graph_node_provenance(node_id)
 
 
-def get_active_tasks(memory: MemoryManager) -> list[dict]:
-    return memory.graph_active_tasks()
+def get_active_tasks(
+    memory: MemoryManager,
+    *,
+    include_completed: bool = False,
+    since: str | None = None,
+) -> list[dict]:
+    return memory.graph_active_tasks(include_completed=include_completed, since=since)
 
 
 def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:

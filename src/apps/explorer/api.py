@@ -53,8 +53,14 @@ async def get_node_provenance(
 
 
 @router.get("/tasks/active")
-async def get_active_tasks(memory: MemoryManager = Depends(get_memory_manager)):
-    return services.get_active_tasks(memory)
+async def get_active_tasks(
+    include_completed: bool = False,
+    since: str | None = None,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return services.get_active_tasks(
+        memory, include_completed=include_completed, since=since
+    )
 
 
 @router.get("/graph/belief/{belief_id}/trail")

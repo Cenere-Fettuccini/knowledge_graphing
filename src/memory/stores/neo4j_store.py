@@ -451,28 +451,54 @@ class Neo4jStore:
             }
         }
 
-    def list_active_tasks(self) -> list[dict]:
-        """Return task nodes directly instead of relying on the explorer overview."""
+    TERMINAL_TASK_STATUSES = ("DONE", "CANCELLED")
+
+    def list_active_tasks(
+        self,
+        *,
+        include_completed: bool = False,
+        since: str | None = None,
+    ) -> list[dict]:
+        """Return task nodes from the knowledge graph.
+
+        By default, terminal tasks (``DONE``, ``CANCELLED``) are hidden so
+        the agent and explorer see a live punch-list. Pass
+        ``include_completed=True`` for the scrollback view; combine with
+        ``since`` (ISO timestamp) to limit how far back the read goes.
+        """
         if not self.driver and not self.verify_connection():
             return []
 
-        query = """
+        clauses = ["NOT t:Quarantine"]
+        params: dict = {"terminal": list(self.TERMINAL_TASK_STATUSES)}
+        if not include_completed:
+            clauses.append("(t.status IS NULL OR NOT t.status IN $terminal)")
+        if since:
+            clauses.append(
+                "coalesce(t.completed_at, t.updated_at, t.created_at) >= $since"
+            )
+            params["since"] = since
+        where_clause = " AND ".join(clauses)
+
+        query = f"""
         MATCH (t:Task)
-        WHERE NOT t:Quarantine
+        WHERE {where_clause}
         RETURN t.id AS id, t.name AS name, t.status AS status,
-               t.priority AS priority, t.due_date AS due_date
-        ORDER BY coalesce(t.updated_at, t.created_at, t.name) DESC
+               t.priority AS priority, t.due_date AS due_date,
+               t.completed_at AS completed_at
+        ORDER BY coalesce(t.completed_at, t.updated_at, t.created_at, t.name) DESC
         """
 
         tasks = []
         with self.driver.session() as session:
-            for record in session.run(query):
+            for record in session.run(query, **params):
                 tasks.append({
                     "id": record["id"],
                     "name": record["name"],
                     "status": record["status"],
                     "priority": record["priority"],
                     "due_date": record["due_date"],
+                    "completed_at": record["completed_at"],
                     "label": "Task",
                 })
         return tasks

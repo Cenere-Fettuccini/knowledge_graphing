@@ -32,19 +32,27 @@ def create_task(title: str, due_date: str = None, priority: str = "medium"):
         return f"Error creating task: {str(e)}"
 
 
-def list_tasks(status_filter: str = ""):
+def list_tasks(status_filter: str = "", include_completed: bool = False):
     """
-    List tasks from the Knowledge Graph, optionally filtered by status.
-    Valid statuses: TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED.
-    Leave empty to list all tasks.
+    List tasks from the Knowledge Graph.
+
+    By default only live tasks are returned — DONE and CANCELLED are hidden
+    so the punch-list stays focused. Set include_completed=True to see the
+    full history. Pass status_filter to further narrow within whatever set
+    is returned (TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED).
     """
-    logger.info("Tool Call: list_tasks -> filter=%s", status_filter)
+    logger.info(
+        "Tool Call: list_tasks -> filter=%s include_completed=%s",
+        status_filter, include_completed,
+    )
     try:
         offline = ensure_graph_online()
         if offline:
             return offline
 
-        tasks = get_memory_manager().graph_active_tasks()
+        tasks = get_memory_manager().graph_active_tasks(
+            include_completed=include_completed
+        )
         if status_filter:
             tasks = [
                 t for t in tasks
