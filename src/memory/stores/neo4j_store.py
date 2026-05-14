@@ -60,6 +60,36 @@ class Neo4jStore:
         value = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
         return value or "general"
 
+    @staticmethod
+    def sanitize_label(label: str) -> str:
+        """Coerce a free-form label into a Cypher-safe PascalCase identifier.
+
+        Cypher treats ``SET n:Academic Goal`` as two tokens and aborts with a
+        SyntaxError. Labels arrive straight from LLM output, so we tolerate
+        ``"Academic Goal"``, ``"social-circles"``, ``"  career goal  "`` and
+        produce a single identifier that compiles.
+        """
+        if not label or not isinstance(label, str):
+            return "Entity"
+        tokens = re.findall(r"[A-Za-z0-9]+", label)
+        if not tokens:
+            return "Entity"
+        parts = [t[:1].upper() + t[1:].lower() for t in tokens]
+        cleaned = re.sub(r"^[0-9]+", "", "".join(parts))
+        return cleaned or "Entity"
+
+    @classmethod
+    def sanitize_labels(cls, labels: list[str]) -> list[str]:
+        """Sanitize and de-duplicate a list of labels, preserving order."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in labels or []:
+            clean = cls.sanitize_label(raw)
+            if clean and clean not in seen:
+                seen.add(clean)
+                out.append(clean)
+        return out or ["Entity"]
+
     # ── Write Operations ──────────────────────────────────────────────────────
 
     def upsert_conversation(self, session_id: str, properties: dict = None) -> str:
@@ -142,11 +172,15 @@ class Neo4jStore:
 
     # ── Multi-label upsert (used by the analyzer) ────────────────────────────
 
-    @staticmethod
-    def _build_node_upsert_cypher(labels: list[str]) -> str:
+    @classmethod
+    def _build_node_upsert_cypher(cls, labels: list[str]) -> str:
         if not labels:
             raise ValueError("At least one label is required.")
-        labels_clause = ":".join(labels)
+        # Labels are interpolated straight into Cypher, so anything other than
+        # ``[A-Za-z][A-Za-z0-9]*`` either fails to parse (spaces, punctuation)
+        # or opens an injection surface (semicolons, backticks).
+        safe_labels = cls.sanitize_labels(labels)
+        labels_clause = ":".join(safe_labels)
         return f"""
         MERGE (n {{id: $node_id}})
         ON CREATE SET n:{labels_clause}, n.created_at = $now
