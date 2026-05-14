@@ -47,6 +47,7 @@ async def post_chat_message(
     message_timestamp = body.get("message_timestamp")
     context = body.get("context")
     anchor_node_id = body.get("anchor_node_id")
+    client_msg_id = body.get("client_msg_id")
 
     if not session_id:
         return {"ok": False, "error": "Missing session_id"}
@@ -63,4 +64,5 @@ async def post_chat_message(
         message_timestamp=message_timestamp,
         context=context,
         anchor_node_id=anchor_node_id,
+        client_msg_id=client_msg_id,
     )
