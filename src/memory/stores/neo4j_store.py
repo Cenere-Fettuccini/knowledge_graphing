@@ -458,6 +458,7 @@ class Neo4jStore:
 
         query = """
         MATCH (t:Task)
+        WHERE NOT t:Quarantine
         RETURN t.id AS id, t.name AS name, t.status AS status,
                t.priority AS priority, t.due_date AS due_date
         ORDER BY coalesce(t.updated_at, t.created_at, t.name) DESC

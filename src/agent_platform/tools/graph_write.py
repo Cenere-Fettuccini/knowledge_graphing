@@ -178,12 +178,13 @@ def graph_write(intents: list[dict]) -> dict:
             "quarantined": 0,
         }
 
+    quarantined = memory.quarantine_unreachable_nodes()
     return {
         "ok": True,
         "nodes_written": nodes_written,
         "edges_written": edges_written,
         "fallbacks": resolver.fallbacks,
-        "quarantined": 0,  # filled in by S0.7
+        "quarantined": quarantined,
     }
 
 

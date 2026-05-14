@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from src.core.config import settings
 from src.memory.spillover import SpilloverWriter
+from src.memory.stores import reachability as _reachability
 from src.memory.stores.chroma_store import ChromaStore
 from src.memory.stores.neo4j_store import Neo4jStore
 
@@ -805,6 +806,28 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Reachability sweep (root-anchored cleanup) ───────────────────────────
+
+    def quarantine_unreachable_nodes(self) -> int:
+        """Label nodes unreachable from the user root with ``:Quarantine``.
+
+        Called after each ``graph_write`` batch to catch islands left behind
+        by merges, edge deletions, or partial writes. Returns the count
+        newly quarantined this run.
+        """
+        from datetime import datetime, timezone
+        return _reachability.quarantine_unreachable(
+            self.neo4j.driver, datetime.now(timezone.utc).isoformat()
+        )
+
+    def unquarantine_node(self, node_id: str) -> bool:
+        """Lift ``:Quarantine`` from a single node (manual reattach support)."""
+        return _reachability.unquarantine(self.neo4j.driver, node_id)
+
+    def purge_quarantined(self, older_than_iso: str) -> int:
+        """Permanently delete quarantined nodes older than the cutoff."""
+        return _reachability.purge_quarantined(self.neo4j.driver, older_than_iso)
+
     # ── Rumination support ────────────────────────────────────────────────────
 
     def get_recent_memories(self, n: int = 100) -> list[dict]:
@@ -890,6 +913,7 @@ class MemoryManager:
         cypher = f"""
         MATCH (b:Belief)
         WHERE toLower(b.content) CONTAINS toLower($keyword) {status_clause}
+          AND NOT b:Quarantine
         RETURN b.id AS id, b.content AS content,
                b.confidence AS confidence, b.status AS status
         ORDER BY b.created_at DESC LIMIT 1
@@ -918,12 +942,13 @@ class MemoryManager:
             return ""
 
     def search_nodes(self, query: str, limit: int = 10) -> list[dict]:
-        """Name-contains search across all graph nodes."""
+        """Name-contains search across all graph nodes. Excludes quarantined nodes."""
         if not self.neo4j.driver:
             return []
         cypher = """
         MATCH (n)
         WHERE toLower(n.name) CONTAINS toLower($query)
+          AND NOT n:Quarantine
         RETURN n.id AS id, n.name AS name,
                labels(n)[0] AS label, n.description AS description
         LIMIT $limit
