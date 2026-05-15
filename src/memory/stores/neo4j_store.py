@@ -1307,13 +1307,22 @@ class Neo4jStore:
         source_session_id: str = None,
         source_text: str = None,
         belief_key: str | None = None,
+        extraction_method: str | None = None,
+        derived_from_belief_id: str | None = None,
     ) -> str:
         """
         Create a new :Belief node with optional evidence links.
 
-        If about_entity_id is provided, creates an ABOUT relationship.
-        If source_session_id is provided, creates a :Conversation node
-        and an EXTRACTED_FROM relationship.
+        Provenance options:
+          * ``about_entity_id`` — writes ``(b)-[:ABOUT]->(entity)``.
+          * ``source_session_id`` + ``source_text`` — MERGEs a
+            ``:Conversation`` node and writes ``(b)-[:EXTRACTED_FROM]->(c)``.
+          * ``derived_from_belief_id`` — writes
+            ``(b)-[:DEDUCED_FROM]->(seed:Belief)`` (used by rumination's
+            deep pass to record which prior belief the synthesis came from).
+          * ``extraction_method`` — stamped as a property on the new node
+            so consumers can tell ``deep_pass`` / ``rabbit_hole`` /
+            cloud-extracted beliefs apart from agent-written ones.
 
         Returns the belief's ID.
         """
@@ -1328,7 +1337,8 @@ class Neo4jStore:
         CREATE (b:Belief {
             id: $bid, name: $content, content: $content,
             confidence: $conf, status: 'active', created_at: $now,
-            updated_at: $now, belief_key: $belief_key
+            updated_at: $now, belief_key: $belief_key,
+            extraction_method: $method
         })
         RETURN b.id AS id
         """
@@ -1340,6 +1350,7 @@ class Neo4jStore:
                 conf=confidence,
                 now=now,
                 belief_key=belief_key,
+                method=extraction_method,
             )
 
             # Link to the entity it's about
@@ -1362,6 +1373,16 @@ class Neo4jStore:
                 """, sid=source_session_id, cid=conv_id,
                      preview=source_text[:60] + "…" if len(source_text) > 60 else source_text,
                      text=source_text, now=now, bid=belief_id)
+
+            # CT2: deep-pass synthesis links back to the seed belief so the
+            # explorer's provenance view can show "this came from that".
+            if derived_from_belief_id:
+                session.run("""
+                    MATCH (new:Belief {id: $bid}), (seed:Belief {id: $seed})
+                    MERGE (new)-[r:DEDUCED_FROM]->(seed)
+                    ON CREATE SET r.method = $method, r.created_at = $now
+                """, bid=belief_id, seed=derived_from_belief_id,
+                     method=extraction_method or "rumination", now=now)
 
         return belief_id
 

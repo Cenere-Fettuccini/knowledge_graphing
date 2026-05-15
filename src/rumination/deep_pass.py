@@ -126,7 +126,14 @@ class DeepSynthesisEngine:
                     insights_generated += 1
 
                     for nb in new_beliefs:
-                        self.memory.upsert_belief(nb["content"], nb.get("confidence", 0.5))
+                        # CT2: stamp provenance so this synthesis traces
+                        # back to the belief that seeded the deep pass.
+                        self.memory.upsert_belief(
+                            nb["content"],
+                            nb.get("confidence", 0.5),
+                            extraction_method="deep_pass",
+                            derived_from_belief_id=belief["id"],
+                        )
 
                     for reframing in reframings:
                         logger.info("INSIGHT: %s", reframing["insight"])
@@ -186,7 +193,15 @@ class DeepSynthesisEngine:
                 logger.info("\n%s\nEPIPHANY:\n%s\n%s\n", "=" * 50, epiphany, "=" * 50)
 
             for nb in analysis.get("new_beliefs", []):
-                self.memory.upsert_belief(nb["content"], nb.get("confidence", 0.7))
+                # CT2: anchor the rabbit-hole insight to the seed
+                # conversation so the provenance chain ends at a real turn.
+                self.memory.upsert_belief(
+                    nb["content"],
+                    nb.get("confidence", 0.7),
+                    extraction_method="rabbit_hole",
+                    source_session_id=(seed_memory.get("metadata") or {}).get("session_id"),
+                    source_text=seed_memory.get("text"),
+                )
                 logger.info("Graph Updated with Insight: %s", nb["content"])
 
             return 1

@@ -1124,14 +1124,35 @@ class MemoryManager:
         *,
         about_entity_id: str | None = None,
         source_text: str | None = None,
+        source_session_id: str | None = None,
+        extraction_method: str | None = None,
+        derived_from_belief_id: str | None = None,
     ) -> str:
-        """Create a Belief node, optionally linked to an entity and source text."""
+        """Create a Belief node with optional provenance links.
+
+        ``extraction_method`` (CT2): tag indicating which pipeline produced
+        this belief — e.g. ``"deep_pass"``, ``"rabbit_hole"``,
+        ``"cloud_extract"``. Stamped as a property so the explorer can
+        filter / colour by source.
+
+        ``source_session_id`` (CT2): when supplied alongside
+        ``source_text``, MERGEs a ``:Conversation`` node and links the
+        belief via ``EXTRACTED_FROM`` — gives every rumination output a
+        traceable origin in the conversation log.
+
+        ``derived_from_belief_id`` (CT2): seed belief id, used by the
+        deep pass; writes ``DEDUCED_FROM`` so the explorer can render
+        the synthesis chain.
+        """
         try:
             return self.neo4j.upsert_belief(
                 content,
                 confidence,
                 about_entity_id=about_entity_id,
                 source_text=source_text,
+                source_session_id=source_session_id,
+                extraction_method=extraction_method,
+                derived_from_belief_id=derived_from_belief_id,
             )
         except Exception as e:
             logger.error("Failed to upsert belief: %s", e)
