@@ -892,6 +892,16 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Schema drift (S3.5) ──────────────────────────────────────────────────
+
+    def graph_label_counts(self) -> dict:
+        """Return {label: node_count} across the graph."""
+        return self.neo4j.label_counts()
+
+    def graph_rel_type_counts(self) -> dict:
+        """Return {rel_type: edge_count} across the graph."""
+        return self.neo4j.rel_type_counts()
+
     # ── Eras (S3.1) ──────────────────────────────────────────────────────────
 
     def list_eras(self, *, active_only: bool = False) -> list[dict]:

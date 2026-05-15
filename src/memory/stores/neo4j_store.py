@@ -357,6 +357,32 @@ class Neo4jStore:
             record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
             return self._serialize_node(record["u"])
 
+    # ── Schema drift counts (S3.5) ───────────────────────────────────────────
+
+    def label_counts(self) -> dict[str, int]:
+        """Return {label: node_count} across the graph, excluding quarantined."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        cypher = """
+        MATCH (n)
+        WHERE NOT n:Quarantine
+        UNWIND labels(n) AS label
+        RETURN label, count(*) AS c
+        """
+        with self.driver.session() as session:
+            return {r["label"]: int(r["c"]) for r in session.run(cypher)}
+
+    def rel_type_counts(self) -> dict[str, int]:
+        """Return {rel_type: edge_count} across the graph."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        cypher = """
+        MATCH ()-[r]->()
+        RETURN type(r) AS rel_type, count(*) AS c
+        """
+        with self.driver.session() as session:
+            return {r["rel_type"]: int(r["c"]) for r in session.run(cypher)}
+
     # ── Eras (S3.1) ──────────────────────────────────────────────────────────
 
     def list_eras(self, *, active_only: bool = False) -> list[dict]:

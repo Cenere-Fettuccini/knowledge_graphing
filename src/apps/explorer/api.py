@@ -314,3 +314,20 @@ async def run_belief_extraction(
 @router.get("/analyze/beliefs/queue")
 async def get_belief_queue_depth(memory: MemoryManager = Depends(get_memory_manager)):
     return {"pending": memory.count_belief_candidates()}
+
+
+# ── Schema drift monitor (S3.5) ──────────────────────────────────────────────
+
+@router.get("/schema/drift")
+async def schema_drift(
+    window_days: int = Query(7, ge=1, le=365),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    from src.agent_platform.analyzers.schema_drift import check_drift
+    return check_drift(memory, window_days=window_days)
+
+
+@router.post("/schema/snapshot")
+async def schema_snapshot(memory: MemoryManager = Depends(get_memory_manager)):
+    from src.agent_platform.analyzers.schema_drift import take_snapshot
+    return take_snapshot(memory)
