@@ -616,6 +616,9 @@
         document.getElementById('zoomOutBtn')?.addEventListener('click', () => {
             fov = Math.max(180, fov - 40);
         });
+        document.getElementById('navBackBtn')?.addEventListener('click', () => {
+            window.GraphManager.back();
+        });
         document.getElementById('recenterBtn')?.addEventListener('click', () => {
             const c = Math.cos(0.28), s = Math.sin(0.28);
             targetMatrix = [[1, 0, 0], [0, c, -s], [0, s, c]];
@@ -676,10 +679,44 @@
         resize();
         new ResizeObserver(resize).observe(wrap);
 
+        // ── Focal-node nav + era filter state (S4.5 / S4.6) ────────────────
+        const navStack = [];           // stack of focal node ids
+        let currentEraFilter = null;   // { eraId } or { activeSelfOnly: true } or null
+        let currentDepth = 1;
+
+        function topFocal() {
+            return navStack.length ? navStack[navStack.length - 1] : null;
+        }
+
+        function renderBreadcrumb() {
+            const el = document.getElementById('graphBreadcrumb');
+            const backBtn = document.getElementById('navBackBtn');
+            if (backBtn) backBtn.style.display = navStack.length ? '' : 'none';
+            if (!el) return;
+            if (!navStack.length) { el.textContent = ''; el.style.display = 'none'; return; }
+            el.style.display = '';
+            const names = navStack.map(id => {
+                const node = graphData.nodes.find(n => n.id === id);
+                return node ? (node.name || id) : id;
+            });
+            el.textContent = '🧭 ' + names.join(' › ');
+        }
+
         // ── Data Loading ────────────────────────────────────────────────────────
         async function reload() {
             let data = { nodes: [], edges: [], stats: null };
-            try { data = await getExplorerClient().getOverview(currentLimit); } catch (e) { console.warn('[graph3d] API unavailable, using empty graph.', e); }
+            const client = getExplorerClient();
+            const focal = topFocal();
+            try {
+                if (focal) {
+                    data = await client.getNeighborhood(focal, { depth: currentDepth, limit: 250 });
+                } else {
+                    const opts = currentEraFilter || {};
+                    data = await client.getOverview(currentLimit, opts);
+                }
+            } catch (e) {
+                console.warn('[graph3d] API unavailable, using empty graph.', e);
+            }
 
             graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
             const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
@@ -693,12 +730,14 @@
             placeNodes(graphData.nodes, graphData.edges);
             buildTaxonomy(graphData.nodes, graphData.edges);
             draw();
+            renderBreadcrumb();
 
             if (data.stats) {
                 const el = document.getElementById('topStats');
                 const n = data.stats.nodes ?? 0;
                 const e = data.stats.edges ?? 0;
-                if (el) el.textContent = `${n} Nodes · ${e} Connections`;
+                const suffix = focal ? ` · focal depth ${data.stats.depth || currentDepth}` : '';
+                if (el) el.textContent = `${n} Nodes · ${e} Connections${suffix}`;
             }
         }
         window.GraphManager = {
@@ -713,6 +752,34 @@
                 currentLimit = next;
                 reload();
             },
+            // ── Focal-node navigation (S4.5) ───────────────────────────────
+            drillInto(nodeId) {
+                if (!nodeId) return;
+                navStack.push(nodeId);
+                reload();
+            },
+            back() {
+                if (!navStack.length) return;
+                navStack.pop();
+                reload();
+            },
+            resetNav() {
+                navStack.length = 0;
+                reload();
+            },
+            setDepth(d) {
+                const next = parseInt(d, 10);
+                if (!Number.isFinite(next) || next < 1 || next > 4) return;
+                currentDepth = next;
+                if (navStack.length) reload();
+            },
+            // ── Era filter (S4.6) ──────────────────────────────────────────
+            setEraFilter(filter) {
+                // filter: null | {eraId: str} | {activeSelfOnly: true}
+                currentEraFilter = filter;
+                if (!navStack.length) reload();
+            },
+            getEraFilter() { return currentEraFilter; },
             activate() {
                 if (!hasStartedTick) {
                     hasStartedTick = true;
@@ -784,10 +851,17 @@
             fov = Math.max(180, Math.min(800, fov - e.deltaY * zoomSpeed));
         }, { passive: false });
 
+        // Shift-click / double-click drills into a focal node (S4.5).
+        wrap.addEventListener('dblclick', e => {
+            const hit = hitTest(e.clientX, e.clientY);
+            if (hit) window.GraphManager.drillInto(hit.id);
+        });
+
         wrap.addEventListener('click', e => {
             if (dragging) return;
             const hit = hitTest(e.clientX, e.clientY);
             if (hit) {
+                if (e.shiftKey) { window.GraphManager.drillInto(hit.id); return; }
                 focusNode(hit.id);
                 if (typeof Panel !== 'undefined') Panel.loadNode(hit.id);
             } else {

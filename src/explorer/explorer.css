@@ -281,6 +281,66 @@ h3 {
 }
 .graph-controls select.theme-btn:focus { outline: none; color: var(--fg-primary); }
 
+/* ── Focal-node breadcrumb (S4.5) ───────────────────────────────────────── */
+.graph-breadcrumb {
+    position: absolute;
+    top: 16px; left: 16px;
+    padding: 6px 12px;
+    background: var(--bg-app);
+    border: 1px solid var(--border-main);
+    border-radius: 14px;
+    font-size: 12px;
+    color: var(--fg-secondary);
+    z-index: 11;
+    box-shadow: var(--shadow-sm);
+    max-width: calc(100% - 200px);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── Era timeline (S4.6) ────────────────────────────────────────────────── */
+.era-timeline {
+    position: absolute;
+    left: 16px; right: 16px; bottom: 12px;
+    height: 64px;
+    background: var(--bg-app);
+    border: 1px solid var(--border-main);
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    align-items: center;
+    z-index: 10;
+    padding: 6px 10px;
+    gap: 10px;
+    transition: right 0.4s var(--ease-out);
+}
+.ex-graph:has(.module-details.active) .era-timeline { right: 336px; }
+.era-timeline-controls {
+    display: flex; gap: 4px; align-items: center; flex-shrink: 0;
+}
+.era-timeline-controls .theme-btn { margin: 0; padding: 4px 8px; font-size: 12px; }
+.era-timeline-controls input[type="date"] {
+    height: 26px; padding: 0 6px; border-radius: 12px;
+    background: var(--bg-app); color: var(--fg-primary);
+    border: 1px solid var(--border-main); font: inherit; font-size: 11px;
+}
+.era-timeline-svg {
+    flex: 1; height: 100%;
+    cursor: ew-resize;
+}
+.era-timeline-svg rect.era-bar {
+    fill: var(--bg-elevated, #2a2a2a);
+    stroke: var(--border-main);
+    cursor: pointer;
+    transition: fill 0.15s;
+}
+.era-timeline-svg rect.era-bar:hover { fill: var(--accent, #4a8); }
+.era-timeline-svg rect.era-bar.active { fill: var(--accent, #4a8); }
+.era-timeline-svg line.era-cursor { stroke: var(--accent, #4a8); stroke-width: 2; }
+.era-timeline-svg text.era-label {
+    font-size: 10px; fill: var(--fg-primary);
+    pointer-events: none;
+}
+
 /* ── First-run bootstrap modal ──────────────────────────────────────────── */
 .bootstrap-modal[hidden] { display: none; }
 .bootstrap-modal {

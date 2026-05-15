@@ -149,6 +149,11 @@
                     <main class="module ex-graph">
                         <div id="graphCanvas"></div>
                         <div class="graph-controls">
+                            <button id="navBackBtn" class="theme-btn" title="Back to overview" style="display:none;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 12H5M12 19l-7-7 7-7"></path>
+                                </svg>
+                            </button>
                             <button id="zoomInBtn" class="theme-btn" title="Zoom In">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -165,6 +170,17 @@
                                     <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
                                 </svg>
                             </button>
+                        </div>
+                        <!-- S4.5 breadcrumb -->
+                        <div id="graphBreadcrumb" class="graph-breadcrumb" style="display:none;"></div>
+                        <!-- S4.6 era timeline -->
+                        <div id="eraTimeline" class="era-timeline">
+                            <div class="era-timeline-controls">
+                                <button id="eraAllTime" class="theme-btn" title="All time">∞</button>
+                                <button id="eraActiveOnly" class="theme-btn" title="Current eras only">●</button>
+                                <input type="date" id="eraDatePicker" class="theme-btn" title="Jump to date" />
+                            </div>
+                            <svg id="eraTimelineSvg" class="era-timeline-svg"></svg>
                         </div>
                         <!-- DETAILS PANEL -->
                         <aside class="module-details" id="detailPanel">
@@ -540,6 +556,7 @@
     <script src="credits-page.js"></script>
     <script src="panel.js"></script>
     <script src="graph.js"></script>
+    <script src="timeline.js"></script>
 
 </body>
 

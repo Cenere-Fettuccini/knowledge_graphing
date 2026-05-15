@@ -24,8 +24,16 @@ def _build_belief_canonicalizer(memory: MemoryManager) -> BeliefCanonicalizer:
     return BeliefCanonicalizer(memory=memory)
 
 
-def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict:
-    return memory.graph_overview(limit=limit)
+def get_graph_overview(
+    memory: MemoryManager,
+    limit: int = 100,
+    *,
+    era_id: str | None = None,
+    active_self_only: bool = False,
+) -> dict:
+    return memory.graph_overview(
+        limit=limit, era_id=era_id, active_self_only=active_self_only
+    )
 
 
 def get_node_detail(node_id: str, memory: MemoryManager) -> dict:
@@ -36,8 +44,13 @@ def get_node_provenance(node_id: str, memory: MemoryManager) -> dict:
     return memory.graph_node_provenance(node_id)
 
 
-def get_active_tasks(memory: MemoryManager) -> list[dict]:
-    return memory.graph_active_tasks()
+def get_active_tasks(
+    memory: MemoryManager,
+    *,
+    include_completed: bool = False,
+    since: str | None = None,
+) -> list[dict]:
+    return memory.graph_active_tasks(include_completed=include_completed, since=since)
 
 
 def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:

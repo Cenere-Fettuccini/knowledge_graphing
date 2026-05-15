@@ -356,6 +356,8 @@
             setStatus('Replied successfully');
             setMemoryWarning(Boolean(result.memory_degraded), result.memory_health);
             await refreshSessions();
+        } else if (result.queued) {
+            setStatus(`Server unreachable — queued offline (${result.pending_count} pending)`);
         } else {
             appendMessage('assistant', `**Error:** ${result.error || 'Unknown network error occurred.'}`);
             setStatus('Request failed');

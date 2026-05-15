@@ -225,6 +225,59 @@ class ChromaStore:
         self.collection.update(ids=existing["ids"], metadatas=new_metadatas)
         return len(existing["ids"])
 
+    def mark_all_unanalyzed(self, *, include_ephemeral: bool = False) -> int:
+        """Flip every (non-ephemeral by default) row back to ``analyzed: False``.
+
+        Used to reset the analyzer queue when the extraction pipeline changes
+        and the whole backlog should be reprocessed by the new path. Clears
+        ``analyzed``, ``analyzer_status``, ``analyzer_failure_reason``,
+        ``analyzed_at``, and ``analysis_run_id`` so the row looks freshly
+        stored.
+        """
+        results = self.collection.get(include=["metadatas"])
+        ids = results.get("ids") or []
+        if not ids:
+            return 0
+        cleared_fields = (
+            "analyzer_status",
+            "analyzer_failure_reason",
+            "analyzer_failed_at",
+            "analyzed_at",
+            "analysis_run_id",
+        )
+        new_metadatas: list[dict] = []
+        keep_ids: list[str] = []
+        for i, meta in enumerate(results.get("metadatas") or []):
+            current = dict(meta or {})
+            if not include_ephemeral and current.get("is_ephemeral"):
+                continue
+            current["analyzed"] = False
+            for field in cleared_fields:
+                current.pop(field, None)
+            new_metadatas.append(current)
+            keep_ids.append(ids[i])
+        if not keep_ids:
+            return 0
+        self.collection.update(ids=keep_ids, metadatas=new_metadatas)
+        return len(keep_ids)
+
+    def query_metadata(self, *, where: dict, limit: int = 50) -> list[dict]:
+        """Fetch rows matching ``where``, returning the same shape as list_unanalyzed."""
+        results = self.collection.get(where=where, limit=limit)
+        ids = results.get("ids") or []
+        if not ids:
+            return []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+        return [
+            {
+                "id": ids[i],
+                "text": docs[i] if i < len(docs) else "",
+                "metadata": metas[i] if i < len(metas) else {},
+            }
+            for i in range(len(ids))
+        ]
+
     def count_where(self, where: dict | None = None) -> int:
         """Approximate count of documents matching ``where``.
 

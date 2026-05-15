@@ -1,14 +1,32 @@
 """Neo4j knowledge graph — entities, beliefs, provenance, tasks."""
 
+import math
 import uuid
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from neo4j import GraphDatabase
 
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _vector_norm(v: list[float]) -> float:
+    return math.sqrt(sum(x * x for x in v))
+
+
+def _cosine_similarity(
+    a: list[float], b: list[float], *, norm_a: float | None = None
+) -> float:
+    if not a or not b:
+        return 0.0
+    norm_a = norm_a if norm_a is not None else _vector_norm(a)
+    norm_b = _vector_norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (norm_a * norm_b)
 
 
 class Neo4jStore:
@@ -59,6 +77,36 @@ class Neo4jStore:
     def _slugify(value: str) -> str:
         value = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
         return value or "general"
+
+    @staticmethod
+    def sanitize_label(label: str) -> str:
+        """Coerce a free-form label into a Cypher-safe PascalCase identifier.
+
+        Cypher treats ``SET n:Academic Goal`` as two tokens and aborts with a
+        SyntaxError. Labels arrive straight from LLM output, so we tolerate
+        ``"Academic Goal"``, ``"social-circles"``, ``"  career goal  "`` and
+        produce a single identifier that compiles.
+        """
+        if not label or not isinstance(label, str):
+            return "Entity"
+        tokens = re.findall(r"[A-Za-z0-9]+", label)
+        if not tokens:
+            return "Entity"
+        parts = [t[:1].upper() + t[1:].lower() for t in tokens]
+        cleaned = re.sub(r"^[0-9]+", "", "".join(parts))
+        return cleaned or "Entity"
+
+    @classmethod
+    def sanitize_labels(cls, labels: list[str]) -> list[str]:
+        """Sanitize and de-duplicate a list of labels, preserving order."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in labels or []:
+            clean = cls.sanitize_label(raw)
+            if clean and clean not in seen:
+                seen.add(clean)
+                out.append(clean)
+        return out or ["Entity"]
 
     # ── Write Operations ──────────────────────────────────────────────────────
 
@@ -142,11 +190,15 @@ class Neo4jStore:
 
     # ── Multi-label upsert (used by the analyzer) ────────────────────────────
 
-    @staticmethod
-    def _build_node_upsert_cypher(labels: list[str]) -> str:
+    @classmethod
+    def _build_node_upsert_cypher(cls, labels: list[str]) -> str:
         if not labels:
             raise ValueError("At least one label is required.")
-        labels_clause = ":".join(labels)
+        # Labels are interpolated straight into Cypher, so anything other than
+        # ``[A-Za-z][A-Za-z0-9]*`` either fails to parse (spaces, punctuation)
+        # or opens an injection surface (semicolons, backticks).
+        safe_labels = cls.sanitize_labels(labels)
+        labels_clause = ":".join(safe_labels)
         return f"""
         MERGE (n {{id: $node_id}})
         ON CREATE SET n:{labels_clause}, n.created_at = $now
@@ -323,19 +375,768 @@ class Neo4jStore:
             record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
             return self._serialize_node(record["u"])
 
+    # ── Pending belief queue (S4.1) ──────────────────────────────────────────
+
+    REJECTED_TTL_DAYS = 30
+    PERMANENT_REJECTION_THRESHOLD = 3
+    # Cosine threshold for considering two rejections to be "the same idea"
+    # when counting toward the permanent-rejection promotion. Matches
+    # BeliefCanonicalizer's belief threshold so the two systems agree.
+    REJECTION_SIMILARITY_THRESHOLD = 0.88
+
+    def create_pending_belief(
+        self,
+        *,
+        content: str,
+        about_entity_id: str | None = None,
+        source: str = "rumination",
+        confidence: float = 0.6,
+    ) -> dict:
+        """Insert a :PendingBelief awaiting human approval."""
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j offline; can't create pending belief.")
+        now = datetime.now(timezone.utc).isoformat()
+        belief_id = f"pending:{uuid.uuid4().hex[:12]}"
+        with self.driver.session() as session:
+            session.run(
+                """
+                CREATE (b:PendingBelief {
+                    id: $id, content: $content, name: $content,
+                    confidence: $conf, status: 'pending',
+                    source: $source, created_at: $now, updated_at: $now
+                })
+                """,
+                id=belief_id, content=content, conf=confidence,
+                source=source, now=now,
+            )
+            if about_entity_id:
+                session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $bid}), (e {id: $eid})
+                    MERGE (b)-[:ABOUT]->(e)
+                    """,
+                    bid=belief_id, eid=about_entity_id,
+                )
+            else:
+                # Anchor to root so the reachability sweep doesn't quarantine it.
+                session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $bid}), (root:Person:User {is_root: true})
+                    MERGE (b)-[:ABOUT]->(root)
+                    """,
+                    bid=belief_id,
+                )
+            rec = session.run(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b", id=belief_id
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def list_pending_beliefs(self, *, limit: int = 50) -> list[dict]:
+        if not self.driver and not self.verify_connection():
+            return []
+        with self.driver.session() as session:
+            return [
+                self._serialize_node(r["b"])
+                for r in session.run(
+                    """
+                    MATCH (b:PendingBelief {status: 'pending'})
+                    WHERE NOT b:Quarantine
+                    RETURN b ORDER BY b.created_at DESC LIMIT $limit
+                    """,
+                    limit=limit,
+                )
+            ]
+
+    def approve_pending_belief(self, belief_id: str) -> dict:
+        """Promote :PendingBelief -> :Belief with status='active'."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b:PendingBelief {id: $id})
+                REMOVE b:PendingBelief
+                SET b:Belief, b.status = 'active', b.approved_at = $now, b.updated_at = $now
+                RETURN b
+                """,
+                id=belief_id, now=now,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def edit_pending_belief(self, belief_id: str, *, new_content: str) -> dict:
+        """Edit content then promote to :Belief, recording an edit log entry."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b:PendingBelief {id: $id})
+                REMOVE b:PendingBelief
+                SET b:Belief,
+                    b.original_content = b.content,
+                    b.content = $new_content,
+                    b.name = $new_content,
+                    b.status = 'active',
+                    b.edited_at = $now,
+                    b.approved_at = $now,
+                    b.updated_at = $now
+                RETURN b
+                """,
+                id=belief_id, new_content=new_content, now=now,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def reject_pending_belief(
+        self,
+        belief_id: str,
+        *,
+        reason: str = "",
+        content_embedding: list[float] | None = None,
+    ) -> dict:
+        """Demote :PendingBelief -> :RejectedHypothesis with a 30-day TTL.
+
+        Counts prior rejections of the *same idea* within the TTL window. If
+        an ``content_embedding`` is provided, the count is fuzzy — any prior
+        rejection whose stored embedding has cosine similarity above
+        ``REJECTION_SIMILARITY_THRESHOLD`` counts. With no embedding the count
+        falls back to exact-string match (the pre-CT10 behaviour). Once the
+        count crosses ``PERMANENT_REJECTION_THRESHOLD`` the new rejection is
+        promoted to a permanent :RejectedBelief.
+        """
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc)
+        ttl_iso = (now + timedelta(days=self.REJECTED_TTL_DAYS)).isoformat()
+        window_start_iso = (now - timedelta(days=self.REJECTED_TTL_DAYS)).isoformat()
+        now_iso = now.isoformat()
+
+        with self.driver.session() as session:
+            content_row = session.run(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b.content AS c", id=belief_id
+            ).single()
+            if not content_row:
+                return {}
+            content = content_row["c"] or ""
+
+            recent_count = self._count_similar_rejections(
+                session,
+                content=content,
+                content_embedding=content_embedding,
+                window_start_iso=window_start_iso,
+            )
+
+            if recent_count + 1 >= self.PERMANENT_REJECTION_THRESHOLD:
+                rec = session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $id})
+                    REMOVE b:PendingBelief
+                    SET b:RejectedBelief,
+                        b.status = 'rejected_permanent',
+                        b.rejection_reason = $reason,
+                        b.rejected_at = $now,
+                        b.updated_at = $now,
+                        b.rejection_count = $count,
+                        b.content_embedding = coalesce($embedding, b.content_embedding)
+                    RETURN b
+                    """,
+                    id=belief_id, reason=reason, now=now_iso,
+                    count=recent_count + 1, embedding=content_embedding,
+                ).single()
+            else:
+                rec = session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $id})
+                    REMOVE b:PendingBelief
+                    SET b:RejectedHypothesis,
+                        b.status = 'rejected',
+                        b.rejection_reason = $reason,
+                        b.rejected_at = $now,
+                        b.expires_at = $expires,
+                        b.updated_at = $now,
+                        b.content_embedding = coalesce($embedding, b.content_embedding)
+                    RETURN b
+                    """,
+                    id=belief_id, reason=reason, now=now_iso, expires=ttl_iso,
+                    embedding=content_embedding,
+                ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def _count_similar_rejections(
+        self,
+        session,
+        *,
+        content: str,
+        content_embedding: list[float] | None,
+        window_start_iso: str,
+    ) -> int:
+        """Count :RejectedHypothesis nodes within the window matching the new content.
+
+        If an embedding is supplied, uses cosine similarity against each
+        stored embedding (threshold ``REJECTION_SIMILARITY_THRESHOLD``).
+        Falls back to exact-string match when the embedding is missing or
+        when no prior rejection in the window has a stored embedding to
+        compare against.
+        """
+        if not content_embedding:
+            row = session.run(
+                """
+                MATCH (h:RejectedHypothesis)
+                WHERE h.content = $content AND h.rejected_at >= $window_start
+                RETURN count(h) AS c
+                """,
+                content=content, window_start=window_start_iso,
+            ).single()
+            return int(row["c"]) if row else 0
+
+        records = session.run(
+            """
+            MATCH (h:RejectedHypothesis)
+            WHERE h.rejected_at >= $window_start
+            RETURN h.content AS content, h.content_embedding AS embedding
+            """,
+            window_start=window_start_iso,
+        )
+        new_norm = _vector_norm(content_embedding)
+        count = 0
+        for r in records:
+            other_embedding = r.get("embedding") if hasattr(r, "get") else r["embedding"]
+            other_content = r["content"] or ""
+            if other_embedding:
+                sim = _cosine_similarity(
+                    content_embedding, list(other_embedding), norm_a=new_norm
+                )
+                if sim >= self.REJECTION_SIMILARITY_THRESHOLD:
+                    count += 1
+            elif other_content == content:
+                # No stored embedding (pre-CT10 rejection) — fall back to
+                # exact match so old data still aggregates.
+                count += 1
+        return count
+
+    def purge_expired_rejections(self) -> int:
+        """DETACH DELETE :RejectedHypothesis whose expires_at is past."""
+        if not self.driver and not self.verify_connection():
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (h:RejectedHypothesis)
+                WHERE h.expires_at < $now
+                WITH collect(h) AS doomed
+                FOREACH (x IN doomed | DETACH DELETE x)
+                RETURN size(doomed) AS deleted
+                """,
+                now=now_iso,
+            ).single()
+            return int(rec["deleted"]) if rec else 0
+
+    def list_active_rejections(self, *, limit: int = 100) -> list[dict]:
+        """Active :RejectedHypothesis nodes (for the rumination engine's negative set)."""
+        if not self.driver and not self.verify_connection():
+            return []
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            return [
+                self._serialize_node(r["h"])
+                for r in session.run(
+                    """
+                    MATCH (h:RejectedHypothesis)
+                    WHERE h.expires_at >= $now
+                    RETURN h ORDER BY h.rejected_at DESC LIMIT $limit
+                    """,
+                    now=now_iso, limit=limit,
+                )
+            ]
+
+    # ── Focal-node neighborhood (S4.5) ───────────────────────────────────────
+
+    def get_neighborhood(
+        self, node_id: str, *, depth: int = 1, limit: int = 200,
+    ) -> dict:
+        """Variable-length neighborhood around ``node_id``.
+
+        Returns ``{focal, nodes, edges, stats}`` in the same shape as
+        ``get_explorer_graph_overview`` so the frontend can swap the
+        renderer's data source without touching the layout code.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"focal": None, "nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+        depth = max(1, min(int(depth), 4))  # clamp — deeper paths cost a lot
+        cypher = f"""
+        MATCH (focal {{id: $node_id}})
+        WHERE NOT focal:Quarantine
+        OPTIONAL MATCH (focal)-[r*1..{depth}]-(neighbor)
+        WHERE neighbor IS NULL OR (
+            NOT neighbor:Quarantine
+            AND NOT any(label IN labels(neighbor) WHERE label IN $hidden_labels)
+        )
+        WITH focal, collect(DISTINCT neighbor) AS neighbors, collect(r) AS rel_paths
+        RETURN focal,
+               [n IN neighbors WHERE n IS NOT NULL][..$limit] AS neighbors,
+               [path IN rel_paths | [rel IN path | {{
+                   source: startNode(rel).id,
+                   target: endNode(rel).id,
+                   type: type(rel)
+               }}]] AS edge_paths
+        """
+        nodes_dict = {}
+        edges: list[dict] = []
+        with self.driver.session() as session:
+            rec = session.run(
+                cypher,
+                node_id=node_id, limit=limit,
+                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
+            ).single()
+            if rec is None or rec["focal"] is None:
+                return {"focal": None, "nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+            focal_data = self._serialize_node(rec["focal"])
+            nodes_dict[focal_data["id"]] = focal_data
+            for neighbor in rec["neighbors"] or []:
+                if neighbor is None:
+                    continue
+                nd = self._serialize_node(neighbor)
+                if not self._looks_like_test_artifact(nd):
+                    nodes_dict[nd["id"]] = nd
+            for path in rec["edge_paths"] or []:
+                for rel in path or []:
+                    if rel and rel.get("source") and rel.get("target") and rel.get("type"):
+                        edges.append(dict(rel))
+
+        # Dedupe edges by (source, target, type)
+        unique_edges = list({(e["source"], e["target"], e["type"]): e for e in edges}.values())
+        # Drop edges referencing nodes we filtered out
+        visible_ids = set(nodes_dict)
+        unique_edges = [e for e in unique_edges if e["source"] in visible_ids and e["target"] in visible_ids]
+
+        return {
+            "focal": focal_data,
+            "nodes": list(nodes_dict.values()),
+            "edges": unique_edges,
+            "stats": {"nodes": len(nodes_dict), "edges": len(unique_edges), "depth": depth},
+        }
+
+    # ── Era windowing (S4.6) ─────────────────────────────────────────────────
+
+    def eras_active_at(self, iso_date: str) -> list[dict]:
+        """Eras whose [start_date, end_date] window contains ``iso_date``.
+
+        end_date null is treated as "ongoing" (no upper bound).
+        start_date null is treated as "unknown start" (no lower bound).
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (e:Era)
+        WHERE NOT e:Quarantine
+          AND (e.start_date IS NULL OR e.start_date <= $d)
+          AND (e.end_date IS NULL OR e.end_date >= $d)
+        RETURN e ORDER BY coalesce(e.start_date, '0000-00-00') DESC
+        """
+        with self.driver.session() as session:
+            return [self._serialize_node(r["e"]) for r in session.run(cypher, d=iso_date)]
+
+    # ── Contradictions (S4.3) ────────────────────────────────────────────────
+
+    def link_contradiction(
+        self, belief_a_id: str, belief_b_id: str,
+        *, reason: str = "", similarity: float = 0.0, run_id: str | None = None,
+    ) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        if belief_a_id == belief_b_id:
+            return False
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (a:Belief {id: $a}), (b:Belief {id: $b})
+                MERGE (a)-[r:CONTRADICTS]->(b)
+                ON CREATE SET r.detected_at = $now,
+                              r.reason = $reason,
+                              r.similarity = $sim,
+                              r.run_id = $run_id
+                RETURN count(r) AS linked
+                """,
+                a=belief_a_id, b=belief_b_id, now=now_iso,
+                reason=reason, sim=similarity, run_id=run_id,
+            ).single()
+            return bool(rec and rec["linked"] > 0)
+
+    def get_belief(self, belief_id: str) -> dict:
+        """Fetch a single belief (any belief-family label) by id, or {}."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b {id: $id})
+                WHERE b:Belief OR b:PendingBelief
+                   OR b:RejectedHypothesis OR b:RejectedBelief
+                RETURN b LIMIT 1
+                """,
+                id=belief_id,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def resolve_contradiction(
+        self,
+        belief_a_id: str,
+        belief_b_id: str,
+        *,
+        summary: str,
+        user_reply: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Land a structured reconciliation onto a CONTRADICTS edge (CT8).
+
+        Creates a ``:RefinementSession`` node anchored to both beliefs via
+        the appropriate ``SUPPORTED_BY`` / ``WEAKENED_BY`` edges, then
+        stamps the CONTRADICTS edge with ``resolved``, ``resolution_summary``,
+        and ``resolved_at``. The session node carries the full user reply
+        for provenance.
+
+        ``evidence`` items: ``{belief: "a"|"b", kind: "supports"|"weakens",
+        text: <excerpt>}``. Anything malformed is skipped silently — the
+        edge update still happens.
+
+        Returns a stats dict ``{ok, session_id, edges_written, resolved}``.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"ok": False, "edges_written": 0}
+        if belief_a_id == belief_b_id:
+            return {"ok": False, "edges_written": 0}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        session_id = f"refine:{uuid.uuid4().hex[:12]}"
+        edges_written = 0
+
+        with self.driver.session() as session:
+            # 1. Create the RefinementSession node.
+            session.run(
+                """
+                CREATE (s:RefinementSession {
+                    id: $sid, name: $preview,
+                    user_reply: $reply, summary: $summary,
+                    created_at: $now
+                })
+                """,
+                sid=session_id,
+                preview=(summary or user_reply)[:60],
+                reply=user_reply,
+                summary=summary,
+                now=now_iso,
+            )
+
+            # 2. Write evidence edges. Bad rows are silently dropped because
+            #    the LLM extractor already filtered the obvious mistakes;
+            #    anything that survived to here but still mismatches is
+            #    treated as a "no evidence" case.
+            belief_ids = {"a": belief_a_id, "b": belief_b_id}
+            for item in evidence or []:
+                target = belief_ids.get(item.get("belief"))
+                kind = item.get("kind")
+                text = item.get("text")
+                if not target or kind not in ("supports", "weakens") or not text:
+                    continue
+                rel_type = "SUPPORTED_BY" if kind == "supports" else "WEAKENED_BY"
+                rec = session.run(
+                    f"""
+                    MATCH (b:Belief {{id: $bid}}), (s:RefinementSession {{id: $sid}})
+                    MERGE (b)-[r:{rel_type}]->(s)
+                    ON CREATE SET r.text = $text, r.created_at = $now
+                    RETURN count(r) AS c
+                    """,
+                    bid=target, sid=session_id, text=text, now=now_iso,
+                ).single()
+                if rec and rec["c"]:
+                    edges_written += 1
+
+            # 3. Anchor the session to root if the evidence list ended up
+            #    empty — without an edge it would be quarantined on the
+            #    next sweep.
+            if edges_written == 0:
+                session.run(
+                    """
+                    MATCH (s:RefinementSession {id: $sid}),
+                          (root:Person:User {is_root: true})
+                    MERGE (s)-[:NOTE_FOR]->(root)
+                    """,
+                    sid=session_id,
+                )
+
+            # 4. Stamp the CONTRADICTS edge with the resolution.
+            session.run(
+                """
+                MATCH (a:Belief {id: $a})-[r:CONTRADICTS]->(b:Belief {id: $b})
+                SET r.resolved = $resolved,
+                    r.resolution_summary = $summary,
+                    r.refinement_session_id = $sid,
+                    r.resolved_at = $now
+                """,
+                a=belief_a_id, b=belief_b_id, resolved=resolved,
+                summary=summary, sid=session_id, now=now_iso,
+            )
+
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "edges_written": edges_written,
+            "resolved": resolved,
+        }
+
+    def list_contradictions(
+        self, *, limit: int = 50, include_resolved: bool = False
+    ) -> list[dict]:
+        """List CONTRADICTS pairs. Default hides reconciled ones (CT8).
+
+        Pass ``include_resolved=True`` to see resolved pairs too — useful
+        for an audit view but not what the digest wants.
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        resolved_clause = "" if include_resolved else "AND (r.resolved IS NULL OR r.resolved = false)"
+        cypher = f"""
+        MATCH (a:Belief)-[r:CONTRADICTS]->(b:Belief)
+        WHERE NOT a:Quarantine AND NOT b:Quarantine
+          {resolved_clause}
+        RETURN a.id AS a_id, a.content AS a_content,
+               b.id AS b_id, b.content AS b_content,
+               r.reason AS reason, r.similarity AS similarity,
+               r.detected_at AS detected_at,
+               r.resolved AS resolved,
+               r.resolution_summary AS resolution_summary
+        ORDER BY r.detected_at DESC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            return [dict(r) for r in session.run(cypher, limit=limit)]
+
+    # ── Belief calibration (CT3) ─────────────────────────────────────────────
+
+    def belief_calibration(self) -> list[dict]:
+        """Approve/reject breakdown per pending-belief source.
+
+        Returns one row per ``source`` value seen in the pending-belief
+        pipeline, with counts for each terminal state plus an
+        ``approval_rate`` that excludes still-pending items (so a fresh
+        source isn't penalised for having items in flight).
+
+        Used by the explorer's calibration panel + future model-routing
+        decisions ("rumination is approved 12% of the time, maybe ease
+        off the rabbit-hole pass").
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (b)
+        WHERE NOT b:Quarantine
+          AND (b:PendingBelief OR b:Belief OR b:RejectedHypothesis OR b:RejectedBelief)
+          AND b.source IS NOT NULL
+        RETURN b.source AS source,
+               sum(CASE WHEN b:PendingBelief THEN 1 ELSE 0 END) AS pending,
+               sum(CASE WHEN b:Belief AND b.approved_at IS NOT NULL THEN 1 ELSE 0 END) AS approved,
+               sum(CASE WHEN b:RejectedHypothesis THEN 1 ELSE 0 END) AS rejected_ttl,
+               sum(CASE WHEN b:RejectedBelief THEN 1 ELSE 0 END) AS rejected_permanent
+        ORDER BY source
+        """
+        with self.driver.session() as session:
+            out = []
+            for r in session.run(cypher):
+                approved = int(r["approved"])
+                rej_ttl = int(r["rejected_ttl"])
+                rej_perm = int(r["rejected_permanent"])
+                decided = approved + rej_ttl + rej_perm
+                out.append({
+                    "source": r["source"],
+                    "pending": int(r["pending"]),
+                    "approved": approved,
+                    "rejected_ttl": rej_ttl,
+                    "rejected_permanent": rej_perm,
+                    "decided": decided,
+                    "approval_rate": (approved / decided) if decided else None,
+                })
+            return out
+
+    # ── Schema drift counts (S3.5) ───────────────────────────────────────────
+
+    def label_counts(self) -> dict[str, int]:
+        """Return {label: node_count} across the graph, excluding quarantined."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        cypher = """
+        MATCH (n)
+        WHERE NOT n:Quarantine
+        UNWIND labels(n) AS label
+        RETURN label, count(*) AS c
+        """
+        with self.driver.session() as session:
+            return {r["label"]: int(r["c"]) for r in session.run(cypher)}
+
+    def rel_type_counts(self) -> dict[str, int]:
+        """Return {rel_type: edge_count} across the graph."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        cypher = """
+        MATCH ()-[r]->()
+        RETURN type(r) AS rel_type, count(*) AS c
+        """
+        with self.driver.session() as session:
+            return {r["rel_type"]: int(r["c"]) for r in session.run(cypher)}
+
+    # ── Eras (S3.1) ──────────────────────────────────────────────────────────
+
+    def list_eras(self, *, active_only: bool = False) -> list[dict]:
+        if not self.driver and not self.verify_connection():
+            return []
+        clauses = ["NOT e:Quarantine"]
+        if active_only:
+            clauses.append("e.end_date IS NULL")
+        cypher = f"""
+        MATCH (e:Era)
+        WHERE {" AND ".join(clauses)}
+        RETURN e
+        ORDER BY coalesce(e.start_date, e.created_at) DESC
+        """
+        with self.driver.session() as session:
+            return [self._serialize_node(r["e"]) for r in session.run(cypher)]
+
+    def get_era(self, era_id: str) -> dict | None:
+        if not self.driver and not self.verify_connection():
+            return None
+        with self.driver.session() as session:
+            rec = session.run(
+                "MATCH (e:Era {id: $id}) RETURN e LIMIT 1", id=era_id
+            ).single()
+            return self._serialize_node(rec["e"]) if rec and rec["e"] is not None else None
+
+    def upsert_era(
+        self,
+        *,
+        era_id: str | None = None,
+        name: str,
+        description: str = "",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j is offline; cannot upsert era.")
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("Era name must be non-empty.")
+        node_id = era_id or f"era:{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MERGE (e:Era {id: $id})
+                ON CREATE SET e.created_at = $now
+                SET e.name = $name,
+                    e.description = $description,
+                    e.start_date = $start_date,
+                    e.end_date = $end_date,
+                    e.updated_at = $now
+                WITH e
+                MATCH (root:Person:User {is_root: true})
+                MERGE (root)-[:HAS_ERA]->(e)
+                RETURN e
+                """,
+                id=node_id, now=now, name=clean_name, description=description,
+                start_date=start_date, end_date=end_date,
+            ).single()
+            return self._serialize_node(rec["e"]) if rec else {}
+
+    def delete_era(self, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (e:Era {id: $id})
+                DETACH DELETE e
+                RETURN count(*) AS removed
+                """,
+                id=era_id,
+            ).single()
+            return bool(rec and rec["removed"] > 0)
+
+    def bind_node_to_era(self, node_id: str, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (n {id: $node_id}), (e:Era {id: $era_id})
+                MERGE (n)-[r:OCCURRED_IN]->(e)
+                RETURN count(r) AS linked
+                """,
+                node_id=node_id, era_id=era_id,
+            ).single()
+            return bool(rec and rec["linked"] > 0)
+
+    def unbind_node_from_era(self, node_id: str, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (n {id: $node_id})-[r:OCCURRED_IN]->(e:Era {id: $era_id})
+                DELETE r
+                RETURN count(r) AS removed
+                """,
+                node_id=node_id, era_id=era_id,
+            ).single()
+            return bool(rec and rec["removed"] > 0)
+
     def _looks_like_test_artifact(self, node_data: dict) -> bool:
         node_id = str(node_data.get("id") or "").lower()
         label = str(node_data.get("label") or "")
         return label == "TestNode" or any(node_id.startswith(prefix) for prefix in self.TEST_ID_PREFIXES)
 
-    def get_explorer_graph_overview(self, limit: int = 100) -> dict:
-        """Return a curated graph centered on beliefs, tasks, projects, and linked entities."""
+    def get_explorer_graph_overview(
+        self,
+        limit: int = 100,
+        *,
+        era_id: str | None = None,
+        active_self_only: bool = False,
+    ) -> dict:
+        """Return a curated graph centered on beliefs, tasks, projects, and linked entities.
+
+        S3.2: optional era scoping. ``era_id`` restricts to nodes bound to
+        that specific era via OCCURRED_IN. ``active_self_only`` restricts
+        to nodes bound to any era whose ``end_date`` is null or in the
+        future — the "what's live right now" view. The two filters are
+        OR'd at the node level (a node visible in either filter is kept).
+        """
         if not self.driver and not self.verify_connection():
             return {"nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
 
-        query = """
+        era_clauses = ["NOT root:Quarantine"]
+        params: dict = {
+            "limit": limit,
+            "root_labels": list(self.EXPLORER_ROOT_LABELS),
+            "hidden_labels": list(self.EXPLORER_HIDDEN_LABELS),
+        }
+        if era_id:
+            era_clauses.append(
+                "EXISTS { MATCH (root)-[:OCCURRED_IN]->(:Era {id: $era_id}) }"
+            )
+            params["era_id"] = era_id
+        elif active_self_only:
+            era_clauses.append(
+                "EXISTS { MATCH (root)-[:OCCURRED_IN]->(e:Era) "
+                "WHERE e.end_date IS NULL OR e.end_date >= $today }"
+            )
+            params["today"] = datetime.now(timezone.utc).date().isoformat()
+        era_filter = " AND ".join(era_clauses)
+
+        query = f"""
         MATCH (root)
         WHERE any(label IN labels(root) WHERE label IN $root_labels)
+          AND {era_filter}
         WITH root
         ORDER BY coalesce(root.updated_at, root.created_at, root.last_updated_at, root.name) DESC
         LIMIT $limit
@@ -351,12 +1152,7 @@ class Neo4jStore:
         edges = []
 
         with self.driver.session() as session:
-            result = session.run(
-                query,
-                limit=limit,
-                root_labels=list(self.EXPLORER_ROOT_LABELS),
-                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
-            )
+            result = session.run(query, **params)
             for record in result:
                 root = record["root"]
                 if root is not None:
@@ -417,27 +1213,54 @@ class Neo4jStore:
             }
         }
 
-    def list_active_tasks(self) -> list[dict]:
-        """Return task nodes directly instead of relying on the explorer overview."""
+    TERMINAL_TASK_STATUSES = ("DONE", "CANCELLED")
+
+    def list_active_tasks(
+        self,
+        *,
+        include_completed: bool = False,
+        since: str | None = None,
+    ) -> list[dict]:
+        """Return task nodes from the knowledge graph.
+
+        By default, terminal tasks (``DONE``, ``CANCELLED``) are hidden so
+        the agent and explorer see a live punch-list. Pass
+        ``include_completed=True`` for the scrollback view; combine with
+        ``since`` (ISO timestamp) to limit how far back the read goes.
+        """
         if not self.driver and not self.verify_connection():
             return []
 
-        query = """
+        clauses = ["NOT t:Quarantine"]
+        params: dict = {"terminal": list(self.TERMINAL_TASK_STATUSES)}
+        if not include_completed:
+            clauses.append("(t.status IS NULL OR NOT t.status IN $terminal)")
+        if since:
+            clauses.append(
+                "coalesce(t.completed_at, t.updated_at, t.created_at) >= $since"
+            )
+            params["since"] = since
+        where_clause = " AND ".join(clauses)
+
+        query = f"""
         MATCH (t:Task)
+        WHERE {where_clause}
         RETURN t.id AS id, t.name AS name, t.status AS status,
-               t.priority AS priority, t.due_date AS due_date
-        ORDER BY coalesce(t.updated_at, t.created_at, t.name) DESC
+               t.priority AS priority, t.due_date AS due_date,
+               t.completed_at AS completed_at
+        ORDER BY coalesce(t.completed_at, t.updated_at, t.created_at, t.name) DESC
         """
 
         tasks = []
         with self.driver.session() as session:
-            for record in session.run(query):
+            for record in session.run(query, **params):
                 tasks.append({
                     "id": record["id"],
                     "name": record["name"],
                     "status": record["status"],
                     "priority": record["priority"],
                     "due_date": record["due_date"],
+                    "completed_at": record["completed_at"],
                     "label": "Task",
                 })
         return tasks
@@ -664,13 +1487,22 @@ class Neo4jStore:
         source_session_id: str = None,
         source_text: str = None,
         belief_key: str | None = None,
+        extraction_method: str | None = None,
+        derived_from_belief_id: str | None = None,
     ) -> str:
         """
         Create a new :Belief node with optional evidence links.
 
-        If about_entity_id is provided, creates an ABOUT relationship.
-        If source_session_id is provided, creates a :Conversation node
-        and an EXTRACTED_FROM relationship.
+        Provenance options:
+          * ``about_entity_id`` — writes ``(b)-[:ABOUT]->(entity)``.
+          * ``source_session_id`` + ``source_text`` — MERGEs a
+            ``:Conversation`` node and writes ``(b)-[:EXTRACTED_FROM]->(c)``.
+          * ``derived_from_belief_id`` — writes
+            ``(b)-[:DEDUCED_FROM]->(seed:Belief)`` (used by rumination's
+            deep pass to record which prior belief the synthesis came from).
+          * ``extraction_method`` — stamped as a property on the new node
+            so consumers can tell ``deep_pass`` / ``rabbit_hole`` /
+            cloud-extracted beliefs apart from agent-written ones.
 
         Returns the belief's ID.
         """
@@ -685,7 +1517,8 @@ class Neo4jStore:
         CREATE (b:Belief {
             id: $bid, name: $content, content: $content,
             confidence: $conf, status: 'active', created_at: $now,
-            updated_at: $now, belief_key: $belief_key
+            updated_at: $now, belief_key: $belief_key,
+            extraction_method: $method
         })
         RETURN b.id AS id
         """
@@ -697,6 +1530,7 @@ class Neo4jStore:
                 conf=confidence,
                 now=now,
                 belief_key=belief_key,
+                method=extraction_method,
             )
 
             # Link to the entity it's about
@@ -719,6 +1553,16 @@ class Neo4jStore:
                 """, sid=source_session_id, cid=conv_id,
                      preview=source_text[:60] + "…" if len(source_text) > 60 else source_text,
                      text=source_text, now=now, bid=belief_id)
+
+            # CT2: deep-pass synthesis links back to the seed belief so the
+            # explorer's provenance view can show "this came from that".
+            if derived_from_belief_id:
+                session.run("""
+                    MATCH (new:Belief {id: $bid}), (seed:Belief {id: $seed})
+                    MERGE (new)-[r:DEDUCED_FROM]->(seed)
+                    ON CREATE SET r.method = $method, r.created_at = $now
+                """, bid=belief_id, seed=derived_from_belief_id,
+                     method=extraction_method or "rumination", now=now)
 
         return belief_id
 
@@ -841,16 +1685,26 @@ class Neo4jStore:
         with self.driver.session() as session:
             session.run(cypher, bid=belief_id)
 
-    def get_belief_chain(self, belief_id: str) -> list:
-        """
-        Walk the EVOLVED_FROM chain for a belief.
-        Returns a list from newest to oldest: [current, predecessor, ...]
+    BELIEF_CHAIN_MAX_DEPTH = 20
+
+    def get_belief_chain(self, belief_id: str, *, max_depth: int | None = None) -> list:
+        """Walk the EVOLVED_FROM chain for a belief.
+
+        Returns a list from newest to oldest: [current, predecessor, ...].
+
+        Depth is bounded so Neo4j can't fall into a pathological traversal
+        if a `:Belief` chain ever forms a cycle (shouldn't happen, but
+        EVOLVED_FROM is set by an LLM-driven tool and we don't want a bad
+        write to take the query down). ``max_depth`` overrides the class
+        default; values are clamped to a sane upper bound (200).
         """
         if not self.driver:
             return []
 
-        cypher = """
-        MATCH path = (b:Belief {id: $bid})-[:EVOLVED_FROM*0..20]->(ancestor:Belief)
+        depth = self.BELIEF_CHAIN_MAX_DEPTH if max_depth is None else max(1, min(int(max_depth), 200))
+
+        cypher = f"""
+        MATCH path = (b:Belief {{id: $bid}})-[:EVOLVED_FROM*0..{depth}]->(ancestor:Belief)
         UNWIND nodes(path) AS node
         WITH DISTINCT node
         RETURN node.id AS id, node.content AS content,

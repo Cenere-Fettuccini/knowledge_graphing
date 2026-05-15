@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from src.core.config import settings
 from src.memory.spillover import SpilloverWriter
+from src.memory.stores import reachability as _reachability
 from src.memory.stores.chroma_store import ChromaStore
 from src.memory.stores.neo4j_store import Neo4jStore
 
@@ -209,6 +210,16 @@ class MemoryManager:
                 text=normalized_text, metadata=chroma_metadata
             )
 
+        # Count-triggered graph ingestion (S0.6). Import lazily to avoid a
+        # circular import at module load; the trigger itself is a no-op when
+        # the threshold is unset.
+        if memory_id and not is_ephemeral:
+            try:
+                from src.agent_platform.analyzers import graph_ingest_trigger
+                graph_ingest_trigger.maybe_trigger(self)
+            except Exception as e:
+                logger.debug("graph_ingest_trigger.maybe_trigger raised: %s", e)
+
         return memory_id
 
     def search(self, query: str, k: int = 5, session_id: str | None = None,
@@ -343,9 +354,21 @@ class MemoryManager:
 
     # ── Knowledge graph public queries ────────────────────────────────────────
 
-    def graph_overview(self, limit: int = 100) -> dict:
-        """Return node/relationship counts and top labels from Neo4j."""
-        return self.neo4j.get_explorer_graph_overview(limit=limit)
+    def graph_overview(
+        self,
+        limit: int = 100,
+        *,
+        era_id: str | None = None,
+        active_self_only: bool = False,
+    ) -> dict:
+        """Return node/relationship counts and top labels from Neo4j.
+
+        ``era_id`` scopes to a specific :Era. ``active_self_only`` scopes
+        to any era currently ongoing (end_date null or >= today).
+        """
+        return self.neo4j.get_explorer_graph_overview(
+            limit=limit, era_id=era_id, active_self_only=active_self_only
+        )
 
     def graph_node_detail(self, node_id: str) -> dict:
         """Return a node's properties and its connections by ID."""
@@ -355,13 +378,32 @@ class MemoryManager:
         """Return the provenance / source chain for a node."""
         return self.neo4j.get_node_provenance(node_id)
 
-    def graph_active_tasks(self) -> list:
-        """Return active task nodes from the knowledge graph."""
-        return self.neo4j.list_active_tasks()
+    def graph_active_tasks(
+        self,
+        *,
+        include_completed: bool = False,
+        since: str | None = None,
+    ) -> list:
+        """Return task nodes from the knowledge graph.
 
-    def graph_belief_trail(self, belief_id: str) -> dict:
-        """Return the belief chain and supporting evidence for a belief node."""
-        chain = self.neo4j.get_belief_chain(belief_id)
+        Defaults to live (non-terminal) tasks. Pass ``include_completed=True``
+        for the scrollback view; combine with ``since`` (ISO timestamp) to
+        bound the lookback window.
+        """
+        return self.neo4j.list_active_tasks(
+            include_completed=include_completed, since=since
+        )
+
+    def graph_belief_trail(
+        self, belief_id: str, *, chain_depth: int | None = None
+    ) -> dict:
+        """Return the belief chain and supporting evidence for a belief node.
+
+        ``chain_depth`` caps the EVOLVED_FROM walk; see
+        ``Neo4jStore.BELIEF_CHAIN_MAX_DEPTH`` for the default. The store
+        clamps to 200 to protect against a runaway query.
+        """
+        chain = self.neo4j.get_belief_chain(belief_id, max_depth=chain_depth)
         evidence = self.neo4j.get_belief_evidence(belief_id)
         return {"chain": chain, "evidence": evidence}
 
@@ -521,6 +563,58 @@ class MemoryManager:
                 "bulk_imported backfill: update_metadata failed",
                 exc_info=True,
             )
+
+    def list_belief_candidates(self, limit: int = 25) -> list[dict]:
+        """Rows flagged for cloud belief extraction (S3.4)."""
+        if not self._is_chroma_available():
+            return []
+        # belief_candidate=True AND belief_processed != True
+        return self.chroma.query_metadata(
+            where={
+                "$and": [
+                    {"belief_candidate": True},
+                    {"belief_processed": {"$ne": True}},
+                ]
+            },
+            limit=limit,
+        )
+
+    def count_belief_candidates(self) -> int:
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.count_where(
+            where={
+                "$and": [
+                    {"belief_candidate": True},
+                    {"belief_processed": {"$ne": True}},
+                ]
+            }
+        )
+
+    def mark_belief_candidates(self, ids: list[str]) -> int:
+        """Flag rows as belief candidates so the cloud extractor picks them up."""
+        if not ids or not self._is_chroma_available():
+            return 0
+        return self.chroma.update_metadata(ids, {"belief_candidate": True})
+
+    def mark_belief_candidates_processed(self, ids: list[str], run_id: str | None = None) -> int:
+        """Mark belief-candidate rows as processed by the cloud extractor."""
+        if not ids or not self._is_chroma_available():
+            return 0
+        patch = {"belief_processed": True, "belief_candidate": False}
+        if run_id:
+            patch["belief_run_id"] = run_id
+        return self.chroma.update_metadata(ids, patch)
+
+    def mark_all_unanalyzed(self, *, include_ephemeral: bool = False) -> int:
+        """Reset every Chroma row back to ``analyzed: False`` for reprocessing.
+
+        Used after pipeline changes so historical conversations flow through
+        the new extraction path. Skips ephemeral rows by default.
+        """
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.mark_all_unanalyzed(include_ephemeral=include_ephemeral)
 
     def mark_analyzed(self, memory_ids: list[str], run_id: str | None = None) -> int:
         """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""
@@ -805,6 +899,215 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Focal-node neighborhood + era windowing (S4.5 / S4.6) ────────────────
+
+    def graph_neighborhood(
+        self, node_id: str, *, depth: int = 1, limit: int = 200,
+    ) -> dict:
+        """Variable-length subgraph around a focal node, same shape as graph_overview."""
+        return self.neo4j.get_neighborhood(node_id, depth=depth, limit=limit)
+
+    def eras_active_at(self, iso_date: str) -> list[dict]:
+        """:Era nodes whose window contains the given ISO date."""
+        return self.neo4j.eras_active_at(iso_date)
+
+    # ── Contradictions (S4.3) ────────────────────────────────────────────────
+
+    def link_contradiction(
+        self, belief_a_id: str, belief_b_id: str, *,
+        reason: str = "", similarity: float = 0.0, run_id: str | None = None,
+    ) -> bool:
+        return self.neo4j.link_contradiction(
+            belief_a_id, belief_b_id,
+            reason=reason, similarity=similarity, run_id=run_id,
+        )
+
+    def list_contradictions(
+        self, *, limit: int = 50, include_resolved: bool = False
+    ) -> list[dict]:
+        return self.neo4j.list_contradictions(
+            limit=limit, include_resolved=include_resolved
+        )
+
+    def get_belief(self, belief_id: str) -> dict:
+        """Fetch a single belief node by id, across all belief-family labels."""
+        return self.neo4j.get_belief(belief_id)
+
+    def resolve_contradiction(
+        self,
+        belief_a_id: str,
+        belief_b_id: str,
+        *,
+        summary: str,
+        user_reply: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Land a structured reconciliation on a CONTRADICTS edge (CT8).
+
+        See ``Neo4jStore.resolve_contradiction`` for the shape contract.
+        Returns ``{ok, session_id, edges_written, resolved}``.
+        """
+        return self.neo4j.resolve_contradiction(
+            belief_a_id, belief_b_id,
+            summary=summary, user_reply=user_reply,
+            evidence=evidence, resolved=resolved,
+        )
+
+    # ── Pending belief queue (S4.1) ──────────────────────────────────────────
+
+    def create_pending_belief(
+        self,
+        *,
+        content: str,
+        about_entity_id: str | None = None,
+        source: str = "rumination",
+        confidence: float = 0.6,
+    ) -> dict:
+        return self.neo4j.create_pending_belief(
+            content=content, about_entity_id=about_entity_id,
+            source=source, confidence=confidence,
+        )
+
+    def list_pending_beliefs(self, *, limit: int = 50) -> list[dict]:
+        return self.neo4j.list_pending_beliefs(limit=limit)
+
+    def approve_pending_belief(self, belief_id: str) -> dict:
+        return self.neo4j.approve_pending_belief(belief_id)
+
+    def edit_pending_belief(self, belief_id: str, *, new_content: str) -> dict:
+        return self.neo4j.edit_pending_belief(belief_id, new_content=new_content)
+
+    def reject_pending_belief(self, belief_id: str, *, reason: str = "") -> dict:
+        """Reject a pending belief; permanent-promotion uses fuzzy similarity.
+
+        Computes a content embedding for the belief being rejected so the
+        store can count semantically-similar prior rejections instead of
+        exact-string matches (CT10). On embedding failure we fall back to
+        exact match — the rejection still records, the count just stays
+        strict.
+        """
+        embedding = self._embed_pending_belief_content(belief_id)
+        return self.neo4j.reject_pending_belief(
+            belief_id, reason=reason, content_embedding=embedding
+        )
+
+    def _embed_pending_belief_content(self, belief_id: str) -> list[float] | None:
+        """Best-effort embedding lookup for a pending belief's content.
+
+        Returns None on any failure path (no driver, no content, embedding
+        API down). Callers use None as the signal to drop back to the
+        legacy exact-match counting behaviour.
+        """
+        if not self.neo4j.driver:
+            return None
+        try:
+            content_row = self.neo4j.driver.execute_query(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b.content AS c", id=belief_id
+            )
+        except Exception as e:
+            logger.debug("reject_pending_belief: content lookup failed: %s", e)
+            return None
+        records = content_row[0] if content_row else []
+        if not records:
+            return None
+        content = records[0]["c"] or ""
+        if not content.strip():
+            return None
+        try:
+            from src.memory.embeddings.google import get_embedding_model
+            vectors = get_embedding_model().embed_documents([content])
+        except Exception as e:
+            logger.debug("reject_pending_belief: embedding failed: %s", e)
+            return None
+        if not vectors:
+            return None
+        return list(vectors[0])
+
+    def purge_expired_rejections(self) -> int:
+        return self.neo4j.purge_expired_rejections()
+
+    def belief_calibration(self) -> list[dict]:
+        """Per-source approve/reject breakdown for pending-belief callers (CT3).
+
+        Returns ``[{source, pending, approved, rejected_ttl,
+        rejected_permanent, decided, approval_rate}, ...]``.
+        ``approval_rate`` is ``approved / (approved + rejected_*)`` so
+        items still awaiting decision don't drag the metric down.
+        """
+        return self.neo4j.belief_calibration()
+
+    def list_active_rejections(self, *, limit: int = 100) -> list[dict]:
+        return self.neo4j.list_active_rejections(limit=limit)
+
+    # ── Schema drift (S3.5) ──────────────────────────────────────────────────
+
+    def graph_label_counts(self) -> dict:
+        """Return {label: node_count} across the graph."""
+        return self.neo4j.label_counts()
+
+    def graph_rel_type_counts(self) -> dict:
+        """Return {rel_type: edge_count} across the graph."""
+        return self.neo4j.rel_type_counts()
+
+    # ── Eras (S3.1) ──────────────────────────────────────────────────────────
+
+    def list_eras(self, *, active_only: bool = False) -> list[dict]:
+        """Return :Era nodes, newest start_date first."""
+        return self.neo4j.list_eras(active_only=active_only)
+
+    def get_era(self, era_id: str) -> dict | None:
+        return self.neo4j.get_era(era_id)
+
+    def upsert_era(
+        self,
+        *,
+        era_id: str | None = None,
+        name: str,
+        description: str = "",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        """Create or update an :Era node. Anchored to root via HAS_ERA so it
+        survives the reachability sweep with no extra edges required.
+        """
+        return self.neo4j.upsert_era(
+            era_id=era_id, name=name, description=description,
+            start_date=start_date, end_date=end_date,
+        )
+
+    def delete_era(self, era_id: str) -> bool:
+        return self.neo4j.delete_era(era_id)
+
+    def bind_node_to_era(self, node_id: str, era_id: str) -> bool:
+        """Attach a node to an era via OCCURRED_IN."""
+        return self.neo4j.bind_node_to_era(node_id, era_id)
+
+    def unbind_node_from_era(self, node_id: str, era_id: str) -> bool:
+        return self.neo4j.unbind_node_from_era(node_id, era_id)
+
+    # ── Reachability sweep (root-anchored cleanup) ───────────────────────────
+
+    def quarantine_unreachable_nodes(self) -> int:
+        """Label nodes unreachable from the user root with ``:Quarantine``.
+
+        Called after each ``graph_write`` batch to catch islands left behind
+        by merges, edge deletions, or partial writes. Returns the count
+        newly quarantined this run.
+        """
+        from datetime import datetime, timezone
+        return _reachability.quarantine_unreachable(
+            self.neo4j.driver, datetime.now(timezone.utc).isoformat()
+        )
+
+    def unquarantine_node(self, node_id: str) -> bool:
+        """Lift ``:Quarantine`` from a single node (manual reattach support)."""
+        return _reachability.unquarantine(self.neo4j.driver, node_id)
+
+    def purge_quarantined(self, older_than_iso: str) -> int:
+        """Permanently delete quarantined nodes older than the cutoff."""
+        return _reachability.purge_quarantined(self.neo4j.driver, older_than_iso)
+
     # ── Rumination support ────────────────────────────────────────────────────
 
     def get_recent_memories(self, n: int = 100) -> list[dict]:
@@ -860,14 +1163,35 @@ class MemoryManager:
         *,
         about_entity_id: str | None = None,
         source_text: str | None = None,
+        source_session_id: str | None = None,
+        extraction_method: str | None = None,
+        derived_from_belief_id: str | None = None,
     ) -> str:
-        """Create a Belief node, optionally linked to an entity and source text."""
+        """Create a Belief node with optional provenance links.
+
+        ``extraction_method`` (CT2): tag indicating which pipeline produced
+        this belief — e.g. ``"deep_pass"``, ``"rabbit_hole"``,
+        ``"cloud_extract"``. Stamped as a property so the explorer can
+        filter / colour by source.
+
+        ``source_session_id`` (CT2): when supplied alongside
+        ``source_text``, MERGEs a ``:Conversation`` node and links the
+        belief via ``EXTRACTED_FROM`` — gives every rumination output a
+        traceable origin in the conversation log.
+
+        ``derived_from_belief_id`` (CT2): seed belief id, used by the
+        deep pass; writes ``DEDUCED_FROM`` so the explorer can render
+        the synthesis chain.
+        """
         try:
             return self.neo4j.upsert_belief(
                 content,
                 confidence,
                 about_entity_id=about_entity_id,
                 source_text=source_text,
+                source_session_id=source_session_id,
+                extraction_method=extraction_method,
+                derived_from_belief_id=derived_from_belief_id,
             )
         except Exception as e:
             logger.error("Failed to upsert belief: %s", e)
@@ -890,6 +1214,7 @@ class MemoryManager:
         cypher = f"""
         MATCH (b:Belief)
         WHERE toLower(b.content) CONTAINS toLower($keyword) {status_clause}
+          AND NOT b:Quarantine
         RETURN b.id AS id, b.content AS content,
                b.confidence AS confidence, b.status AS status
         ORDER BY b.created_at DESC LIMIT 1
@@ -918,12 +1243,13 @@ class MemoryManager:
             return ""
 
     def search_nodes(self, query: str, limit: int = 10) -> list[dict]:
-        """Name-contains search across all graph nodes."""
+        """Name-contains search across all graph nodes. Excludes quarantined nodes."""
         if not self.neo4j.driver:
             return []
         cypher = """
         MATCH (n)
         WHERE toLower(n.name) CONTAINS toLower($query)
+          AND NOT n:Quarantine
         RETURN n.id AS id, n.name AS name,
                labels(n)[0] AS label, n.description AS description
         LIMIT $limit
@@ -955,8 +1281,14 @@ class MemoryManager:
             "now": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if new_status:
+            status_upper = new_status.upper()
             set_parts.append("t.status = $status")
-            params["status"] = new_status.upper()
+            params["status"] = status_upper
+            # Stamp completion time so the explorer can scroll back through
+            # closed tasks chronologically. Tasks are kept in the graph; the
+            # default reads just filter them out (see list_active_tasks).
+            if status_upper in {"DONE", "CANCELLED"}:
+                set_parts.append("t.completed_at = $now")
         if notes:
             set_parts.append("t.notes = $notes")
             params["notes"] = notes

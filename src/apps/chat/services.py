@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone
 
 from src.agent_platform.public.agent_service import AgentService
 from src.agent_platform.public.contracts import AgentRunRequest
 from src.memory.manager import MemoryManager
+
+# Per-session client_msg_id -> previous response cache for retry dedupe.
+# Capped at 50 entries per session, LRU eviction. In-process only — if the
+# server restarts between the first and the retried send, the message will
+# be re-processed; that's acceptable for a single-user local app.
+_DEDUPE_CAP_PER_SESSION = 50
+_dedupe_cache: dict[str, "OrderedDict[str, dict]"] = defaultdict(OrderedDict)
+
+
+def _dedupe_lookup(session_id: str, client_msg_id: str | None) -> dict | None:
+    if not client_msg_id:
+        return None
+    bucket = _dedupe_cache.get(session_id)
+    if not bucket or client_msg_id not in bucket:
+        return None
+    bucket.move_to_end(client_msg_id)
+    return bucket[client_msg_id]
+
+
+def _dedupe_record(session_id: str, client_msg_id: str | None, response: dict) -> None:
+    if not client_msg_id:
+        return
+    bucket = _dedupe_cache[session_id]
+    bucket[client_msg_id] = response
+    bucket.move_to_end(client_msg_id)
+    while len(bucket) > _DEDUPE_CAP_PER_SESSION:
+        bucket.popitem(last=False)
 
 
 def build_graph_context(anchor_node_id: str, memory: MemoryManager) -> dict | None:
@@ -173,7 +200,15 @@ async def send_chat_message(
     message_timestamp: str | None = None,
     context: dict | None = None,
     anchor_node_id: str | None = None,
+    client_msg_id: str | None = None,
 ) -> dict:
+    # Dedupe retries from the frontend offline queue. If we've already
+    # processed this client_msg_id for the session, replay the original
+    # reply instead of re-running the agent.
+    cached = _dedupe_lookup(session_id, client_msg_id)
+    if cached is not None:
+        return {**cached, "deduped": True}
+
     normalized_context = normalize_chat_context(context, memory, anchor_node_id)
     effective_text = build_effective_prompt(text, normalized_context)
 
@@ -195,7 +230,7 @@ async def send_chat_message(
             context={"chat_context": normalized_context} if normalized_context else {},
         )
     )
-    return {
+    response = {
         "ok": True,
         "session_id": session_id,
         "reply": result.reply,
@@ -205,3 +240,5 @@ async def send_chat_message(
         "memory_degraded": result.memory_degraded,
         "memory_health": result.memory_health,
     }
+    _dedupe_record(session_id, client_msg_id, response)
+    return response

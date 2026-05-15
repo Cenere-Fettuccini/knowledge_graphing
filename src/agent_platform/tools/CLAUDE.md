@@ -8,9 +8,10 @@ Python function decorated so the agent framework can discover and invoke it.
 |------|---------|---------|
 | `registry.py` | `tools` list | Master list of all active tools — import this to get all tools |
 | `memory.py` | `search_memories` | Semantic search over past conversation turns |
-| `graph.py` | `search_knowledge_graph`, `store_knowledge` | Read/write Neo4j knowledge graph |
-| `beliefs.py` | `save_belief`, `get_belief_trail`, `evolve_belief_tool` | Belief/fact management |
-| `tasks.py` | `create_task`, `list_tasks`, `update_task` | Task graph nodes |
+| `graph.py` | `search_knowledge_graph` | Read-only search over Neo4j knowledge graph |
+| `graph_write.py` | `graph_write` | Unified write surface for entities, beliefs, tasks, edges. Enforces no-isolated-nodes and runs the reachability sweep. |
+| `beliefs.py` | `get_belief_trail`, `evolve_belief_tool` | Belief read + supersession |
+| `tasks.py` | `list_tasks`, `update_task` | Task read + status update (writes new tasks via `graph_write`) |
 | `time_tools.py` | `get_current_time` | Current UTC time |
 | `common.py` | Shared helpers | Graph health checks, logging utilities |
 
@@ -18,13 +19,37 @@ Python function decorated so the agent framework can discover and invoke it.
 ```python
 from src.agent_platform.tools.registry import tools
 # tools = [
-#   search_knowledge_graph, store_knowledge,
+#   search_knowledge_graph,
+#   graph_write,
 #   search_memories,
 #   get_current_time,
-#   create_task, list_tasks, update_task,
-#   save_belief, get_belief_trail, evolve_belief_tool,
+#   list_tasks, update_task,
+#   get_belief_trail, evolve_belief_tool,
+#   web_search, list_events, create_event, delete_event,
 # ]
 ```
+
+## Graph writes — all go through `graph_write`
+`store_knowledge`, `save_belief`, and `create_task` were retired in S0.10.
+Use `graph_write([...intents])` with one of four intent kinds:
+
+```python
+{"kind": "entity", "name": "Mom", "label": "Person", "description": "..."}
+{"kind": "belief", "content": "...", "about_entity": "Mom", "confidence": 0.9}
+{"kind": "task",   "title": "Bake cake", "due_date": "2026-05-20", "for_person": "Mom"}
+{"kind": "edge",   "source": "Mom", "target": "Birthday Cake", "rel_type": "WANTS"}
+```
+
+The tool enforces an invariant: every node touched in a batch must end up
+with ≥1 edge. New entities without an edge in the same batch are rejected.
+Beliefs and tasks auto-anchor to the user root if no other anchor resolves.
+
+The LLM anchor-proposal hook (`_Resolver._propose_anchor`) is currently a
+stub — the deterministic resolver handles every case in practice. The
+contract for the future implementation is documented in the docstring of
+`_propose_anchor` in `graph_write.py`: it specifies the input shape, the
+required output (`EntityIntent` or `None`), the recursion-depth cap, and
+the failure modes the implementation must swallow rather than propagate.
 
 ## Adding a New Tool
 

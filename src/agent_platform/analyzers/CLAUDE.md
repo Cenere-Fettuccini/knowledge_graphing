@@ -1,7 +1,7 @@
 # Agent Platform — Analyzers
 
 Background agents that process queued data into the knowledge graph. They run
-on triggers (manual, scheduled, post-bulk-ingest), **not** on every chat turn.
+on triggers (count, manual, post-bulk-ingest), **not** on every chat turn.
 Conversations are stored as `analyzed: false` rows in Chroma; analyzers drain
 that queue.
 
@@ -9,25 +9,31 @@ that queue.
 | File | Role |
 |------|------|
 | `local_llm.py` | `LMStudioClient` — OpenAI-compatible client for the local LLM server |
-| `knowledge.py` | `KnowledgeAnalyzer` — extracts durable facts about the user, people, preferences |
+| `graph_extraction.py` | Local-LLM extraction (Gemma 4): entity / task / edge intents only; beliefs deferred to the cloud pass |
+| `graph_ingest_trigger.py` | Count-based trigger: fires `graph_write` when `count_unanalyzed >= settings.graph_ingest_threshold` |
+| `cloud_belief_extraction.py` | Gemini Flash pass that drains `belief_candidate` rows into Belief nodes |
+| `cloud_belief_trigger.py` | Count-based trigger for the cloud pass (`count_belief_candidates >= settings.cloud_belief_threshold`) |
+| `knowledge.py` | `KnowledgeAnalyzer` — legacy direct-write extractor, kept for the manual `/analyze/run` route and the bulk-importer post-write drain |
 | `canonicalize.py` | `EntityCanonicalizer` (per-label entity dedup, threshold 0.92) and `BeliefCanonicalizer` (active :Belief content dedup, threshold 0.88); both write `:MergeProposal` nodes for human approval |
-| `scheduler.py` | `AnalyzerScheduler` — apscheduler-driven periodic auto-drain of the queue |
+| `schema_drift.py` | Snapshot + diff tool that flags new low-population labels and disappeared labels/rel-types |
 
 ## Adding a New Analyzer
-Each analyzer is a class that:
-1. Accepts a `MemoryProtocol` (and any model clients it needs) via constructor injection.
-2. Exposes one or more `analyze_*()` methods that return a small dataclass of stats.
+Each analyzer is a class or module-level function that:
+1. Accepts a `MemoryProtocol` (and any model clients it needs) via constructor injection or parameter.
+2. Exposes one or more `analyze_*()` / `run_*_once` methods.
 3. Marks consumed Chroma rows via `memory.mark_analyzed(ids, run_id=...)` so they aren't reprocessed.
 4. Never imports from `src.apps.*` — analyzers are infrastructure, apps consume their output via the explorer's read endpoints.
 
 ## Triggers (where analyzers get invoked from)
-- **Manual** — `POST /api/explorer/analyze/run` from the explorer panel.
-- **Scheduled** — `AnalyzerScheduler` ticks every `settings.analyzer_tick_seconds`
-  (default 900s). Started from the FastAPI lifespan in `platform.app_factory`.
-  Disable via `ANALYZER_ENABLED=false`.
-- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` drains the queue
-  inline after writing the chunks. Pass `analyze=False` to suppress, e.g. in
-  tests, and let the scheduler pick it up later.
+- **Count-based (auto)** — `graph_ingest_trigger.maybe_trigger` and
+  `cloud_belief_trigger.maybe_trigger` fire from `MemoryManager.store` and
+  from the local pass's tail respectively. This is the default path; the
+  old time-tick `AnalyzerScheduler` was deleted in CT1.
+- **Manual** — `POST /api/explorer/analyze/run` calls
+  `KnowledgeAnalyzer.analyze_pending` directly. Still useful for ad-hoc
+  reprocessing and debugging.
+- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` drains the
+  queue inline after writing the chunks via the same legacy analyzer.
 - **Canonicalization** — `POST /api/explorer/canonicalize/run` calls the
   canonicalizer for the requested target (`target='entities'` →
   `EntityCanonicalizer`, `target='beliefs'` → `BeliefCanonicalizer`). Both
