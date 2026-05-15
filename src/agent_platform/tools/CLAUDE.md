@@ -44,6 +44,13 @@ The tool enforces an invariant: every node touched in a batch must end up
 with ≥1 edge. New entities without an edge in the same batch are rejected.
 Beliefs and tasks auto-anchor to the user root if no other anchor resolves.
 
+The LLM anchor-proposal hook (`_Resolver._propose_anchor`) is currently a
+stub — the deterministic resolver handles every case in practice. The
+contract for the future implementation is documented in the docstring of
+`_propose_anchor` in `graph_write.py`: it specifies the input shape, the
+required output (`EntityIntent` or `None`), the recursion-depth cap, and
+the failure modes the implementation must swallow rather than propagate.
+
 ## Adding a New Tool
 
 1. Create your function in an appropriate file (or a new file in this directory)

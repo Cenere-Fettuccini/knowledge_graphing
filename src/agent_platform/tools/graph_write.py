@@ -405,18 +405,69 @@ class _Resolver:
         logger.warning("graph_write fallback: %s", entry)
 
     # ── LLM anchor proposal (S0.3b — stub) ──────────────────────────────────
-    #
-    # When the deterministic resolver can't find an anchor for an edge or
-    # qualifier, this hook is the place to ask a small LLM call for an
-    # EntityIntent it can splice into the batch. Currently a no-op so the
-    # resolver behaves deterministically — flip on once we've watched the
-    # fallback log under real traffic.
 
     def _propose_anchor(self, missing_name: str) -> EntityIntent | None:
+        """Ask an LLM to propose an EntityIntent for a missing anchor name.
+
+        Currently a no-op so the deterministic resolver handles every case
+        (missing edge endpoint → fall back to RELATED_TO root; missing
+        belief subject → ABOUT root; missing task person/about → log and
+        skip the qualifier). Enable when traffic shows the deterministic
+        fallbacks are too coarse.
+
+        Contract for the future implementation (CT5)
+        ============================================
+
+        **Inputs the hook receives.**
+        - ``missing_name``: the entity name from an intent that the
+          deterministic pass couldn't resolve. Already trimmed; non-empty.
+        - Implicit state on ``self``: ``self.name_to_id`` (everything
+          resolved so far), ``self.fallbacks`` (everything already given
+          up on), ``self.root()`` (the user root id), and
+          ``self._proposal_depth`` (current recursion count).
+
+        **What the LLM call should produce.**
+        - Either ``None`` (the LLM also can't pin this down — fall back
+          to root), or a single ``EntityIntent`` for the missing name.
+        - The returned intent's ``name`` MUST equal ``missing_name``
+          exactly (case-preserving). If the LLM wants to suggest a
+          different name, that's a graph_write retry concern, not an
+          anchor resolution.
+        - The intent's ``label`` should be reused from
+          ``memory.graph_schema_snapshot()['labels']`` when possible.
+
+        **What the resolver does with the result.**
+        - On a non-None result, the proposed intent is staged into
+          ``batch.ops`` and ``self.name_to_id[missing_name]`` is
+          populated immediately so subsequent edge lookups succeed.
+        - ``self._proposal_depth`` is incremented *before* the LLM call
+          and decremented after. Resolution within the proposal itself
+          (if the LLM proposes an entity that references another missing
+          name) must short-circuit when ``_proposal_depth >=
+          MAX_PROPOSAL_DEPTH`` (currently 3).
+        - The fresh node still has to satisfy the isolation guard —
+          the caller is responsible for either emitting an edge
+          referencing it or letting the guard reject the batch.
+
+        **Loop / recursion detection.**
+        - Depth cap (``MAX_PROPOSAL_DEPTH``) is the only protection; the
+          resolver does not deduplicate same-name proposals within a
+          single batch. If the LLM keeps proposing the same orphan name,
+          the depth cap will fire on the 3rd round.
+
+        **Failure modes the implementation must handle.**
+        - LLM call raises → caller logs as a fallback and returns None.
+          Never re-raises into graph_write (would lose the batch).
+        - Empty / malformed proposal → treat as None.
+        - Proposed name mismatches ``missing_name`` → reject, log, return
+          None (don't pollute name_to_id with a different name).
+        """
         if self._proposal_depth >= self.MAX_PROPOSAL_DEPTH:
             return None
-        # self._proposal_depth += 1
-        # ... LLM call ...
+        # When wiring this up:
+        #   self._proposal_depth += 1
+        #   try:    return _llm_propose_intent(missing_name, schema=...)
+        #   finally: self._proposal_depth -= 1
         return None
 
 
