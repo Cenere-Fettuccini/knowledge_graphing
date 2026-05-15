@@ -838,6 +838,42 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Eras (S3.1) ──────────────────────────────────────────────────────────
+
+    def list_eras(self, *, active_only: bool = False) -> list[dict]:
+        """Return :Era nodes, newest start_date first."""
+        return self.neo4j.list_eras(active_only=active_only)
+
+    def get_era(self, era_id: str) -> dict | None:
+        return self.neo4j.get_era(era_id)
+
+    def upsert_era(
+        self,
+        *,
+        era_id: str | None = None,
+        name: str,
+        description: str = "",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        """Create or update an :Era node. Anchored to root via HAS_ERA so it
+        survives the reachability sweep with no extra edges required.
+        """
+        return self.neo4j.upsert_era(
+            era_id=era_id, name=name, description=description,
+            start_date=start_date, end_date=end_date,
+        )
+
+    def delete_era(self, era_id: str) -> bool:
+        return self.neo4j.delete_era(era_id)
+
+    def bind_node_to_era(self, node_id: str, era_id: str) -> bool:
+        """Attach a node to an era via OCCURRED_IN."""
+        return self.neo4j.bind_node_to_era(node_id, era_id)
+
+    def unbind_node_from_era(self, node_id: str, era_id: str) -> bool:
+        return self.neo4j.unbind_node_from_era(node_id, era_id)
+
     # ── Reachability sweep (root-anchored cleanup) ───────────────────────────
 
     def quarantine_unreachable_nodes(self) -> int:

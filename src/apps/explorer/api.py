@@ -215,3 +215,79 @@ async def get_system_status(
     service: AgentService = Depends(get_agent_service),
 ):
     return await services.get_system_status(memory, service)
+
+
+# ── Eras (S3.1) ──────────────────────────────────────────────────────────────
+
+@router.get("/eras")
+async def list_eras(
+    active_only: bool = False,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"eras": memory.list_eras(active_only=active_only)}
+
+
+@router.get("/eras/{era_id}")
+async def get_era(era_id: str, memory: MemoryManager = Depends(get_memory_manager)):
+    era = memory.get_era(era_id)
+    if era is None:
+        raise HTTPException(status_code=404, detail=f"Era {era_id} not found")
+    return era
+
+
+@router.post("/eras")
+async def create_era(
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    name = (payload or {}).get("name", "")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail="`name` is required")
+    try:
+        return memory.upsert_era(
+            name=name,
+            description=payload.get("description", "") or "",
+            start_date=payload.get("start_date"),
+            end_date=payload.get("end_date"),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.patch("/eras/{era_id}")
+async def update_era(
+    era_id: str,
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    existing = memory.get_era(era_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Era {era_id} not found")
+    return memory.upsert_era(
+        era_id=era_id,
+        name=payload.get("name") or existing.get("name", ""),
+        description=payload.get("description", existing.get("description", "")) or "",
+        start_date=payload.get("start_date", existing.get("start_date")),
+        end_date=payload.get("end_date", existing.get("end_date")),
+    )
+
+
+@router.delete("/eras/{era_id}")
+async def delete_era(era_id: str, memory: MemoryManager = Depends(get_memory_manager)):
+    return {"ok": memory.delete_era(era_id)}
+
+
+@router.post("/eras/{era_id}/bind/{node_id}")
+async def bind_node_to_era(
+    era_id: str, node_id: str,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"ok": memory.bind_node_to_era(node_id, era_id)}
+
+
+@router.delete("/eras/{era_id}/bind/{node_id}")
+async def unbind_node_from_era(
+    era_id: str, node_id: str,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"ok": memory.unbind_node_from_era(node_id, era_id)}

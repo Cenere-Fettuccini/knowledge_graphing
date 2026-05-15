@@ -357,6 +357,110 @@ class Neo4jStore:
             record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
             return self._serialize_node(record["u"])
 
+    # ── Eras (S3.1) ──────────────────────────────────────────────────────────
+
+    def list_eras(self, *, active_only: bool = False) -> list[dict]:
+        if not self.driver and not self.verify_connection():
+            return []
+        clauses = ["NOT e:Quarantine"]
+        if active_only:
+            clauses.append("e.end_date IS NULL")
+        cypher = f"""
+        MATCH (e:Era)
+        WHERE {" AND ".join(clauses)}
+        RETURN e
+        ORDER BY coalesce(e.start_date, e.created_at) DESC
+        """
+        with self.driver.session() as session:
+            return [self._serialize_node(r["e"]) for r in session.run(cypher)]
+
+    def get_era(self, era_id: str) -> dict | None:
+        if not self.driver and not self.verify_connection():
+            return None
+        with self.driver.session() as session:
+            rec = session.run(
+                "MATCH (e:Era {id: $id}) RETURN e LIMIT 1", id=era_id
+            ).single()
+            return self._serialize_node(rec["e"]) if rec and rec["e"] is not None else None
+
+    def upsert_era(
+        self,
+        *,
+        era_id: str | None = None,
+        name: str,
+        description: str = "",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j is offline; cannot upsert era.")
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("Era name must be non-empty.")
+        node_id = era_id or f"era:{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MERGE (e:Era {id: $id})
+                ON CREATE SET e.created_at = $now
+                SET e.name = $name,
+                    e.description = $description,
+                    e.start_date = $start_date,
+                    e.end_date = $end_date,
+                    e.updated_at = $now
+                WITH e
+                MATCH (root:Person:User {is_root: true})
+                MERGE (root)-[:HAS_ERA]->(e)
+                RETURN e
+                """,
+                id=node_id, now=now, name=clean_name, description=description,
+                start_date=start_date, end_date=end_date,
+            ).single()
+            return self._serialize_node(rec["e"]) if rec else {}
+
+    def delete_era(self, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (e:Era {id: $id})
+                DETACH DELETE e
+                RETURN count(*) AS removed
+                """,
+                id=era_id,
+            ).single()
+            return bool(rec and rec["removed"] > 0)
+
+    def bind_node_to_era(self, node_id: str, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (n {id: $node_id}), (e:Era {id: $era_id})
+                MERGE (n)-[r:OCCURRED_IN]->(e)
+                RETURN count(r) AS linked
+                """,
+                node_id=node_id, era_id=era_id,
+            ).single()
+            return bool(rec and rec["linked"] > 0)
+
+    def unbind_node_from_era(self, node_id: str, era_id: str) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (n {id: $node_id})-[r:OCCURRED_IN]->(e:Era {id: $era_id})
+                DELETE r
+                RETURN count(r) AS removed
+                """,
+                node_id=node_id, era_id=era_id,
+            ).single()
+            return bool(rec and rec["removed"] > 0)
+
     def _looks_like_test_artifact(self, node_data: dict) -> bool:
         node_id = str(node_data.get("id") or "").lower()
         label = str(node_data.get("label") or "")
