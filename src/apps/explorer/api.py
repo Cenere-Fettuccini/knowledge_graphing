@@ -400,3 +400,25 @@ async def list_active_rejections(
     memory: MemoryManager = Depends(get_memory_manager),
 ):
     return {"rejections": memory.list_active_rejections(limit=limit)}
+
+
+# ── Contradiction detection (S4.3) ───────────────────────────────────────────
+
+@router.post("/analyze/contradictions")
+async def run_contradictions(
+    payload: dict | None = Body(default=None),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    from src.agent_platform.analyzers.contradiction_detection import (
+        run_contradiction_detection,
+    )
+    since = (payload or {}).get("since")
+    return await run_contradiction_detection(memory, since=since)
+
+
+@router.get("/beliefs/contradictions")
+async def list_contradictions(
+    limit: int = Query(50, ge=1, le=500),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"contradictions": memory.list_contradictions(limit=limit)}

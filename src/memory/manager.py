@@ -892,6 +892,20 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Contradictions (S4.3) ────────────────────────────────────────────────
+
+    def link_contradiction(
+        self, belief_a_id: str, belief_b_id: str, *,
+        reason: str = "", similarity: float = 0.0, run_id: str | None = None,
+    ) -> bool:
+        return self.neo4j.link_contradiction(
+            belief_a_id, belief_b_id,
+            reason=reason, similarity=similarity, run_id=run_id,
+        )
+
+    def list_contradictions(self, *, limit: int = 50) -> list[dict]:
+        return self.neo4j.list_contradictions(limit=limit)
+
     # ── Pending belief queue (S4.1) ──────────────────────────────────────────
 
     def create_pending_belief(

@@ -569,6 +569,49 @@ class Neo4jStore:
                 )
             ]
 
+    # ── Contradictions (S4.3) ────────────────────────────────────────────────
+
+    def link_contradiction(
+        self, belief_a_id: str, belief_b_id: str,
+        *, reason: str = "", similarity: float = 0.0, run_id: str | None = None,
+    ) -> bool:
+        if not self.driver and not self.verify_connection():
+            return False
+        if belief_a_id == belief_b_id:
+            return False
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (a:Belief {id: $a}), (b:Belief {id: $b})
+                MERGE (a)-[r:CONTRADICTS]->(b)
+                ON CREATE SET r.detected_at = $now,
+                              r.reason = $reason,
+                              r.similarity = $sim,
+                              r.run_id = $run_id
+                RETURN count(r) AS linked
+                """,
+                a=belief_a_id, b=belief_b_id, now=now_iso,
+                reason=reason, sim=similarity, run_id=run_id,
+            ).single()
+            return bool(rec and rec["linked"] > 0)
+
+    def list_contradictions(self, *, limit: int = 50) -> list[dict]:
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (a:Belief)-[r:CONTRADICTS]->(b:Belief)
+        WHERE NOT a:Quarantine AND NOT b:Quarantine
+        RETURN a.id AS a_id, a.content AS a_content,
+               b.id AS b_id, b.content AS b_content,
+               r.reason AS reason, r.similarity AS similarity,
+               r.detected_at AS detected_at
+        ORDER BY r.detected_at DESC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            return [dict(r) for r in session.run(cypher, limit=limit)]
+
     # ── Schema drift counts (S3.5) ───────────────────────────────────────────
 
     def label_counts(self) -> dict[str, int]:
