@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     # 0 to disable the trigger entirely (the analyzer scheduler still runs).
     graph_ingest_threshold: int = 20
 
+    # ── Proactive bot (S3.3 / S4.2 / S4.4) ───────────────────────────────────
+    # Started inside run_bot.py when the bot process boots. Set to False to
+    # disable all outbound jobs without touching the bot itself.
+    proactive_bot_enabled: bool = True
+    digest_hour_local: int = 18
+    digest_minute_local: int = 30
+    digest_max_items: int = 8
+    soft_archive_dormant_days: int = 180  # ~6 months
+    soft_archive_check_weekday: str = "sun"  # APScheduler weekday short name
+
     # ── Neo4j ─────────────────────────────────────────────────────────────────
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"

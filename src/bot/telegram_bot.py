@@ -190,6 +190,9 @@ class TelegramBot:
             .build()
         )
         self._register_handlers()
+        # ProactiveBot adds CallbackQueryHandler + scheduler. Built lazily so
+        # tests can construct TelegramBot without booting APScheduler.
+        self._proactive = None  # type: ignore[assignment]
         logger.info("TelegramBot initialised (auth whitelist: %s)", settings.allowed_user_ids)
 
     # ── Handler Registration ──────────────────────────────────────────────
@@ -400,6 +403,21 @@ class TelegramBot:
         text = update.message.text
         session_id, _ = self._sessions.get_session(user_id)
 
+        # S4.4: if a refinement (edit / reconcile) is awaiting this user's
+        # next message, handle it inline rather than dispatching to the agent.
+        if self._proactive is not None:
+            refinement = self._proactive.pop_refinement(update.message.chat_id)
+            if refinement is not None:
+                try:
+                    reply = await self._proactive.handle_refinement_reply(
+                        update.message.chat_id, refinement, text,
+                    )
+                    await update.message.reply_text(reply)
+                except Exception:
+                    logger.exception("refinement reply failed")
+                    await update.message.reply_text(AGENT_ERROR_TEXT)
+                return
+
         # Keep typing indicator alive (Telegram cancels after 5s)
         import asyncio
         typing_task = asyncio.create_task(
@@ -433,5 +451,21 @@ class TelegramBot:
 
     def run(self) -> None:
         """Start the bot using long-polling. Blocks until interrupted."""
+        # ProactiveBot has to be wired up before run_polling so its callback
+        # handler is registered. We pass post_init so the scheduler starts
+        # inside the bot's running event loop.
+        from src.bot.proactive import ProactiveBot
+
+        async def _post_init(app):  # noqa: ANN001
+            self._proactive = ProactiveBot(app)
+            self._proactive.start()
+
+        async def _post_shutdown(app):  # noqa: ANN001
+            if self._proactive is not None:
+                self._proactive.stop()
+
+        self._app.post_init = _post_init
+        self._app.post_shutdown = _post_shutdown
+
         logger.info("Starting AIManager Telegram bot (polling)…")
         self._app.run_polling(drop_pending_updates=True)
