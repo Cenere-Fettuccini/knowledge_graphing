@@ -1484,16 +1484,26 @@ class Neo4jStore:
         with self.driver.session() as session:
             session.run(cypher, bid=belief_id)
 
-    def get_belief_chain(self, belief_id: str) -> list:
-        """
-        Walk the EVOLVED_FROM chain for a belief.
-        Returns a list from newest to oldest: [current, predecessor, ...]
+    BELIEF_CHAIN_MAX_DEPTH = 20
+
+    def get_belief_chain(self, belief_id: str, *, max_depth: int | None = None) -> list:
+        """Walk the EVOLVED_FROM chain for a belief.
+
+        Returns a list from newest to oldest: [current, predecessor, ...].
+
+        Depth is bounded so Neo4j can't fall into a pathological traversal
+        if a `:Belief` chain ever forms a cycle (shouldn't happen, but
+        EVOLVED_FROM is set by an LLM-driven tool and we don't want a bad
+        write to take the query down). ``max_depth`` overrides the class
+        default; values are clamped to a sane upper bound (200).
         """
         if not self.driver:
             return []
 
-        cypher = """
-        MATCH path = (b:Belief {id: $bid})-[:EVOLVED_FROM*0..20]->(ancestor:Belief)
+        depth = self.BELIEF_CHAIN_MAX_DEPTH if max_depth is None else max(1, min(int(max_depth), 200))
+
+        cypher = f"""
+        MATCH path = (b:Belief {{id: $bid}})-[:EVOLVED_FROM*0..{depth}]->(ancestor:Belief)
         UNWIND nodes(path) AS node
         WITH DISTINCT node
         RETURN node.id AS id, node.content AS content,

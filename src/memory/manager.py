@@ -394,9 +394,16 @@ class MemoryManager:
             include_completed=include_completed, since=since
         )
 
-    def graph_belief_trail(self, belief_id: str) -> dict:
-        """Return the belief chain and supporting evidence for a belief node."""
-        chain = self.neo4j.get_belief_chain(belief_id)
+    def graph_belief_trail(
+        self, belief_id: str, *, chain_depth: int | None = None
+    ) -> dict:
+        """Return the belief chain and supporting evidence for a belief node.
+
+        ``chain_depth`` caps the EVOLVED_FROM walk; see
+        ``Neo4jStore.BELIEF_CHAIN_MAX_DEPTH`` for the default. The store
+        clamps to 200 to protect against a runaway query.
+        """
+        chain = self.neo4j.get_belief_chain(belief_id, max_depth=chain_depth)
         evidence = self.neo4j.get_belief_evidence(belief_id)
         return {"chain": chain, "evidence": evidence}
 
