@@ -998,6 +998,16 @@ class MemoryManager:
     def purge_expired_rejections(self) -> int:
         return self.neo4j.purge_expired_rejections()
 
+    def belief_calibration(self) -> list[dict]:
+        """Per-source approve/reject breakdown for pending-belief callers (CT3).
+
+        Returns ``[{source, pending, approved, rejected_ttl,
+        rejected_permanent, decided, approval_rate}, ...]``.
+        ``approval_rate`` is ``approved / (approved + rejected_*)`` so
+        items still awaiting decision don't drag the metric down.
+        """
+        return self.neo4j.belief_calibration()
+
     def list_active_rejections(self, *, limit: int = 100) -> list[dict]:
         return self.neo4j.list_active_rejections(limit=limit)
 

@@ -781,6 +781,52 @@ class Neo4jStore:
         with self.driver.session() as session:
             return [dict(r) for r in session.run(cypher, limit=limit)]
 
+    # ── Belief calibration (CT3) ─────────────────────────────────────────────
+
+    def belief_calibration(self) -> list[dict]:
+        """Approve/reject breakdown per pending-belief source.
+
+        Returns one row per ``source`` value seen in the pending-belief
+        pipeline, with counts for each terminal state plus an
+        ``approval_rate`` that excludes still-pending items (so a fresh
+        source isn't penalised for having items in flight).
+
+        Used by the explorer's calibration panel + future model-routing
+        decisions ("rumination is approved 12% of the time, maybe ease
+        off the rabbit-hole pass").
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (b)
+        WHERE NOT b:Quarantine
+          AND (b:PendingBelief OR b:Belief OR b:RejectedHypothesis OR b:RejectedBelief)
+          AND b.source IS NOT NULL
+        RETURN b.source AS source,
+               sum(CASE WHEN b:PendingBelief THEN 1 ELSE 0 END) AS pending,
+               sum(CASE WHEN b:Belief AND b.approved_at IS NOT NULL THEN 1 ELSE 0 END) AS approved,
+               sum(CASE WHEN b:RejectedHypothesis THEN 1 ELSE 0 END) AS rejected_ttl,
+               sum(CASE WHEN b:RejectedBelief THEN 1 ELSE 0 END) AS rejected_permanent
+        ORDER BY source
+        """
+        with self.driver.session() as session:
+            out = []
+            for r in session.run(cypher):
+                approved = int(r["approved"])
+                rej_ttl = int(r["rejected_ttl"])
+                rej_perm = int(r["rejected_permanent"])
+                decided = approved + rej_ttl + rej_perm
+                out.append({
+                    "source": r["source"],
+                    "pending": int(r["pending"]),
+                    "approved": approved,
+                    "rejected_ttl": rej_ttl,
+                    "rejected_permanent": rej_perm,
+                    "decided": decided,
+                    "approval_rate": (approved / decided) if decided else None,
+                })
+            return out
+
     # ── Schema drift counts (S3.5) ───────────────────────────────────────────
 
     def label_counts(self) -> dict[str, int]:

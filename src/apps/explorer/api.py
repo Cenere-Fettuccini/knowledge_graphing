@@ -424,6 +424,14 @@ async def list_contradictions(
     return {"contradictions": memory.list_contradictions(limit=limit)}
 
 
+@router.get("/beliefs/calibration")
+async def get_belief_calibration(
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    """Approve/reject ratio per pending-belief source (CT3)."""
+    return {"sources": memory.belief_calibration()}
+
+
 # ── Focal-node neighborhood + era windowing (S4.5 / S4.6) ────────────────────
 
 @router.get("/graph/neighborhood/{node_id}")
