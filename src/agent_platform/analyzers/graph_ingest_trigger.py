@@ -25,7 +25,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
-from src.agent_platform.analyzers import graph_extraction
+from src.agent_platform.analyzers import cloud_belief_trigger, graph_extraction
 from src.agent_platform.tools.graph_write import graph_write
 from src.core.config import settings
 
@@ -125,10 +125,19 @@ async def _run_once(memory: "MemoryManager", depth_at_trigger: int) -> None:
             # S3.4: hand the same rows off to the cloud belief extractor.
             # We flag every analyzed row; the cloud pass is responsible for
             # deciding nothing belief-worthy was said and clearing the flag.
+            flagged = False
             try:
                 memory.mark_belief_candidates(row_ids)
+                flagged = True
             except Exception:
                 logger.exception("graph_ingest %s: mark_belief_candidates failed", run_id)
+            # CT7: fire the cloud trigger after flagging. Separate lock + own
+            # threshold so we don't block on a long Gemini call.
+            if flagged:
+                try:
+                    cloud_belief_trigger.maybe_trigger(memory)
+                except Exception:
+                    logger.exception("graph_ingest %s: cloud_belief_trigger raised", run_id)
         else:
             # Write rejected (isolation guard, validation, etc.) — DON'T
             # mark analyzed. Let the next trigger retry; if the model

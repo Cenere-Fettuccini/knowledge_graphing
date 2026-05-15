@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # 0 to disable the trigger entirely (the analyzer scheduler still runs).
     graph_ingest_threshold: int = 20
 
+    # When this many rows are flagged ``belief_candidate: true`` and haven't
+    # been processed by the cloud pass yet, fire the cloud belief extractor.
+    # Lower default than graph_ingest_threshold because cloud calls cost
+    # real money. 0 disables the auto-trigger; manual /analyze/beliefs/extract
+    # still works.
+    cloud_belief_threshold: int = 10
+
     # ── Proactive bot (S3.3 / S4.2 / S4.4) ───────────────────────────────────
     # Started inside run_bot.py when the bot process boots. Set to False to
     # disable all outbound jobs without touching the bot itself.
