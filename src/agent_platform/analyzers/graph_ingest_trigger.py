@@ -122,6 +122,13 @@ async def _run_once(memory: "MemoryManager", depth_at_trigger: int) -> None:
                 len(row_ids),
             )
             _mark_analyzed(memory, row_ids, run_id)
+            # S3.4: hand the same rows off to the cloud belief extractor.
+            # We flag every analyzed row; the cloud pass is responsible for
+            # deciding nothing belief-worthy was said and clearing the flag.
+            try:
+                memory.mark_belief_candidates(row_ids)
+            except Exception:
+                logger.exception("graph_ingest %s: mark_belief_candidates failed", run_id)
         else:
             # Write rejected (isolation guard, validation, etc.) — DON'T
             # mark analyzed. Let the next trigger retry; if the model

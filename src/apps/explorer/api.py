@@ -295,3 +295,22 @@ async def unbind_node_from_era(
     memory: MemoryManager = Depends(get_memory_manager),
 ):
     return {"ok": memory.unbind_node_from_era(node_id, era_id)}
+
+
+# ── Cloud belief extraction (S3.4) ───────────────────────────────────────────
+
+@router.post("/analyze/beliefs/extract")
+async def run_belief_extraction(
+    payload: dict = Body(default={}),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    from src.agent_platform.analyzers.cloud_belief_extraction import (
+        run_belief_extraction_once,
+    )
+    batch_size = int((payload or {}).get("batch_size") or 25)
+    return await run_belief_extraction_once(memory, batch_size=batch_size)
+
+
+@router.get("/analyze/beliefs/queue")
+async def get_belief_queue_depth(memory: MemoryManager = Depends(get_memory_manager)):
+    return {"pending": memory.count_belief_candidates()}

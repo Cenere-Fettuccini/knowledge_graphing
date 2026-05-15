@@ -557,6 +557,48 @@ class MemoryManager:
                 exc_info=True,
             )
 
+    def list_belief_candidates(self, limit: int = 25) -> list[dict]:
+        """Rows flagged for cloud belief extraction (S3.4)."""
+        if not self._is_chroma_available():
+            return []
+        # belief_candidate=True AND belief_processed != True
+        return self.chroma.query_metadata(
+            where={
+                "$and": [
+                    {"belief_candidate": True},
+                    {"belief_processed": {"$ne": True}},
+                ]
+            },
+            limit=limit,
+        )
+
+    def count_belief_candidates(self) -> int:
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.count_where(
+            where={
+                "$and": [
+                    {"belief_candidate": True},
+                    {"belief_processed": {"$ne": True}},
+                ]
+            }
+        )
+
+    def mark_belief_candidates(self, ids: list[str]) -> int:
+        """Flag rows as belief candidates so the cloud extractor picks them up."""
+        if not ids or not self._is_chroma_available():
+            return 0
+        return self.chroma.update_metadata(ids, {"belief_candidate": True})
+
+    def mark_belief_candidates_processed(self, ids: list[str], run_id: str | None = None) -> int:
+        """Mark belief-candidate rows as processed by the cloud extractor."""
+        if not ids or not self._is_chroma_available():
+            return 0
+        patch = {"belief_processed": True, "belief_candidate": False}
+        if run_id:
+            patch["belief_run_id"] = run_id
+        return self.chroma.update_metadata(ids, patch)
+
     def mark_all_unanalyzed(self, *, include_ephemeral: bool = False) -> int:
         """Reset every Chroma row back to ``analyzed: False`` for reprocessing.
 

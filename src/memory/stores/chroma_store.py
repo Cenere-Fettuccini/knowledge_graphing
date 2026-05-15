@@ -261,6 +261,23 @@ class ChromaStore:
         self.collection.update(ids=keep_ids, metadatas=new_metadatas)
         return len(keep_ids)
 
+    def query_metadata(self, *, where: dict, limit: int = 50) -> list[dict]:
+        """Fetch rows matching ``where``, returning the same shape as list_unanalyzed."""
+        results = self.collection.get(where=where, limit=limit)
+        ids = results.get("ids") or []
+        if not ids:
+            return []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+        return [
+            {
+                "id": ids[i],
+                "text": docs[i] if i < len(docs) else "",
+                "metadata": metas[i] if i < len(metas) else {},
+            }
+            for i in range(len(ids))
+        ]
+
     def count_where(self, where: dict | None = None) -> int:
         """Approximate count of documents matching ``where``.
 

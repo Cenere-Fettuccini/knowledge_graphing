@@ -33,6 +33,10 @@ from src.agent_platform.analyzers.local_llm import (
 logger = logging.getLogger(__name__)
 
 
+# S3.4: belief intents are NOT extracted here. The local 4B model is a
+# quality bottleneck on subjective content; beliefs are routed to a
+# separate cloud pass (cloud_belief_extraction.py). This pass focuses on
+# structural facts the small model handles reliably.
 _SYSTEM_PROMPT = """\
 You extract durable graph facts from conversation transcripts and return them as JSON.
 
@@ -41,15 +45,14 @@ Output schema (return EXACTLY this shape, JSON only, no prose):
 
 Each <intent> is one of:
   {"kind":"entity","name":"<str>","label":"<PascalCase>","description":"<str>"}
-  {"kind":"belief","content":"<str>","about_entity":"<str?>","confidence":<0-1>}
   {"kind":"task","title":"<str>","due_date":"<YYYY-MM-DD?>","priority":"low|normal|high","for_person":"<str?>","about_entity":"<str?>"}
   {"kind":"edge","source":"<entity name>","target":"<entity name>","rel_type":"<UPPER_SNAKE>"}
 
 Rules:
+- Do NOT emit "belief" intents. Beliefs are handled by a separate pass.
 - Every new entity MUST appear as the source or target of at least one edge in the same batch; otherwise it will be rejected.
 - Reuse names from the "Existing entities" list when the same concept appears.
-- Skip chitchat and ephemeral state. Extract only durable facts (people, places, projects, preferences, tasks, beliefs).
-- Confidence: 0.9 if the user states it directly, 0.7 if implied, 0.5 if speculative.
+- Skip chitchat. Extract only durable structural facts (people, places, projects, items, tasks, relationships).
 - Empty output is fine when nothing durable was said: {"intents": []}.
 
 Example
@@ -114,9 +117,21 @@ def _parse_response(raw: str) -> list[dict]:
     intents = parsed.get("intents")
     if not isinstance(intents, list):
         return []
-    # Filter out anything that isn't a dict with a string kind — the
-    # downstream Pydantic validation will catch the rest.
-    return [i for i in intents if isinstance(i, dict) and isinstance(i.get("kind"), str)]
+    # Filter out anything that isn't a dict with a string kind, and drop
+    # any "belief" the model emitted despite the instruction — those go
+    # through cloud_belief_extraction instead.
+    cleaned: list[dict] = []
+    for i in intents:
+        if not isinstance(i, dict):
+            continue
+        kind = i.get("kind")
+        if not isinstance(kind, str):
+            continue
+        if kind == "belief":
+            logger.debug("graph_extraction: dropping local-pass belief intent")
+            continue
+        cleaned.append(i)
+    return cleaned
 
 
 def _extract_intents_sync(
