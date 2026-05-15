@@ -943,7 +943,50 @@ class MemoryManager:
         return self.neo4j.edit_pending_belief(belief_id, new_content=new_content)
 
     def reject_pending_belief(self, belief_id: str, *, reason: str = "") -> dict:
-        return self.neo4j.reject_pending_belief(belief_id, reason=reason)
+        """Reject a pending belief; permanent-promotion uses fuzzy similarity.
+
+        Computes a content embedding for the belief being rejected so the
+        store can count semantically-similar prior rejections instead of
+        exact-string matches (CT10). On embedding failure we fall back to
+        exact match — the rejection still records, the count just stays
+        strict.
+        """
+        embedding = self._embed_pending_belief_content(belief_id)
+        return self.neo4j.reject_pending_belief(
+            belief_id, reason=reason, content_embedding=embedding
+        )
+
+    def _embed_pending_belief_content(self, belief_id: str) -> list[float] | None:
+        """Best-effort embedding lookup for a pending belief's content.
+
+        Returns None on any failure path (no driver, no content, embedding
+        API down). Callers use None as the signal to drop back to the
+        legacy exact-match counting behaviour.
+        """
+        if not self.neo4j.driver:
+            return None
+        try:
+            content_row = self.neo4j.driver.execute_query(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b.content AS c", id=belief_id
+            )
+        except Exception as e:
+            logger.debug("reject_pending_belief: content lookup failed: %s", e)
+            return None
+        records = content_row[0] if content_row else []
+        if not records:
+            return None
+        content = records[0]["c"] or ""
+        if not content.strip():
+            return None
+        try:
+            from src.memory.embeddings.google import get_embedding_model
+            vectors = get_embedding_model().embed_documents([content])
+        except Exception as e:
+            logger.debug("reject_pending_belief: embedding failed: %s", e)
+            return None
+        if not vectors:
+            return None
+        return list(vectors[0])
 
     def purge_expired_rejections(self) -> int:
         return self.neo4j.purge_expired_rejections()

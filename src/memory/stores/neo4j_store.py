@@ -1,5 +1,6 @@
 """Neo4j knowledge graph — entities, beliefs, provenance, tasks."""
 
+import math
 import uuid
 import logging
 import re
@@ -9,6 +10,23 @@ from neo4j import GraphDatabase
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _vector_norm(v: list[float]) -> float:
+    return math.sqrt(sum(x * x for x in v))
+
+
+def _cosine_similarity(
+    a: list[float], b: list[float], *, norm_a: float | None = None
+) -> float:
+    if not a or not b:
+        return 0.0
+    norm_a = norm_a if norm_a is not None else _vector_norm(a)
+    norm_b = _vector_norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (norm_a * norm_b)
 
 
 class Neo4jStore:
@@ -361,6 +379,10 @@ class Neo4jStore:
 
     REJECTED_TTL_DAYS = 30
     PERMANENT_REJECTION_THRESHOLD = 3
+    # Cosine threshold for considering two rejections to be "the same idea"
+    # when counting toward the permanent-rejection promotion. Matches
+    # BeliefCanonicalizer's belief threshold so the two systems agree.
+    REJECTION_SIMILARITY_THRESHOLD = 0.88
 
     def create_pending_belief(
         self,
@@ -466,12 +488,22 @@ class Neo4jStore:
             ).single()
             return self._serialize_node(rec["b"]) if rec else {}
 
-    def reject_pending_belief(self, belief_id: str, *, reason: str = "") -> dict:
+    def reject_pending_belief(
+        self,
+        belief_id: str,
+        *,
+        reason: str = "",
+        content_embedding: list[float] | None = None,
+    ) -> dict:
         """Demote :PendingBelief -> :RejectedHypothesis with a 30-day TTL.
 
-        If the same content has been rejected ``PERMANENT_REJECTION_THRESHOLD``+
-        times within the window, promotes the new rejection to a permanent
-        :RejectedBelief instead so the rumination engine learns from it.
+        Counts prior rejections of the *same idea* within the TTL window. If
+        an ``content_embedding`` is provided, the count is fuzzy — any prior
+        rejection whose stored embedding has cosine similarity above
+        ``REJECTION_SIMILARITY_THRESHOLD`` counts. With no embedding the count
+        falls back to exact-string match (the pre-CT10 behaviour). Once the
+        count crosses ``PERMANENT_REJECTION_THRESHOLD`` the new rejection is
+        promoted to a permanent :RejectedBelief.
         """
         if not self.driver and not self.verify_connection():
             return {}
@@ -481,40 +513,36 @@ class Neo4jStore:
         now_iso = now.isoformat()
 
         with self.driver.session() as session:
-            # Count recent rejections of similar content (exact match for now;
-            # semantic-match upgrade is a follow-up).
             content_row = session.run(
                 "MATCH (b:PendingBelief {id: $id}) RETURN b.content AS c", id=belief_id
             ).single()
             if not content_row:
                 return {}
             content = content_row["c"] or ""
-            recent = session.run(
-                """
-                MATCH (h:RejectedHypothesis)
-                WHERE h.content = $content AND h.rejected_at >= $window_start
-                RETURN count(h) AS c
-                """,
-                content=content, window_start=window_start_iso,
-            ).single()
-            recent_count = int(recent["c"]) if recent else 0
+
+            recent_count = self._count_similar_rejections(
+                session,
+                content=content,
+                content_embedding=content_embedding,
+                window_start_iso=window_start_iso,
+            )
 
             if recent_count + 1 >= self.PERMANENT_REJECTION_THRESHOLD:
-                target_label = "RejectedBelief"
                 rec = session.run(
-                    f"""
-                    MATCH (b:PendingBelief {{id: $id}})
+                    """
+                    MATCH (b:PendingBelief {id: $id})
                     REMOVE b:PendingBelief
-                    SET b:{target_label},
+                    SET b:RejectedBelief,
                         b.status = 'rejected_permanent',
                         b.rejection_reason = $reason,
                         b.rejected_at = $now,
                         b.updated_at = $now,
-                        b.rejection_count = $count
+                        b.rejection_count = $count,
+                        b.content_embedding = coalesce($embedding, b.content_embedding)
                     RETURN b
                     """,
                     id=belief_id, reason=reason, now=now_iso,
-                    count=recent_count + 1,
+                    count=recent_count + 1, embedding=content_embedding,
                 ).single()
             else:
                 rec = session.run(
@@ -526,12 +554,66 @@ class Neo4jStore:
                         b.rejection_reason = $reason,
                         b.rejected_at = $now,
                         b.expires_at = $expires,
-                        b.updated_at = $now
+                        b.updated_at = $now,
+                        b.content_embedding = coalesce($embedding, b.content_embedding)
                     RETURN b
                     """,
                     id=belief_id, reason=reason, now=now_iso, expires=ttl_iso,
+                    embedding=content_embedding,
                 ).single()
             return self._serialize_node(rec["b"]) if rec else {}
+
+    def _count_similar_rejections(
+        self,
+        session,
+        *,
+        content: str,
+        content_embedding: list[float] | None,
+        window_start_iso: str,
+    ) -> int:
+        """Count :RejectedHypothesis nodes within the window matching the new content.
+
+        If an embedding is supplied, uses cosine similarity against each
+        stored embedding (threshold ``REJECTION_SIMILARITY_THRESHOLD``).
+        Falls back to exact-string match when the embedding is missing or
+        when no prior rejection in the window has a stored embedding to
+        compare against.
+        """
+        if not content_embedding:
+            row = session.run(
+                """
+                MATCH (h:RejectedHypothesis)
+                WHERE h.content = $content AND h.rejected_at >= $window_start
+                RETURN count(h) AS c
+                """,
+                content=content, window_start=window_start_iso,
+            ).single()
+            return int(row["c"]) if row else 0
+
+        records = session.run(
+            """
+            MATCH (h:RejectedHypothesis)
+            WHERE h.rejected_at >= $window_start
+            RETURN h.content AS content, h.content_embedding AS embedding
+            """,
+            window_start=window_start_iso,
+        )
+        new_norm = _vector_norm(content_embedding)
+        count = 0
+        for r in records:
+            other_embedding = r.get("embedding") if hasattr(r, "get") else r["embedding"]
+            other_content = r["content"] or ""
+            if other_embedding:
+                sim = _cosine_similarity(
+                    content_embedding, list(other_embedding), norm_a=new_norm
+                )
+                if sim >= self.REJECTION_SIMILARITY_THRESHOLD:
+                    count += 1
+            elif other_content == content:
+                # No stored embedding (pre-CT10 rejection) — fall back to
+                # exact match so old data still aggregates.
+                count += 1
+        return count
 
     def purge_expired_rejections(self) -> int:
         """DETACH DELETE :RejectedHypothesis whose expires_at is past."""
