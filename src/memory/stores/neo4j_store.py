@@ -569,6 +569,93 @@ class Neo4jStore:
                 )
             ]
 
+    # ── Focal-node neighborhood (S4.5) ───────────────────────────────────────
+
+    def get_neighborhood(
+        self, node_id: str, *, depth: int = 1, limit: int = 200,
+    ) -> dict:
+        """Variable-length neighborhood around ``node_id``.
+
+        Returns ``{focal, nodes, edges, stats}`` in the same shape as
+        ``get_explorer_graph_overview`` so the frontend can swap the
+        renderer's data source without touching the layout code.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"focal": None, "nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+        depth = max(1, min(int(depth), 4))  # clamp — deeper paths cost a lot
+        cypher = f"""
+        MATCH (focal {{id: $node_id}})
+        WHERE NOT focal:Quarantine
+        OPTIONAL MATCH (focal)-[r*1..{depth}]-(neighbor)
+        WHERE neighbor IS NULL OR (
+            NOT neighbor:Quarantine
+            AND NOT any(label IN labels(neighbor) WHERE label IN $hidden_labels)
+        )
+        WITH focal, collect(DISTINCT neighbor) AS neighbors, collect(r) AS rel_paths
+        RETURN focal,
+               [n IN neighbors WHERE n IS NOT NULL][..$limit] AS neighbors,
+               [path IN rel_paths | [rel IN path | {{
+                   source: startNode(rel).id,
+                   target: endNode(rel).id,
+                   type: type(rel)
+               }}]] AS edge_paths
+        """
+        nodes_dict = {}
+        edges: list[dict] = []
+        with self.driver.session() as session:
+            rec = session.run(
+                cypher,
+                node_id=node_id, limit=limit,
+                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
+            ).single()
+            if rec is None or rec["focal"] is None:
+                return {"focal": None, "nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
+            focal_data = self._serialize_node(rec["focal"])
+            nodes_dict[focal_data["id"]] = focal_data
+            for neighbor in rec["neighbors"] or []:
+                if neighbor is None:
+                    continue
+                nd = self._serialize_node(neighbor)
+                if not self._looks_like_test_artifact(nd):
+                    nodes_dict[nd["id"]] = nd
+            for path in rec["edge_paths"] or []:
+                for rel in path or []:
+                    if rel and rel.get("source") and rel.get("target") and rel.get("type"):
+                        edges.append(dict(rel))
+
+        # Dedupe edges by (source, target, type)
+        unique_edges = list({(e["source"], e["target"], e["type"]): e for e in edges}.values())
+        # Drop edges referencing nodes we filtered out
+        visible_ids = set(nodes_dict)
+        unique_edges = [e for e in unique_edges if e["source"] in visible_ids and e["target"] in visible_ids]
+
+        return {
+            "focal": focal_data,
+            "nodes": list(nodes_dict.values()),
+            "edges": unique_edges,
+            "stats": {"nodes": len(nodes_dict), "edges": len(unique_edges), "depth": depth},
+        }
+
+    # ── Era windowing (S4.6) ─────────────────────────────────────────────────
+
+    def eras_active_at(self, iso_date: str) -> list[dict]:
+        """Eras whose [start_date, end_date] window contains ``iso_date``.
+
+        end_date null is treated as "ongoing" (no upper bound).
+        start_date null is treated as "unknown start" (no lower bound).
+        """
+        if not self.driver and not self.verify_connection():
+            return []
+        cypher = """
+        MATCH (e:Era)
+        WHERE NOT e:Quarantine
+          AND (e.start_date IS NULL OR e.start_date <= $d)
+          AND (e.end_date IS NULL OR e.end_date >= $d)
+        RETURN e ORDER BY coalesce(e.start_date, '0000-00-00') DESC
+        """
+        with self.driver.session() as session:
+            return [self._serialize_node(r["e"]) for r in session.run(cypher, d=iso_date)]
+
     # ── Contradictions (S4.3) ────────────────────────────────────────────────
 
     def link_contradiction(

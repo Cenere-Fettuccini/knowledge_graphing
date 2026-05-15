@@ -892,6 +892,18 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Focal-node neighborhood + era windowing (S4.5 / S4.6) ────────────────
+
+    def graph_neighborhood(
+        self, node_id: str, *, depth: int = 1, limit: int = 200,
+    ) -> dict:
+        """Variable-length subgraph around a focal node, same shape as graph_overview."""
+        return self.neo4j.get_neighborhood(node_id, depth=depth, limit=limit)
+
+    def eras_active_at(self, iso_date: str) -> list[dict]:
+        """:Era nodes whose window contains the given ISO date."""
+        return self.neo4j.eras_active_at(iso_date)
+
     # ── Contradictions (S4.3) ────────────────────────────────────────────────
 
     def link_contradiction(

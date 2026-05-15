@@ -422,3 +422,24 @@ async def list_contradictions(
     memory: MemoryManager = Depends(get_memory_manager),
 ):
     return {"contradictions": memory.list_contradictions(limit=limit)}
+
+
+# ── Focal-node neighborhood + era windowing (S4.5 / S4.6) ────────────────────
+
+@router.get("/graph/neighborhood/{node_id}")
+async def get_graph_neighborhood(
+    node_id: str,
+    depth: int = Query(1, ge=1, le=4),
+    limit: int = Query(200, ge=1, le=500),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return memory.graph_neighborhood(node_id, depth=depth, limit=limit)
+
+
+@router.get("/eras/active-at")
+async def eras_active_at(
+    date: str = Query(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    """Eras whose [start_date, end_date] window contains the ISO date."""
+    return {"eras": memory.eras_active_at(date)}

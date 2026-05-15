@@ -3,15 +3,49 @@
 
     window.AIManagerClients = window.AIManagerClients || {};
     window.AIManagerClients.explorer = {
-        async getOverview(limit) {
+        async getOverview(limit, opts = {}) {
             try {
-                const url = limit
-                    ? `/api/explorer/graph/overview?limit=${encodeURIComponent(limit)}`
+                const params = new URLSearchParams();
+                if (limit) params.set('limit', String(limit));
+                if (opts.eraId) params.set('era_id', opts.eraId);
+                if (opts.activeSelfOnly) params.set('active_self_only', 'true');
+                const qs = params.toString();
+                const url = qs
+                    ? `/api/explorer/graph/overview?${qs}`
                     : '/api/explorer/graph/overview';
                 return await http.get(url);
             } catch (error) {
                 console.error('ExplorerClient.getOverview failed', error);
                 return { nodes: [], edges: [], stats: {} };
+            }
+        },
+
+        async getNeighborhood(nodeId, { depth = 1, limit = 200 } = {}) {
+            try {
+                const url = `/api/explorer/graph/neighborhood/${encodeURIComponent(nodeId)}?depth=${depth}&limit=${limit}`;
+                return await http.get(url);
+            } catch (error) {
+                console.error('ExplorerClient.getNeighborhood failed', error);
+                return { focal: null, nodes: [], edges: [], stats: {} };
+            }
+        },
+
+        async getEras({ activeOnly = false } = {}) {
+            try {
+                const url = activeOnly ? '/api/explorer/eras?active_only=true' : '/api/explorer/eras';
+                return await http.get(url);
+            } catch (error) {
+                console.error('ExplorerClient.getEras failed', error);
+                return { eras: [] };
+            }
+        },
+
+        async getErasActiveAt(isoDate) {
+            try {
+                return await http.get(`/api/explorer/eras/active-at?date=${encodeURIComponent(isoDate)}`);
+            } catch (error) {
+                console.error('ExplorerClient.getErasActiveAt failed', error);
+                return { eras: [] };
             }
         },
 
