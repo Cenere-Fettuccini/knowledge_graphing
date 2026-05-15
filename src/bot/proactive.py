@@ -235,7 +235,17 @@ class ProactiveBot:
             if purged:
                 logger.info("nightly_cleanup: purged %d expired rejections", purged)
         except Exception:
-            logger.exception("nightly_cleanup failed")
+            logger.exception("nightly_cleanup: purge_expired_rejections failed")
+        # CT8 phase 2: sweep refinement sessions that have been idle past
+        # the TTL (default 30 min) into state=done so they don't linger
+        # and confuse the next interaction. Only an active session with no
+        # recent updates gets touched.
+        try:
+            abandoned = self._memory.abandon_idle_refinement_sessions()
+            if abandoned:
+                logger.info("nightly_cleanup: abandoned %d idle refinement sessions", abandoned)
+        except Exception:
+            logger.exception("nightly_cleanup: abandon_idle_refinement_sessions failed")
 
     # ── Callback router ────────────────────────────────────────────────────
 
@@ -273,68 +283,143 @@ class ProactiveBot:
                 await query.edit_message_text(f"{query.message.text}\n\n📦 Archived.")
             elif action == "reconcile":
                 a_id, _, b_id = rest.partition(":")
-                self._refinements[query.message.chat_id] = {
-                    "kind": "reconcile", "a_id": a_id, "b_id": b_id,
-                }
+                # CT8 phase 2: open a durable :RefinementSession instead of
+                # stashing a dict entry. The bot will look it up on the
+                # user's next message and drive the multi-turn conversation
+                # until it converges or the user types /stop.
+                session = self._memory.start_refinement_session(
+                    chat_id=query.message.chat_id,
+                    belief_a_id=a_id, belief_b_id=b_id,
+                )
+                if not session:
+                    await query.edit_message_text(
+                        f"{query.message.text}\n\n⚠ Couldn't open a refinement session — "
+                        "Neo4j may be offline. Try again later."
+                    )
+                    return
                 await query.edit_message_text(
-                    f"{query.message.text}\n\n⚖ Tell me which one still holds, or how to merge them."
+                    f"{query.message.text}\n\n⚖ How do these two fit together for you? "
+                    "I'll ask follow-ups until we land on a coherent reading. "
+                    "Type /stop any time to bail."
                 )
             else:
                 logger.warning("unknown callback action: %s", action)
         except Exception:
             logger.exception("callback handler failed for data=%s", data)
 
-    # ── S4.4 — Refinement conversation hook ────────────────────────────────
+    # ── S4.4 / CT8 — Refinement conversation router ─────────────────────────
 
-    def pop_refinement(self, chat_id: int) -> dict | None:
-        """Called by the bot's text handler: if a refinement is active in this
-        chat, pop and return it so the message can be routed to the matching
-        action instead of the agent."""
-        return self._refinements.pop(chat_id, None)
+    _STOP_TOKENS = {"/stop", "stop", "cancel", "/cancel"}
 
-    async def handle_refinement_reply(
-        self, chat_id: int, refinement: dict, user_text: str
+    async def consume_user_message(self, chat_id: int, user_text: str) -> str | None:
+        """Try to handle a Telegram text message as a refinement turn.
+
+        Returns:
+          - a reply string if the message was consumed by a refinement flow
+            (single-shot edit, or any turn in a multi-turn reconcile);
+          - ``None`` if no refinement is active — the caller should route
+            the message to the regular agent loop.
+
+        Multi-turn reconcile (CT8 phase 2): looks up an active
+        :RefinementSession for this chat. If found, the message is either
+          - a /stop token → abandon the session and return a "ok, dropped"
+            reply; or
+          - any other text → append as a user turn, call the per-turn
+            action extractor, and either send a clarification question or
+            finalize the session.
+
+        Single-shot edit: still uses the in-memory ``_refinements`` dict
+        because there's nothing multi-turn about renaming a pending belief.
+        """
+        # 1. Multi-turn reconcile (durable session in Neo4j) takes priority.
+        active = self._memory.get_active_refinement_for_chat(chat_id)
+        if active:
+            return await self._handle_reconcile_turn(active, user_text)
+
+        # 2. Single-shot dict-based refinements (edit_belief).
+        ref = self._refinements.pop(chat_id, None)
+        if ref is not None:
+            return await self._handle_single_shot_refinement(chat_id, ref, user_text)
+
+        return None
+
+    async def _handle_single_shot_refinement(
+        self, chat_id: int, ref: dict, user_text: str
     ) -> str:
-        kind = refinement.get("kind")
+        kind = ref.get("kind")
         if kind == "edit_belief":
-            belief_id = refinement.get("belief_id", "")
+            belief_id = ref.get("belief_id", "")
             result = self._memory.edit_pending_belief(belief_id, new_content=user_text)
             if result:
                 return f"✓ Edited and approved: \"{user_text[:80]}\""
             return "Couldn't find that pending belief — it may have been actioned already."
-        if kind == "reconcile":
-            # CT8 (quick mode): single-shot reconciliation, but the reply
-            # is parsed into a structured resolution by a Gemini Flash
-            # call. The extractor produces a summary + per-belief evidence
-            # items, which are landed as SUPPORTED_BY / WEAKENED_BY edges
-            # from a fresh :RefinementSession node. The CONTRADICTS edge
-            # is stamped resolved so the digest stops surfacing it.
-            from src.agent_platform.analyzers import refinement_extraction
-
-            a_id = refinement.get("a_id", "")
-            b_id = refinement.get("b_id", "")
-            belief_a = self._memory.get_belief(a_id) or {}
-            belief_b = self._memory.get_belief(b_id) or {}
-            a_text = belief_a.get("content") or belief_a.get("name") or ""
-            b_text = belief_b.get("content") or belief_b.get("name") or ""
-
-            parsed = await refinement_extraction.parse_reconciliation_reply(
-                belief_a_text=a_text, belief_b_text=b_text, user_reply=user_text,
-            )
-            summary = parsed.get("summary") or user_text[:200]
-            evidence = parsed.get("evidence") or []
-            resolved = bool(parsed.get("resolved"))
-
-            stats = self._memory.resolve_contradiction(
-                a_id, b_id,
-                summary=summary, user_reply=user_text,
-                evidence=evidence, resolved=resolved,
-            )
-            edges = stats.get("edges_written", 0)
-            marker = "✓ Reconciled" if resolved else "⚖ Noted"
-            evidence_note = (
-                f" ({edges} evidence edge{'s' if edges != 1 else ''})"
-                if edges else ""
-            )
-            return f"{marker}: {summary[:160]}{evidence_note}"
         return "Unknown refinement state — ignored."
+
+    async def _handle_reconcile_turn(
+        self, session: dict, user_text: str
+    ) -> str:
+        """Run one turn of the multi-turn reconciliation loop."""
+        from src.agent_platform.analyzers import refinement_extraction
+
+        session_id = session.get("id", "")
+        stripped = (user_text or "").strip().lower()
+        if stripped in self._STOP_TOKENS:
+            self._memory.abandon_refinement_session(session_id, reason="user_stop")
+            return "⏹ Refinement cancelled. The contradiction stays open for next time."
+
+        # Append the user's turn to the session.
+        self._memory.append_refinement_turn(session_id, role="user", text=user_text)
+
+        a_id = session.get("belief_a_id", "")
+        b_id = session.get("belief_b_id", "")
+        belief_a = self._memory.get_belief(a_id) or {}
+        belief_b = self._memory.get_belief(b_id) or {}
+        a_text = belief_a.get("content") or belief_a.get("name") or ""
+        b_text = belief_b.get("content") or belief_b.get("name") or ""
+
+        # Reconstruct turn list (Neo4j stores them as JSON strings on the
+        # node's ``turns`` property — newest append already applied).
+        turns = self._decode_turns(session_id)
+
+        action = await refinement_extraction.next_refinement_action(
+            belief_a_text=a_text, belief_b_text=b_text, turns=turns,
+        )
+
+        if action.get("action") == "clarify":
+            question = action.get("clarification_question") or "Can you say more?"
+            self._memory.append_refinement_turn(session_id, role="bot", text=question)
+            return f"⚖ {question}"
+
+        # action == "resolve" — finalize the session.
+        summary = action.get("summary") or "Reconciliation logged."
+        evidence = action.get("evidence") or []
+        resolved = bool(action.get("resolved"))
+        stats = self._memory.finalize_refinement_session(
+            session_id, summary=summary, evidence=evidence, resolved=resolved,
+        )
+        edges = stats.get("edges_written", 0)
+        marker = "✓ Reconciled" if resolved else "⚖ Noted"
+        evidence_note = (
+            f" ({edges} evidence edge{'s' if edges != 1 else ''})" if edges else ""
+        )
+        return f"{marker}: {summary[:160]}{evidence_note}"
+
+    def _decode_turns(self, session_id: str) -> list[dict]:
+        """Re-fetch + decode the turns array on a session node.
+
+        ``turns`` is stored as a list of JSON strings (one per turn) so
+        append is a single Cypher ``SET s.turns = s.turns + $new`` —
+        decoding happens here only when we need to feed the prompt.
+        """
+        import json as _json
+        session = self._memory.get_refinement_session(session_id) or {}
+        raw_turns = session.get("turns") or []
+        decoded: list[dict] = []
+        for raw in raw_turns:
+            if not isinstance(raw, str):
+                continue
+            try:
+                decoded.append(_json.loads(raw))
+            except Exception:
+                continue
+        return decoded

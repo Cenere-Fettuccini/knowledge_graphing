@@ -13,7 +13,7 @@ that queue.
 | `graph_ingest_trigger.py` | Count-based trigger: fires `graph_write` when `count_unanalyzed >= settings.graph_ingest_threshold` |
 | `cloud_belief_extraction.py` | Gemini Flash pass that drains `belief_candidate` rows into Belief nodes |
 | `cloud_belief_trigger.py` | Count-based trigger for the cloud pass (`count_belief_candidates >= settings.cloud_belief_threshold`) |
-| `knowledge.py` | `KnowledgeAnalyzer` — legacy direct-write extractor, kept for the manual `/analyze/run` route and the bulk-importer post-write drain |
+| `refinement_extraction.py` | Gemini Flash extractor that turns a reconciliation reply into `{summary, evidence, resolved}` for the bot's Reconcile flow (CT8 quick mode) |
 | `canonicalize.py` | `EntityCanonicalizer` (per-label entity dedup, threshold 0.92) and `BeliefCanonicalizer` (active :Belief content dedup, threshold 0.88); both write `:MergeProposal` nodes for human approval |
 | `schema_drift.py` | Snapshot + diff tool that flags new low-population labels and disappeared labels/rel-types |
 
@@ -30,10 +30,13 @@ Each analyzer is a class or module-level function that:
   from the local pass's tail respectively. This is the default path; the
   old time-tick `AnalyzerScheduler` was deleted in CT1.
 - **Manual** — `POST /api/explorer/analyze/run` calls
-  `KnowledgeAnalyzer.analyze_pending` directly. Still useful for ad-hoc
-  reprocessing and debugging.
-- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` drains the
-  queue inline after writing the chunks via the same legacy analyzer.
+  `graph_ingest_trigger.run_extraction_pass` directly. Same code path as
+  the auto trigger, just without the lock-and-skip behaviour.
+- **Post-bulk-ingest** — `KnowledgeIngestor.ingest_directory()` loops the
+  same `run_extraction_pass` over the freshly queued rows until the
+  queue is empty or the 50-batch safety cap hits.
+- **Refinement reply** — `refinement_extraction.parse_reconciliation_reply`
+  is called from `ProactiveBot.handle_refinement_reply` (CT8 quick mode).
 - **Canonicalization** — `POST /api/explorer/canonicalize/run` calls the
   canonicalizer for the requested target (`target='entities'` →
   `EntityCanonicalizer`, `target='beliefs'` → `BeliefCanonicalizer`). Both

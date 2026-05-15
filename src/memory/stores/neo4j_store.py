@@ -781,60 +781,212 @@ class Neo4jStore:
             ).single()
             return self._serialize_node(rec["b"]) if rec else {}
 
-    def resolve_contradiction(
+    # ── Refinement sessions (CT8 phase 2: multi-turn) ────────────────────────
+    #
+    # The session node is the durable spine of the conversational refinement
+    # flow. Active sessions live as ``:RefinementSession {state: "active"}``
+    # anchored to root via NOTE_FOR so the reachability sweep doesn't
+    # quarantine them while they're mid-conversation. On finalize they
+    # transition to state="done", get SUPPORTED_BY / WEAKENED_BY edges to
+    # the two beliefs based on extracted evidence, and stamp the
+    # CONTRADICTS edge with the resolution summary.
+    #
+    # Turns are stored as a list of JSON strings on the node so a single
+    # property holds the whole conversation (Neo4j list-of-primitive
+    # property — append-friendly via ``s.turns + $new``).
+
+    REFINEMENT_IDLE_TTL_MINUTES = 30
+
+    def start_refinement_session(
         self,
+        *,
+        chat_id: int,
         belief_a_id: str,
         belief_b_id: str,
-        *,
-        summary: str,
-        user_reply: str,
-        evidence: list[dict],
-        resolved: bool = True,
     ) -> dict:
-        """Land a structured reconciliation onto a CONTRADICTS edge (CT8).
+        """Open an active ``:RefinementSession`` for a contradiction.
 
-        Creates a ``:RefinementSession`` node anchored to both beliefs via
-        the appropriate ``SUPPORTED_BY`` / ``WEAKENED_BY`` edges, then
-        stamps the CONTRADICTS edge with ``resolved``, ``resolution_summary``,
-        and ``resolved_at``. The session node carries the full user reply
-        for provenance.
-
-        ``evidence`` items: ``{belief: "a"|"b", kind: "supports"|"weakens",
-        text: <excerpt>}``. Anything malformed is skipped silently — the
-        edge update still happens.
-
-        Returns a stats dict ``{ok, session_id, edges_written, resolved}``.
+        Anchored to root via NOTE_FOR so reachability doesn't quarantine
+        the session while turns are being added. Returns the new node.
         """
         if not self.driver and not self.verify_connection():
-            return {"ok": False, "edges_written": 0}
+            return {}
         if belief_a_id == belief_b_id:
-            return {"ok": False, "edges_written": 0}
-
+            return {}
         now_iso = datetime.now(timezone.utc).isoformat()
         session_id = f"refine:{uuid.uuid4().hex[:12]}"
-        edges_written = 0
-
         with self.driver.session() as session:
-            # 1. Create the RefinementSession node.
             session.run(
                 """
                 CREATE (s:RefinementSession {
-                    id: $sid, name: $preview,
-                    user_reply: $reply, summary: $summary,
-                    created_at: $now
+                    id: $sid, name: $name, state: 'active',
+                    chat_id: $chat_id,
+                    belief_a_id: $a, belief_b_id: $b,
+                    turns: [],
+                    created_at: $now, updated_at: $now
                 })
+                WITH s
+                MATCH (root:Person:User {is_root: true})
+                MERGE (s)-[:NOTE_FOR]->(root)
+                """,
+                sid=session_id, name=f"Refinement {session_id[-6:]}",
+                chat_id=chat_id, a=belief_a_id, b=belief_b_id, now=now_iso,
+            )
+            rec = session.run(
+                "MATCH (s:RefinementSession {id: $sid}) RETURN s", sid=session_id,
+            ).single()
+            return self._serialize_node(rec["s"]) if rec else {}
+
+    def get_refinement_session(self, session_id: str) -> dict | None:
+        """Return a refinement session (any state) by id, or None."""
+        if not self.driver and not self.verify_connection():
+            return None
+        with self.driver.session() as session:
+            rec = session.run(
+                "MATCH (s:RefinementSession {id: $sid}) RETURN s LIMIT 1",
+                sid=session_id,
+            ).single()
+            return self._serialize_node(rec["s"]) if rec else None
+
+    def append_refinement_turn(
+        self, session_id: str, *, role: str, text: str
+    ) -> bool:
+        """Append a single turn to an active refinement session.
+
+        ``role`` is ``"user"`` or ``"bot"``. Turns are stored as JSON
+        strings on a list property so a single Cypher set can append
+        atomically without re-serializing the prior conversation.
+        """
+        if not self.driver and not self.verify_connection():
+            return False
+        now_iso = datetime.now(timezone.utc).isoformat()
+        import json as _json
+        turn_json = _json.dumps({"role": role, "text": text, "ts": now_iso})
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:RefinementSession {id: $sid, state: 'active'})
+                SET s.turns = coalesce(s.turns, []) + $turn,
+                    s.updated_at = $now
+                RETURN count(s) AS c
+                """,
+                sid=session_id, turn=turn_json, now=now_iso,
+            ).single()
+            return bool(rec and rec["c"] > 0)
+
+    def get_active_refinement_for_chat(
+        self, chat_id: int, *, idle_minutes: int | None = None
+    ) -> dict | None:
+        """Return the active session for a chat (or None).
+
+        Sessions whose ``updated_at`` is older than ``idle_minutes`` ago
+        are excluded — they're considered abandoned and the caller
+        should fall back to starting a fresh session if needed. The
+        nightly cleanup separately abandons them in Neo4j (so they show
+        up as ``state='done', resolved=false`` rather than lingering).
+        """
+        if not self.driver and not self.verify_connection():
+            return None
+        ttl = idle_minutes if idle_minutes is not None else self.REFINEMENT_IDLE_TTL_MINUTES
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=ttl)).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:RefinementSession {chat_id: $chat_id, state: 'active'})
+                WHERE s.updated_at >= $cutoff
+                RETURN s ORDER BY s.updated_at DESC LIMIT 1
+                """,
+                chat_id=chat_id, cutoff=cutoff,
+            ).single()
+            return self._serialize_node(rec["s"]) if rec else None
+
+    def abandon_refinement_session(
+        self, session_id: str, *, reason: str = "abandoned"
+    ) -> bool:
+        """Mark an active session as ``done`` without writing evidence.
+
+        Used by ``/stop`` and by the idle-TTL sweep. The CONTRADICTS edge
+        is NOT marked resolved — the abandonment isn't a resolution.
+        """
+        if not self.driver and not self.verify_connection():
+            return False
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:RefinementSession {id: $sid, state: 'active'})
+                SET s.state = 'done',
+                    s.resolved = false,
+                    s.abandon_reason = $reason,
+                    s.abandoned_at = $now,
+                    s.updated_at = $now
+                RETURN count(s) AS c
+                """,
+                sid=session_id, reason=reason, now=now_iso,
+            ).single()
+            return bool(rec and rec["c"] > 0)
+
+    def abandon_idle_refinement_sessions(
+        self, *, idle_minutes: int | None = None
+    ) -> int:
+        """Sweep active sessions older than the TTL into ``done``.
+
+        Called by the nightly cleanup job. Returns the count abandoned.
+        """
+        if not self.driver and not self.verify_connection():
+            return 0
+        ttl = idle_minutes if idle_minutes is not None else self.REFINEMENT_IDLE_TTL_MINUTES
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=ttl)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:RefinementSession {state: 'active'})
+                WHERE s.updated_at < $cutoff
+                SET s.state = 'done',
+                    s.resolved = false,
+                    s.abandon_reason = 'idle_ttl',
+                    s.abandoned_at = $now,
+                    s.updated_at = $now
+                RETURN count(s) AS c
+                """,
+                cutoff=cutoff, now=now_iso,
+            ).single()
+            return int(rec["c"]) if rec else 0
+
+    def finalize_refinement_session(
+        self,
+        session_id: str,
+        *,
+        summary: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Finalize an active session: write evidence edges, stamp CONTRADICTS,
+        flip state to ``done``.
+
+        Idempotent on the session: a session already in ``done`` returns
+        ``{ok: False, reason: 'not_active'}``.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"ok": False, "reason": "neo4j_offline"}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        edges_written = 0
+
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:RefinementSession {id: $sid, state: 'active'})
+                RETURN s.belief_a_id AS a, s.belief_b_id AS b
                 """,
                 sid=session_id,
-                preview=(summary or user_reply)[:60],
-                reply=user_reply,
-                summary=summary,
-                now=now_iso,
-            )
+            ).single()
+            if not rec:
+                return {"ok": False, "reason": "not_active"}
+            belief_a_id = rec["a"]
+            belief_b_id = rec["b"]
 
-            # 2. Write evidence edges. Bad rows are silently dropped because
-            #    the LLM extractor already filtered the obvious mistakes;
-            #    anything that survived to here but still mismatches is
-            #    treated as a "no evidence" case.
+            # Evidence edges from each belief to the session node.
             belief_ids = {"a": belief_a_id, "b": belief_b_id}
             for item in evidence or []:
                 target = belief_ids.get(item.get("belief"))
@@ -843,7 +995,7 @@ class Neo4jStore:
                 if not target or kind not in ("supports", "weakens") or not text:
                     continue
                 rel_type = "SUPPORTED_BY" if kind == "supports" else "WEAKENED_BY"
-                rec = session.run(
+                erec = session.run(
                     f"""
                     MATCH (b:Belief {{id: $bid}}), (s:RefinementSession {{id: $sid}})
                     MERGE (b)-[r:{rel_type}]->(s)
@@ -852,23 +1004,21 @@ class Neo4jStore:
                     """,
                     bid=target, sid=session_id, text=text, now=now_iso,
                 ).single()
-                if rec and rec["c"]:
+                if erec and erec["c"]:
                     edges_written += 1
 
-            # 3. Anchor the session to root if the evidence list ended up
-            #    empty — without an edge it would be quarantined on the
-            #    next sweep.
-            if edges_written == 0:
-                session.run(
-                    """
-                    MATCH (s:RefinementSession {id: $sid}),
-                          (root:Person:User {is_root: true})
-                    MERGE (s)-[:NOTE_FOR]->(root)
-                    """,
-                    sid=session_id,
-                )
-
-            # 4. Stamp the CONTRADICTS edge with the resolution.
+            # Stamp the session itself + CONTRADICTS edge.
+            session.run(
+                """
+                MATCH (s:RefinementSession {id: $sid})
+                SET s.state = 'done',
+                    s.summary = $summary,
+                    s.resolved = $resolved,
+                    s.finalized_at = $now,
+                    s.updated_at = $now
+                """,
+                sid=session_id, summary=summary, resolved=resolved, now=now_iso,
+            )
             session.run(
                 """
                 MATCH (a:Belief {id: $a})-[r:CONTRADICTS]->(b:Belief {id: $b})
@@ -887,6 +1037,37 @@ class Neo4jStore:
             "edges_written": edges_written,
             "resolved": resolved,
         }
+
+    def resolve_contradiction(
+        self,
+        belief_a_id: str,
+        belief_b_id: str,
+        *,
+        summary: str,
+        user_reply: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """One-shot reconciliation helper (CT8 phase 1 compatibility).
+
+        Composes ``start_refinement_session`` + a single user turn +
+        ``finalize_refinement_session`` so existing single-shot callers
+        keep working. Multi-turn callers should drive the lifecycle
+        explicitly through the three methods above.
+        """
+        if belief_a_id == belief_b_id:
+            return {"ok": False, "edges_written": 0}
+        session = self.start_refinement_session(
+            chat_id=-1, belief_a_id=belief_a_id, belief_b_id=belief_b_id,
+        )
+        if not session:
+            return {"ok": False, "edges_written": 0}
+        session_id = session.get("id")
+        if user_reply:
+            self.append_refinement_turn(session_id, role="user", text=user_reply)
+        return self.finalize_refinement_session(
+            session_id, summary=summary, evidence=evidence, resolved=resolved,
+        )
 
     def list_contradictions(
         self, *, limit: int = 50, include_resolved: bool = False

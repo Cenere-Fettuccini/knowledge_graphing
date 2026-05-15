@@ -1,7 +1,10 @@
 """Rumination Engine — Deep Synthesis and creative Rabbit Hole passes.
 
-The forward pass (entity/belief/task extraction from raw conversations) lives in
-``src.agent_platform.analyzers.knowledge`` and runs on every analyzer tick.
+The forward pass (entity / task / edge extraction from raw conversations) is
+the count-triggered ``graph_ingest_trigger`` -> ``graph_extraction`` flow under
+``src.agent_platform.analyzers``. Beliefs are extracted by a separate cloud
+pass (``cloud_belief_extraction``) over rows the local pass flagged as
+belief candidates.
 
 This package owns the second-order passes that operate on already-extracted knowledge:
 

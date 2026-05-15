@@ -943,15 +943,71 @@ class MemoryManager:
         evidence: list[dict],
         resolved: bool = True,
     ) -> dict:
-        """Land a structured reconciliation on a CONTRADICTS edge (CT8).
+        """Land a structured reconciliation on a CONTRADICTS edge (CT8 phase 1).
 
-        See ``Neo4jStore.resolve_contradiction`` for the shape contract.
-        Returns ``{ok, session_id, edges_written, resolved}``.
+        One-shot wrapper preserved for backwards compatibility. Multi-turn
+        callers should use the explicit lifecycle below instead.
         """
         return self.neo4j.resolve_contradiction(
             belief_a_id, belief_b_id,
             summary=summary, user_reply=user_reply,
             evidence=evidence, resolved=resolved,
+        )
+
+    # ── Refinement session lifecycle (CT8 phase 2) ───────────────────────────
+
+    def start_refinement_session(
+        self, *, chat_id: int, belief_a_id: str, belief_b_id: str
+    ) -> dict:
+        """Open an active multi-turn refinement session."""
+        return self.neo4j.start_refinement_session(
+            chat_id=chat_id, belief_a_id=belief_a_id, belief_b_id=belief_b_id,
+        )
+
+    def append_refinement_turn(
+        self, session_id: str, *, role: str, text: str
+    ) -> bool:
+        """Append one turn to an active refinement session."""
+        return self.neo4j.append_refinement_turn(
+            session_id, role=role, text=text,
+        )
+
+    def get_refinement_session(self, session_id: str) -> dict | None:
+        """Fetch a refinement session node (any state). ``turns`` comes back
+        as a list of JSON strings — decode in the caller as needed."""
+        return self.neo4j.get_refinement_session(session_id)
+
+    def get_active_refinement_for_chat(
+        self, chat_id: int, *, idle_minutes: int | None = None
+    ) -> dict | None:
+        """Return the active session for this chat (newest), or None."""
+        return self.neo4j.get_active_refinement_for_chat(
+            chat_id, idle_minutes=idle_minutes,
+        )
+
+    def abandon_refinement_session(
+        self, session_id: str, *, reason: str = "abandoned"
+    ) -> bool:
+        """Mark a session done without writing evidence (e.g. user /stop)."""
+        return self.neo4j.abandon_refinement_session(session_id, reason=reason)
+
+    def abandon_idle_refinement_sessions(
+        self, *, idle_minutes: int | None = None
+    ) -> int:
+        """Sweep stale active sessions into done state. Called by the nightly cleanup."""
+        return self.neo4j.abandon_idle_refinement_sessions(idle_minutes=idle_minutes)
+
+    def finalize_refinement_session(
+        self,
+        session_id: str,
+        *,
+        summary: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Write evidence edges + stamp CONTRADICTS + flip session to done."""
+        return self.neo4j.finalize_refinement_session(
+            session_id, summary=summary, evidence=evidence, resolved=resolved,
         )
 
     # ── Pending belief queue (S4.1) ──────────────────────────────────────────

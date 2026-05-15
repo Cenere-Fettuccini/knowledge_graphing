@@ -403,19 +403,21 @@ class TelegramBot:
         text = update.message.text
         session_id, _ = self._sessions.get_session(user_id)
 
-        # S4.4: if a refinement (edit / reconcile) is awaiting this user's
-        # next message, handle it inline rather than dispatching to the agent.
+        # S4.4 / CT8: if a refinement is in flight for this chat (single-shot
+        # edit OR an active multi-turn reconcile), let proactive consume the
+        # message instead of dispatching to the agent. consume_user_message
+        # returns None when nothing's active so the regular agent loop runs.
         if self._proactive is not None:
-            refinement = self._proactive.pop_refinement(update.message.chat_id)
-            if refinement is not None:
-                try:
-                    reply = await self._proactive.handle_refinement_reply(
-                        update.message.chat_id, refinement, text,
-                    )
-                    await update.message.reply_text(reply)
-                except Exception:
-                    logger.exception("refinement reply failed")
-                    await update.message.reply_text(AGENT_ERROR_TEXT)
+            try:
+                refinement_reply = await self._proactive.consume_user_message(
+                    update.message.chat_id, text,
+                )
+            except Exception:
+                logger.exception("refinement reply failed")
+                await update.message.reply_text(AGENT_ERROR_TEXT)
+                return
+            if refinement_reply is not None:
+                await update.message.reply_text(refinement_reply)
                 return
 
         # Keep typing indicator alive (Telegram cancels after 5s)

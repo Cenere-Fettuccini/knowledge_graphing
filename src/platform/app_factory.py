@@ -40,11 +40,10 @@ def build_registry() -> AppRegistry:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start background services when FastAPI boots; stop them on shutdown."""
-    # The time-based AnalyzerScheduler was retired in CT1 — extraction is
-    # now driven by graph_ingest_trigger / cloud_belief_trigger which fire
-    # on Chroma queue depth rather than wall-clock ticks. KnowledgeAnalyzer
-    # itself stays for the manual /analyze/run route and the bulk-importer
-    # post-write drain.
+    # Extraction is driven by graph_ingest_trigger / cloud_belief_trigger
+    # which fire on Chroma queue depth — no time-based scheduler runs from
+    # the lifespan. Manual /analyze/run and the bulk importer call the
+    # same graph_ingest_trigger.run_extraction_pass directly.
     ruminator: RuminationScheduler | None = None
 
     memory = get_memory_manager()

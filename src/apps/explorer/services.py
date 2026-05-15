@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+from src.agent_platform.analyzers import graph_ingest_trigger
 from src.agent_platform.analyzers.canonicalize import (
     DEFAULT_BELIEF_THRESHOLD,
     DEFAULT_THRESHOLD,
     BeliefCanonicalizer,
     EntityCanonicalizer,
 )
-from src.agent_platform.analyzers.knowledge import KnowledgeAnalyzer
+from src.agent_platform.analyzers.local_llm import (
+    LMStudioClient,
+    LocalLLMUnavailable,
+)
 from src.agent_platform.public.agent_service import AgentService
 from src.ingestion.bulk_importer import BulkImporter
 from src.memory.manager import MemoryManager
-
-
-def _build_analyzer(memory: MemoryManager) -> KnowledgeAnalyzer:
-    return KnowledgeAnalyzer(memory=memory)
 
 
 def _build_canonicalizer(memory: MemoryManager) -> EntityCanonicalizer:
@@ -70,24 +70,51 @@ def bootstrap_user(name: str, memory: MemoryManager) -> dict:
 
 
 def get_analyzer_status(memory: MemoryManager) -> dict:
-    analyzer = _build_analyzer(memory)
-    return analyzer.queue_status()
+    """Lightweight status for the explorer panel.
+
+    Shape preserved from the legacy ``KnowledgeAnalyzer.queue_status``
+    so the frontend doesn't need to change. The values come straight
+    from MemoryManager + LMStudioClient — the old analyzer wrapper
+    was only ever a thin pass-through here.
+    """
+    client = LMStudioClient()
+    try:
+        local_available = client.is_available()
+    except Exception:
+        local_available = False
+    return {
+        "unanalyzed_count": memory.count_unanalyzed(),
+        "failed_count": memory.count_failed(),
+        "local_llm_available": local_available,
+        "default_model": client.default_model,
+    }
 
 
 def list_analyzer_models(memory: MemoryManager) -> list[dict]:
-    analyzer = _build_analyzer(memory)
-    return analyzer.list_available_models()
+    """LM Studio's ``/v1/models`` pass-through for the UI's picker."""
+    try:
+        return LMStudioClient().list_models()
+    except LocalLLMUnavailable:
+        return []
 
 
-def run_analyzer(
+async def run_analyzer(
     memory: MemoryManager,
     *,
     batch_size: int = 20,
     model: str | None = None,
 ) -> dict:
-    analyzer = _build_analyzer(memory)
-    result = analyzer.analyze_pending(batch_size=batch_size, model=model)
-    return result.as_dict()
+    """Manual one-shot drain — routes through the same pipeline as the
+    count-trigger so the manual path can't drift from the auto one.
+
+    ``model`` is accepted for backwards compatibility with the legacy
+    KnowledgeAnalyzer signature but currently unused — the extraction
+    pass uses ``settings.lm_studio_model``. Wire model-override here
+    if the explorer's model-picker needs to work again.
+    """
+    return await graph_ingest_trigger.run_extraction_pass(
+        memory, batch_size=batch_size
+    )
 
 
 def list_analyzer_failures(memory: MemoryManager, limit: int = 50) -> dict:
