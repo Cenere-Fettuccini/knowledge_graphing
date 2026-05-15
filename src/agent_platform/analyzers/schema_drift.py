@@ -51,27 +51,37 @@ def take_snapshot(memory: "MemoryManager") -> dict:
 
 
 def _load_previous_snapshot(window_days: int = 7) -> dict | None:
-    """Return the newest snapshot at least ``window_days`` old, or None."""
+    """Return the newest snapshot at least ``window_days`` old, or None.
+
+    Reads ``taken_at`` from each file's JSON body rather than the
+    filename — the on-disk name has ``:`` replaced with ``-`` for
+    filesystem safety, which is not safely reversible (ISO timestamps
+    contain date-component dashes too).
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    candidates: list[tuple[datetime, Path]] = []
-    for p in _snapshot_dir().glob("*.json"):
+    candidates: list[tuple[datetime, Path, dict]] = []
+    for p in sorted(_snapshot_dir().glob("*.json")):
         try:
-            ts = datetime.fromisoformat(p.stem.replace("-", ":", 2))
+            body = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("schema_drift: failed to read %s: %s", p, e)
+            continue
+        taken_at = body.get("taken_at")
+        if not isinstance(taken_at, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(taken_at)
         except ValueError:
             continue
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         if ts <= cutoff:
-            candidates.append((ts, p))
+            candidates.append((ts, p, body))
     if not candidates:
         return None
     candidates.sort(key=lambda t: t[0], reverse=True)
-    _, newest_old = candidates[0]
-    try:
-        return json.loads(newest_old.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("schema_drift: failed to load %s: %s", newest_old, e)
-        return None
+    _, _, newest_body = candidates[0]
+    return newest_body
 
 
 def check_drift(memory: "MemoryManager", *, window_days: int = 7) -> dict:
