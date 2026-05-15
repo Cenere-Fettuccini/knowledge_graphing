@@ -3,7 +3,7 @@
 import uuid
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from neo4j import GraphDatabase
 
 from src.core.config import settings
@@ -356,6 +356,218 @@ class Neo4jStore:
             session.run(wipe)
             record = session.run(seed, node_id=node_id, name=clean_name, slug=slug, now=now).single()
             return self._serialize_node(record["u"])
+
+    # ── Pending belief queue (S4.1) ──────────────────────────────────────────
+
+    REJECTED_TTL_DAYS = 30
+    PERMANENT_REJECTION_THRESHOLD = 3
+
+    def create_pending_belief(
+        self,
+        *,
+        content: str,
+        about_entity_id: str | None = None,
+        source: str = "rumination",
+        confidence: float = 0.6,
+    ) -> dict:
+        """Insert a :PendingBelief awaiting human approval."""
+        if not self.driver and not self.verify_connection():
+            raise RuntimeError("Neo4j offline; can't create pending belief.")
+        now = datetime.now(timezone.utc).isoformat()
+        belief_id = f"pending:{uuid.uuid4().hex[:12]}"
+        with self.driver.session() as session:
+            session.run(
+                """
+                CREATE (b:PendingBelief {
+                    id: $id, content: $content, name: $content,
+                    confidence: $conf, status: 'pending',
+                    source: $source, created_at: $now, updated_at: $now
+                })
+                """,
+                id=belief_id, content=content, conf=confidence,
+                source=source, now=now,
+            )
+            if about_entity_id:
+                session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $bid}), (e {id: $eid})
+                    MERGE (b)-[:ABOUT]->(e)
+                    """,
+                    bid=belief_id, eid=about_entity_id,
+                )
+            else:
+                # Anchor to root so the reachability sweep doesn't quarantine it.
+                session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $bid}), (root:Person:User {is_root: true})
+                    MERGE (b)-[:ABOUT]->(root)
+                    """,
+                    bid=belief_id,
+                )
+            rec = session.run(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b", id=belief_id
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def list_pending_beliefs(self, *, limit: int = 50) -> list[dict]:
+        if not self.driver and not self.verify_connection():
+            return []
+        with self.driver.session() as session:
+            return [
+                self._serialize_node(r["b"])
+                for r in session.run(
+                    """
+                    MATCH (b:PendingBelief {status: 'pending'})
+                    WHERE NOT b:Quarantine
+                    RETURN b ORDER BY b.created_at DESC LIMIT $limit
+                    """,
+                    limit=limit,
+                )
+            ]
+
+    def approve_pending_belief(self, belief_id: str) -> dict:
+        """Promote :PendingBelief -> :Belief with status='active'."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b:PendingBelief {id: $id})
+                REMOVE b:PendingBelief
+                SET b:Belief, b.status = 'active', b.approved_at = $now, b.updated_at = $now
+                RETURN b
+                """,
+                id=belief_id, now=now,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def edit_pending_belief(self, belief_id: str, *, new_content: str) -> dict:
+        """Edit content then promote to :Belief, recording an edit log entry."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b:PendingBelief {id: $id})
+                REMOVE b:PendingBelief
+                SET b:Belief,
+                    b.original_content = b.content,
+                    b.content = $new_content,
+                    b.name = $new_content,
+                    b.status = 'active',
+                    b.edited_at = $now,
+                    b.approved_at = $now,
+                    b.updated_at = $now
+                RETURN b
+                """,
+                id=belief_id, new_content=new_content, now=now,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def reject_pending_belief(self, belief_id: str, *, reason: str = "") -> dict:
+        """Demote :PendingBelief -> :RejectedHypothesis with a 30-day TTL.
+
+        If the same content has been rejected ``PERMANENT_REJECTION_THRESHOLD``+
+        times within the window, promotes the new rejection to a permanent
+        :RejectedBelief instead so the rumination engine learns from it.
+        """
+        if not self.driver and not self.verify_connection():
+            return {}
+        now = datetime.now(timezone.utc)
+        ttl_iso = (now + timedelta(days=self.REJECTED_TTL_DAYS)).isoformat()
+        window_start_iso = (now - timedelta(days=self.REJECTED_TTL_DAYS)).isoformat()
+        now_iso = now.isoformat()
+
+        with self.driver.session() as session:
+            # Count recent rejections of similar content (exact match for now;
+            # semantic-match upgrade is a follow-up).
+            content_row = session.run(
+                "MATCH (b:PendingBelief {id: $id}) RETURN b.content AS c", id=belief_id
+            ).single()
+            if not content_row:
+                return {}
+            content = content_row["c"] or ""
+            recent = session.run(
+                """
+                MATCH (h:RejectedHypothesis)
+                WHERE h.content = $content AND h.rejected_at >= $window_start
+                RETURN count(h) AS c
+                """,
+                content=content, window_start=window_start_iso,
+            ).single()
+            recent_count = int(recent["c"]) if recent else 0
+
+            if recent_count + 1 >= self.PERMANENT_REJECTION_THRESHOLD:
+                target_label = "RejectedBelief"
+                rec = session.run(
+                    f"""
+                    MATCH (b:PendingBelief {{id: $id}})
+                    REMOVE b:PendingBelief
+                    SET b:{target_label},
+                        b.status = 'rejected_permanent',
+                        b.rejection_reason = $reason,
+                        b.rejected_at = $now,
+                        b.updated_at = $now,
+                        b.rejection_count = $count
+                    RETURN b
+                    """,
+                    id=belief_id, reason=reason, now=now_iso,
+                    count=recent_count + 1,
+                ).single()
+            else:
+                rec = session.run(
+                    """
+                    MATCH (b:PendingBelief {id: $id})
+                    REMOVE b:PendingBelief
+                    SET b:RejectedHypothesis,
+                        b.status = 'rejected',
+                        b.rejection_reason = $reason,
+                        b.rejected_at = $now,
+                        b.expires_at = $expires,
+                        b.updated_at = $now
+                    RETURN b
+                    """,
+                    id=belief_id, reason=reason, now=now_iso, expires=ttl_iso,
+                ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def purge_expired_rejections(self) -> int:
+        """DETACH DELETE :RejectedHypothesis whose expires_at is past."""
+        if not self.driver and not self.verify_connection():
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (h:RejectedHypothesis)
+                WHERE h.expires_at < $now
+                WITH collect(h) AS doomed
+                FOREACH (x IN doomed | DETACH DELETE x)
+                RETURN size(doomed) AS deleted
+                """,
+                now=now_iso,
+            ).single()
+            return int(rec["deleted"]) if rec else 0
+
+    def list_active_rejections(self, *, limit: int = 100) -> list[dict]:
+        """Active :RejectedHypothesis nodes (for the rumination engine's negative set)."""
+        if not self.driver and not self.verify_connection():
+            return []
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.driver.session() as session:
+            return [
+                self._serialize_node(r["h"])
+                for r in session.run(
+                    """
+                    MATCH (h:RejectedHypothesis)
+                    WHERE h.expires_at >= $now
+                    RETURN h ORDER BY h.rejected_at DESC LIMIT $limit
+                    """,
+                    now=now_iso, limit=limit,
+                )
+            ]
 
     # ── Schema drift counts (S3.5) ───────────────────────────────────────────
 

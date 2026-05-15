@@ -331,3 +331,72 @@ async def schema_drift(
 async def schema_snapshot(memory: MemoryManager = Depends(get_memory_manager)):
     from src.agent_platform.analyzers.schema_drift import take_snapshot
     return take_snapshot(memory)
+
+
+# ── Pending belief queue (S4.1) ──────────────────────────────────────────────
+
+@router.get("/beliefs/pending")
+async def list_pending_beliefs(
+    limit: int = Query(50, ge=1, le=500),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"beliefs": memory.list_pending_beliefs(limit=limit)}
+
+
+@router.post("/beliefs/pending")
+async def create_pending_belief(
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    content = (payload or {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise HTTPException(status_code=400, detail="`content` is required")
+    return memory.create_pending_belief(
+        content=content,
+        about_entity_id=payload.get("about_entity_id"),
+        source=payload.get("source", "rumination"),
+        confidence=float(payload.get("confidence", 0.6)),
+    )
+
+
+@router.post("/beliefs/pending/{belief_id}/approve")
+async def approve_pending_belief(
+    belief_id: str,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return memory.approve_pending_belief(belief_id) or {"ok": False}
+
+
+@router.post("/beliefs/pending/{belief_id}/edit")
+async def edit_pending_belief(
+    belief_id: str,
+    payload: dict = Body(...),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    new_content = (payload or {}).get("new_content", "")
+    if not isinstance(new_content, str) or not new_content.strip():
+        raise HTTPException(status_code=400, detail="`new_content` is required")
+    return memory.edit_pending_belief(belief_id, new_content=new_content)
+
+
+@router.post("/beliefs/pending/{belief_id}/reject")
+async def reject_pending_belief(
+    belief_id: str,
+    payload: dict | None = Body(default=None),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    reason = ((payload or {}).get("reason") or "").strip()
+    return memory.reject_pending_belief(belief_id, reason=reason)
+
+
+@router.post("/beliefs/rejections/purge")
+async def purge_expired_rejections(memory: MemoryManager = Depends(get_memory_manager)):
+    return {"deleted": memory.purge_expired_rejections()}
+
+
+@router.get("/beliefs/rejections/active")
+async def list_active_rejections(
+    limit: int = Query(100, ge=1, le=500),
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    return {"rejections": memory.list_active_rejections(limit=limit)}

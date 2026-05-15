@@ -892,6 +892,39 @@ class MemoryManager:
         """
         return self.neo4j.bootstrap_user_root(name)
 
+    # ── Pending belief queue (S4.1) ──────────────────────────────────────────
+
+    def create_pending_belief(
+        self,
+        *,
+        content: str,
+        about_entity_id: str | None = None,
+        source: str = "rumination",
+        confidence: float = 0.6,
+    ) -> dict:
+        return self.neo4j.create_pending_belief(
+            content=content, about_entity_id=about_entity_id,
+            source=source, confidence=confidence,
+        )
+
+    def list_pending_beliefs(self, *, limit: int = 50) -> list[dict]:
+        return self.neo4j.list_pending_beliefs(limit=limit)
+
+    def approve_pending_belief(self, belief_id: str) -> dict:
+        return self.neo4j.approve_pending_belief(belief_id)
+
+    def edit_pending_belief(self, belief_id: str, *, new_content: str) -> dict:
+        return self.neo4j.edit_pending_belief(belief_id, new_content=new_content)
+
+    def reject_pending_belief(self, belief_id: str, *, reason: str = "") -> dict:
+        return self.neo4j.reject_pending_belief(belief_id, reason=reason)
+
+    def purge_expired_rejections(self) -> int:
+        return self.neo4j.purge_expired_rejections()
+
+    def list_active_rejections(self, *, limit: int = 100) -> list[dict]:
+        return self.neo4j.list_active_rejections(limit=limit)
+
     # ── Schema drift (S3.5) ──────────────────────────────────────────────────
 
     def graph_label_counts(self) -> dict:
