@@ -24,8 +24,16 @@ def _build_belief_canonicalizer(memory: MemoryManager) -> BeliefCanonicalizer:
     return BeliefCanonicalizer(memory=memory)
 
 
-def get_graph_overview(memory: MemoryManager, limit: int = 100) -> dict:
-    return memory.graph_overview(limit=limit)
+def get_graph_overview(
+    memory: MemoryManager,
+    limit: int = 100,
+    *,
+    era_id: str | None = None,
+    active_self_only: bool = False,
+) -> dict:
+    return memory.graph_overview(
+        limit=limit, era_id=era_id, active_self_only=active_self_only
+    )
 
 
 def get_node_detail(node_id: str, memory: MemoryManager) -> dict:

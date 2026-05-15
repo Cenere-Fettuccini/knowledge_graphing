@@ -354,9 +354,21 @@ class MemoryManager:
 
     # ── Knowledge graph public queries ────────────────────────────────────────
 
-    def graph_overview(self, limit: int = 100) -> dict:
-        """Return node/relationship counts and top labels from Neo4j."""
-        return self.neo4j.get_explorer_graph_overview(limit=limit)
+    def graph_overview(
+        self,
+        limit: int = 100,
+        *,
+        era_id: str | None = None,
+        active_self_only: bool = False,
+    ) -> dict:
+        """Return node/relationship counts and top labels from Neo4j.
+
+        ``era_id`` scopes to a specific :Era. ``active_self_only`` scopes
+        to any era currently ongoing (end_date null or >= today).
+        """
+        return self.neo4j.get_explorer_graph_overview(
+            limit=limit, era_id=era_id, active_self_only=active_self_only
+        )
 
     def graph_node_detail(self, node_id: str) -> dict:
         """Return a node's properties and its connections by ID."""

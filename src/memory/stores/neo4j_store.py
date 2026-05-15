@@ -466,14 +466,47 @@ class Neo4jStore:
         label = str(node_data.get("label") or "")
         return label == "TestNode" or any(node_id.startswith(prefix) for prefix in self.TEST_ID_PREFIXES)
 
-    def get_explorer_graph_overview(self, limit: int = 100) -> dict:
-        """Return a curated graph centered on beliefs, tasks, projects, and linked entities."""
+    def get_explorer_graph_overview(
+        self,
+        limit: int = 100,
+        *,
+        era_id: str | None = None,
+        active_self_only: bool = False,
+    ) -> dict:
+        """Return a curated graph centered on beliefs, tasks, projects, and linked entities.
+
+        S3.2: optional era scoping. ``era_id`` restricts to nodes bound to
+        that specific era via OCCURRED_IN. ``active_self_only`` restricts
+        to nodes bound to any era whose ``end_date`` is null or in the
+        future — the "what's live right now" view. The two filters are
+        OR'd at the node level (a node visible in either filter is kept).
+        """
         if not self.driver and not self.verify_connection():
             return {"nodes": [], "edges": [], "stats": {"nodes": 0, "edges": 0}}
 
-        query = """
+        era_clauses = ["NOT root:Quarantine"]
+        params: dict = {
+            "limit": limit,
+            "root_labels": list(self.EXPLORER_ROOT_LABELS),
+            "hidden_labels": list(self.EXPLORER_HIDDEN_LABELS),
+        }
+        if era_id:
+            era_clauses.append(
+                "EXISTS { MATCH (root)-[:OCCURRED_IN]->(:Era {id: $era_id}) }"
+            )
+            params["era_id"] = era_id
+        elif active_self_only:
+            era_clauses.append(
+                "EXISTS { MATCH (root)-[:OCCURRED_IN]->(e:Era) "
+                "WHERE e.end_date IS NULL OR e.end_date >= $today }"
+            )
+            params["today"] = datetime.now(timezone.utc).date().isoformat()
+        era_filter = " AND ".join(era_clauses)
+
+        query = f"""
         MATCH (root)
         WHERE any(label IN labels(root) WHERE label IN $root_labels)
+          AND {era_filter}
         WITH root
         ORDER BY coalesce(root.updated_at, root.created_at, root.last_updated_at, root.name) DESC
         LIMIT $limit
@@ -489,12 +522,7 @@ class Neo4jStore:
         edges = []
 
         with self.driver.session() as session:
-            result = session.run(
-                query,
-                limit=limit,
-                root_labels=list(self.EXPLORER_ROOT_LABELS),
-                hidden_labels=list(self.EXPLORER_HIDDEN_LABELS),
-            )
+            result = session.run(query, **params)
             for record in result:
                 root = record["root"]
                 if root is not None:

@@ -31,9 +31,13 @@ async def bootstrap_user(
 @router.get("/graph/overview")
 async def get_overview(
     limit: int = Query(100, ge=1, le=1000),
+    era_id: str | None = Query(None),
+    active_self_only: bool = Query(False),
     memory: MemoryManager = Depends(get_memory_manager),
 ):
-    return services.get_graph_overview(memory, limit=limit)
+    return services.get_graph_overview(
+        memory, limit=limit, era_id=era_id, active_self_only=active_self_only
+    )
 
 
 @router.get("/graph/node/{node_id}")
