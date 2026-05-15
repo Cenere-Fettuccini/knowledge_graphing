@@ -4,33 +4,9 @@ from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import get_memory_manager
 
 
-def save_belief(
-    content: str,
-    about_entity: str = "",
-    confidence: float = 0.8,
-    source_text: str = "",
-):
-    """
-    Store a belief or opinion in the Knowledge Graph.
-    A belief tracks how the user's thinking on a topic evolves over time.
-    """
-    logger.info("Tool Call: save_belief -> %s", content[:50])
-    try:
-        offline = ensure_graph_online()
-        if offline:
-            return offline
-
-        memory = get_memory_manager()
-        entity_id = memory.find_entity(about_entity) if about_entity else None
-        belief_id = memory.upsert_belief(
-            content,
-            confidence,
-            about_entity_id=entity_id,
-            source_text=source_text or None,
-        )
-        return f"Belief stored (ID: {belief_id}): '{content[:60]}'"
-    except Exception as e:
-        return f"Error storing belief: {str(e)}"
+# save_belief was retired in S0.10 — use graph_write with a BeliefIntent.
+# The resolver auto-anchors beliefs without a resolvable subject to the
+# user root via ABOUT, so beliefs never float.
 
 
 def get_belief_trail(belief_query: str):

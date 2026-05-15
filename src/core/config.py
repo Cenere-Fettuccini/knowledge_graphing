@@ -29,7 +29,11 @@ class Settings(BaseSettings):
     lm_studio_model: str = "google/gemma-4-e4b"
 
     # ── Knowledge analyzer ───────────────────────────────────────────────────
-    analyzer_enabled: bool = True
+    # Disabled by default after S0.10 — the count-triggered ingestion path
+    # (graph_ingest_trigger + graph_write) replaces the time-based extraction
+    # tick. Flip back to True only if you need to fall back to the legacy
+    # direct-write KnowledgeAnalyzer.
+    analyzer_enabled: bool = False
     analyzer_tick_seconds: int = 900   # how often the auto-drain scheduler ticks
     analyzer_batch_size: int = 20      # Chroma rows per LLM call
 

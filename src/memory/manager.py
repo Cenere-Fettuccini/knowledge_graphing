@@ -545,6 +545,16 @@ class MemoryManager:
                 exc_info=True,
             )
 
+    def mark_all_unanalyzed(self, *, include_ephemeral: bool = False) -> int:
+        """Reset every Chroma row back to ``analyzed: False`` for reprocessing.
+
+        Used after pipeline changes so historical conversations flow through
+        the new extraction path. Skips ephemeral rows by default.
+        """
+        if not self._is_chroma_available():
+            return 0
+        return self.chroma.mark_all_unanalyzed(include_ephemeral=include_ephemeral)
+
     def mark_analyzed(self, memory_ids: list[str], run_id: str | None = None) -> int:
         """Stamp the given Chroma rows so the analyzer doesn't reprocess them."""
         if not memory_ids or not self._is_chroma_available():
