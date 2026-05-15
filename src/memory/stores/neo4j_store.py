@@ -765,16 +765,150 @@ class Neo4jStore:
             ).single()
             return bool(rec and rec["linked"] > 0)
 
-    def list_contradictions(self, *, limit: int = 50) -> list[dict]:
+    def get_belief(self, belief_id: str) -> dict:
+        """Fetch a single belief (any belief-family label) by id, or {}."""
+        if not self.driver and not self.verify_connection():
+            return {}
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (b {id: $id})
+                WHERE b:Belief OR b:PendingBelief
+                   OR b:RejectedHypothesis OR b:RejectedBelief
+                RETURN b LIMIT 1
+                """,
+                id=belief_id,
+            ).single()
+            return self._serialize_node(rec["b"]) if rec else {}
+
+    def resolve_contradiction(
+        self,
+        belief_a_id: str,
+        belief_b_id: str,
+        *,
+        summary: str,
+        user_reply: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Land a structured reconciliation onto a CONTRADICTS edge (CT8).
+
+        Creates a ``:RefinementSession`` node anchored to both beliefs via
+        the appropriate ``SUPPORTED_BY`` / ``WEAKENED_BY`` edges, then
+        stamps the CONTRADICTS edge with ``resolved``, ``resolution_summary``,
+        and ``resolved_at``. The session node carries the full user reply
+        for provenance.
+
+        ``evidence`` items: ``{belief: "a"|"b", kind: "supports"|"weakens",
+        text: <excerpt>}``. Anything malformed is skipped silently — the
+        edge update still happens.
+
+        Returns a stats dict ``{ok, session_id, edges_written, resolved}``.
+        """
+        if not self.driver and not self.verify_connection():
+            return {"ok": False, "edges_written": 0}
+        if belief_a_id == belief_b_id:
+            return {"ok": False, "edges_written": 0}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        session_id = f"refine:{uuid.uuid4().hex[:12]}"
+        edges_written = 0
+
+        with self.driver.session() as session:
+            # 1. Create the RefinementSession node.
+            session.run(
+                """
+                CREATE (s:RefinementSession {
+                    id: $sid, name: $preview,
+                    user_reply: $reply, summary: $summary,
+                    created_at: $now
+                })
+                """,
+                sid=session_id,
+                preview=(summary or user_reply)[:60],
+                reply=user_reply,
+                summary=summary,
+                now=now_iso,
+            )
+
+            # 2. Write evidence edges. Bad rows are silently dropped because
+            #    the LLM extractor already filtered the obvious mistakes;
+            #    anything that survived to here but still mismatches is
+            #    treated as a "no evidence" case.
+            belief_ids = {"a": belief_a_id, "b": belief_b_id}
+            for item in evidence or []:
+                target = belief_ids.get(item.get("belief"))
+                kind = item.get("kind")
+                text = item.get("text")
+                if not target or kind not in ("supports", "weakens") or not text:
+                    continue
+                rel_type = "SUPPORTED_BY" if kind == "supports" else "WEAKENED_BY"
+                rec = session.run(
+                    f"""
+                    MATCH (b:Belief {{id: $bid}}), (s:RefinementSession {{id: $sid}})
+                    MERGE (b)-[r:{rel_type}]->(s)
+                    ON CREATE SET r.text = $text, r.created_at = $now
+                    RETURN count(r) AS c
+                    """,
+                    bid=target, sid=session_id, text=text, now=now_iso,
+                ).single()
+                if rec and rec["c"]:
+                    edges_written += 1
+
+            # 3. Anchor the session to root if the evidence list ended up
+            #    empty — without an edge it would be quarantined on the
+            #    next sweep.
+            if edges_written == 0:
+                session.run(
+                    """
+                    MATCH (s:RefinementSession {id: $sid}),
+                          (root:Person:User {is_root: true})
+                    MERGE (s)-[:NOTE_FOR]->(root)
+                    """,
+                    sid=session_id,
+                )
+
+            # 4. Stamp the CONTRADICTS edge with the resolution.
+            session.run(
+                """
+                MATCH (a:Belief {id: $a})-[r:CONTRADICTS]->(b:Belief {id: $b})
+                SET r.resolved = $resolved,
+                    r.resolution_summary = $summary,
+                    r.refinement_session_id = $sid,
+                    r.resolved_at = $now
+                """,
+                a=belief_a_id, b=belief_b_id, resolved=resolved,
+                summary=summary, sid=session_id, now=now_iso,
+            )
+
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "edges_written": edges_written,
+            "resolved": resolved,
+        }
+
+    def list_contradictions(
+        self, *, limit: int = 50, include_resolved: bool = False
+    ) -> list[dict]:
+        """List CONTRADICTS pairs. Default hides reconciled ones (CT8).
+
+        Pass ``include_resolved=True`` to see resolved pairs too — useful
+        for an audit view but not what the digest wants.
+        """
         if not self.driver and not self.verify_connection():
             return []
-        cypher = """
+        resolved_clause = "" if include_resolved else "AND (r.resolved IS NULL OR r.resolved = false)"
+        cypher = f"""
         MATCH (a:Belief)-[r:CONTRADICTS]->(b:Belief)
         WHERE NOT a:Quarantine AND NOT b:Quarantine
+          {resolved_clause}
         RETURN a.id AS a_id, a.content AS a_content,
                b.id AS b_id, b.content AS b_content,
                r.reason AS reason, r.similarity AS similarity,
-               r.detected_at AS detected_at
+               r.detected_at AS detected_at,
+               r.resolved AS resolved,
+               r.resolution_summary AS resolution_summary
         ORDER BY r.detected_at DESC
         LIMIT $limit
         """

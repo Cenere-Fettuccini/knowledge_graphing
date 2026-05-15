@@ -303,14 +303,38 @@ class ProactiveBot:
                 return f"✓ Edited and approved: \"{user_text[:80]}\""
             return "Couldn't find that pending belief — it may have been actioned already."
         if kind == "reconcile":
-            # For now, accept free text as a reconciliation note and write it
-            # to the contradiction edge metadata. The full Socratic flow
-            # (multi-turn with the LLM) is a future enhancement.
+            # CT8 (quick mode): single-shot reconciliation, but the reply
+            # is parsed into a structured resolution by a Gemini Flash
+            # call. The extractor produces a summary + per-belief evidence
+            # items, which are landed as SUPPORTED_BY / WEAKENED_BY edges
+            # from a fresh :RefinementSession node. The CONTRADICTS edge
+            # is stamped resolved so the digest stops surfacing it.
+            from src.agent_platform.analyzers import refinement_extraction
+
             a_id = refinement.get("a_id", "")
             b_id = refinement.get("b_id", "")
-            self._memory.link_contradiction(
-                a_id, b_id, reason=f"user note: {user_text[:160]}",
-                run_id="refinement",
+            belief_a = self._memory.get_belief(a_id) or {}
+            belief_b = self._memory.get_belief(b_id) or {}
+            a_text = belief_a.get("content") or belief_a.get("name") or ""
+            b_text = belief_b.get("content") or belief_b.get("name") or ""
+
+            parsed = await refinement_extraction.parse_reconciliation_reply(
+                belief_a_text=a_text, belief_b_text=b_text, user_reply=user_text,
             )
-            return f"⚖ Note recorded on contradiction. You can /evolve_belief if one supersedes the other."
+            summary = parsed.get("summary") or user_text[:200]
+            evidence = parsed.get("evidence") or []
+            resolved = bool(parsed.get("resolved"))
+
+            stats = self._memory.resolve_contradiction(
+                a_id, b_id,
+                summary=summary, user_reply=user_text,
+                evidence=evidence, resolved=resolved,
+            )
+            edges = stats.get("edges_written", 0)
+            marker = "✓ Reconciled" if resolved else "⚖ Noted"
+            evidence_note = (
+                f" ({edges} evidence edge{'s' if edges != 1 else ''})"
+                if edges else ""
+            )
+            return f"{marker}: {summary[:160]}{evidence_note}"
         return "Unknown refinement state — ignored."

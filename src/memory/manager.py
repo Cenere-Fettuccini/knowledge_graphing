@@ -922,8 +922,37 @@ class MemoryManager:
             reason=reason, similarity=similarity, run_id=run_id,
         )
 
-    def list_contradictions(self, *, limit: int = 50) -> list[dict]:
-        return self.neo4j.list_contradictions(limit=limit)
+    def list_contradictions(
+        self, *, limit: int = 50, include_resolved: bool = False
+    ) -> list[dict]:
+        return self.neo4j.list_contradictions(
+            limit=limit, include_resolved=include_resolved
+        )
+
+    def get_belief(self, belief_id: str) -> dict:
+        """Fetch a single belief node by id, across all belief-family labels."""
+        return self.neo4j.get_belief(belief_id)
+
+    def resolve_contradiction(
+        self,
+        belief_a_id: str,
+        belief_b_id: str,
+        *,
+        summary: str,
+        user_reply: str,
+        evidence: list[dict],
+        resolved: bool = True,
+    ) -> dict:
+        """Land a structured reconciliation on a CONTRADICTS edge (CT8).
+
+        See ``Neo4jStore.resolve_contradiction`` for the shape contract.
+        Returns ``{ok, session_id, edges_written, resolved}``.
+        """
+        return self.neo4j.resolve_contradiction(
+            belief_a_id, belief_b_id,
+            summary=summary, user_reply=user_reply,
+            evidence=evidence, resolved=resolved,
+        )
 
     # ── Pending belief queue (S4.1) ──────────────────────────────────────────
 
