@@ -28,12 +28,6 @@ class Settings(BaseSettings):
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model: str = "google/gemma-4-e4b"
 
-    # ── Knowledge analyzer (manual + bulk-importer only) ─────────────────────
-    # The time-based AnalyzerScheduler was retired in CT1 — extraction now
-    # runs through graph_ingest_trigger on Chroma queue depth. The settings
-    # below only control batch sizing for the manual /analyze/run route and
-    # the bulk-importer post-write drain (src/tools/ingest.py).
-    analyzer_batch_size: int = 20      # Chroma rows per LLM call
 
     # ── Session persistence ───────────────────────────────────────────────────
     session_store_path: str = "./data/sessions.json"

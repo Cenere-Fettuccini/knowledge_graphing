@@ -97,7 +97,7 @@ async def run_analyzer(
         raise HTTPException(status_code=400, detail="batch_size must be an integer in 1..200")
     if model is not None and not isinstance(model, str):
         raise HTTPException(status_code=400, detail="model must be a string if provided")
-    return services.run_analyzer(memory, batch_size=batch_size, model=model)
+    return await services.run_analyzer(memory, batch_size=batch_size, model=model)
 
 
 @router.get("/analyze/failed")

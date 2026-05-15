@@ -1,11 +1,13 @@
+import asyncio
 import logging
 from pathlib import Path
 
-from src.agent_platform.analyzers.knowledge import KnowledgeAnalyzer
-from src.core.config import settings
+from src.agent_platform.analyzers import graph_ingest_trigger
 from src.core.logging_config import setup_logging
 from src.ingestion.chunker import chunk_text
 from src.memory.manager import get_memory_manager
+
+_BULK_DRAIN_BATCH_SIZE = 20
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -68,35 +70,35 @@ class KnowledgeIngestor:
         return {"files": len(files), "chunks": chunk_total, "analyzer": analyzer_summary}
 
     def _drain_analyzer_queue(self) -> dict:
-        """Loop ``analyze_pending`` until the queue is empty, the LLM bails,
-        or we hit the safety cap. Yields back to the caller after each batch
-        so a giant ingest can't block on a single oversized LLM call.
+        """Loop the new extraction pass until the queue is empty or we hit
+        the safety cap. The pass is async (it hits LM Studio + Neo4j), so
+        we synchronously bridge into the loop here — this is a CLI entry
+        point with no event loop already running.
         """
-        analyzer = KnowledgeAnalyzer(memory=self.memory)
-        batch_size = settings.analyzer_batch_size
         max_batches = 50  # hard ceiling so a misbehaving model can't loop forever
         passes: list[dict] = []
 
-        for attempt in range(max_batches):
-            result = analyzer.analyze_pending(batch_size=batch_size)
-            passes.append(result.as_dict())
-            if result.skipped:
-                logger.info(
-                    "Bulk-ingest analyzer drain stopping after %d batches: %s",
-                    attempt,
-                    result.reason or "skipped",
+        async def _drain() -> None:
+            for attempt in range(max_batches):
+                result = await graph_ingest_trigger.run_extraction_pass(
+                    self.memory, batch_size=_BULK_DRAIN_BATCH_SIZE
                 )
-                break
-            if result.processed_messages == 0:
-                # Defensive: an unskipped result that processed nothing means
-                # the queue is empty.
-                break
-        else:
+                passes.append(result)
+                if result.get("skipped"):
+                    logger.info(
+                        "Bulk-ingest drain stopping after %d batches: %s",
+                        attempt, result.get("reason") or "skipped",
+                    )
+                    return
+                if not result.get("processed_messages"):
+                    return  # queue empty
             logger.warning(
-                "Bulk-ingest analyzer hit the %d-batch safety cap; "
-                "remaining rows will be picked up on the next scheduler tick.",
+                "Bulk-ingest drain hit the %d-batch safety cap; "
+                "remaining rows will be picked up on the next count trigger.",
                 max_batches,
             )
+
+        asyncio.run(_drain())
 
         return {
             "batches": len(passes),
