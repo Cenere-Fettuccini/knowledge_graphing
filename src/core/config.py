@@ -28,23 +28,12 @@ class Settings(BaseSettings):
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model: str = "google/gemma-4-e4b"
 
-    # ── Knowledge analyzer ───────────────────────────────────────────────────
-    # Disabled by default after S0.10 — the count-triggered ingestion path
-    # (graph_ingest_trigger + graph_write) replaces the time-based extraction
-    # tick. Flip back to True only if you need to fall back to the legacy
-    # direct-write KnowledgeAnalyzer.
-    analyzer_enabled: bool = False
-    analyzer_tick_seconds: int = 900   # how often the auto-drain scheduler ticks
+    # ── Knowledge analyzer (manual + bulk-importer only) ─────────────────────
+    # The time-based AnalyzerScheduler was retired in CT1 — extraction now
+    # runs through graph_ingest_trigger on Chroma queue depth. The settings
+    # below only control batch sizing for the manual /analyze/run route and
+    # the bulk-importer post-write drain (src/tools/ingest.py).
     analyzer_batch_size: int = 20      # Chroma rows per LLM call
-
-    # Bulk-mode pacing: when the unanalyzed queue exceeds the threshold the
-    # scheduler switches to tighter ticks and a larger batch so a backfill
-    # (journal import, history dump, etc.) drains in hours rather than days.
-    # Falls back to the normal pacing as soon as the queue is below the
-    # threshold again.
-    analyzer_bulk_threshold: int = 100        # depth that flips bulk mode on
-    analyzer_bulk_tick_seconds: int = 60
-    analyzer_bulk_batch_size: int = 100
 
     # ── Session persistence ───────────────────────────────────────────────────
     session_store_path: str = "./data/sessions.json"

@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from src.agent_platform.analyzers.scheduler import AnalyzerScheduler
 from src.rumination.engine import RuminationScheduler
 from src.apps.chat.app import get_chat_app
 from src.apps.credits.app import get_credits_app
@@ -41,28 +40,14 @@ def build_registry() -> AppRegistry:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start background services when FastAPI boots; stop them on shutdown."""
-    analyzer: AnalyzerScheduler | None = None
+    # The time-based AnalyzerScheduler was retired in CT1 — extraction is
+    # now driven by graph_ingest_trigger / cloud_belief_trigger which fire
+    # on Chroma queue depth rather than wall-clock ticks. KnowledgeAnalyzer
+    # itself stays for the manual /analyze/run route and the bulk-importer
+    # post-write drain.
     ruminator: RuminationScheduler | None = None
 
     memory = get_memory_manager()
-
-    if settings.analyzer_enabled:
-        try:
-            analyzer = AnalyzerScheduler(
-                memory=memory,
-                tick_seconds=settings.analyzer_tick_seconds,
-                batch_size=settings.analyzer_batch_size,
-                bulk_tick_seconds=settings.analyzer_bulk_tick_seconds,
-                bulk_batch_size=settings.analyzer_bulk_batch_size,
-                bulk_threshold=settings.analyzer_bulk_threshold,
-            )
-            analyzer.start()
-            app.state.analyzer_scheduler = analyzer
-        except Exception:  # pragma: no cover - never block startup on a scheduler failure
-            logger.exception("AnalyzerScheduler failed to start; continuing without it.")
-            analyzer = None
-    else:
-        logger.info("Analyzer scheduler disabled via settings.analyzer_enabled=False")
 
     if settings.rumination_enabled:
         try:
@@ -82,8 +67,6 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if analyzer is not None:
-            analyzer.stop()
         if ruminator is not None:
             ruminator.stop()
 
