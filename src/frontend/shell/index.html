@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="/shell-assets/explorer.css" />
     <link rel="stylesheet" href="/shell-assets/chat.css" />
     <link rel="stylesheet" href="/shell-assets/credits.css" />
+    <link rel="stylesheet" href="/shell-assets/architecture.css" />
 
     <!-- External libs -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -537,9 +538,60 @@
                 </div>
             </div>
 
+            <!-- ── ARCHITECTURE PAGE ──────────────────────────────────────── -->
+            <div class="page-view" id="page-arch">
+                <div class="arch-layout">
+
+                    <!-- Canvas area: SVG renders into #archCanvas, toolbar/legend overlay it -->
+                    <div class="arch-canvas-wrap">
+                        <div id="archCanvas" style="position:absolute;inset:0;"></div>
+
+                        <!-- Zoom toolbar (top-right of canvas) -->
+                        <div class="arch-toolbar">
+                            <button class="theme-btn" id="archZoomInBtn" title="Zoom In">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                            </button>
+                            <button class="theme-btn" id="archZoomOutBtn" title="Zoom Out">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                            </button>
+                            <button class="theme-btn" id="archResetBtn" title="Reset View">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Layer legend (bottom-left of canvas) -->
+                        <div class="arch-legend" id="archLegend"></div>
+                    </div>
+
+                    <!-- Detail panel (slides in from right on node click) -->
+                    <aside class="arch-detail" id="archDetail">
+                        <div id="archDetailContent">
+                            <div class="arch-detail-empty-state">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 8v4M12 16h.01"></path>
+                                </svg>
+                                <span>Click any component to see its coupling details</span>
+                            </div>
+                        </div>
+                    </aside>
+
+                </div>
+            </div>
+
         </div><!-- /page-container -->
 
     </div><!-- /app-shell -->
+
+    <!-- Tooltip (shared, absolute positioned) -->
+    <div class="arch-tooltip" id="archTooltip"></div>
 
     <!-- PASTE MODAL (Credits) -->
     <div class="modal-overlay" id="creditsPasteModal">
@@ -582,6 +634,7 @@
     <script src="/shell-assets/panel.js"></script>
     <script src="/shell-assets/graph.js"></script>
     <script src="/shell-assets/timeline.js"></script>
+    <script src="/shell-assets/architecture-page.js"></script>
 
     <!-- First-run bootstrap modal — shown when no :User root exists yet -->
     <div class="bootstrap-modal" id="bootstrapModal" hidden>

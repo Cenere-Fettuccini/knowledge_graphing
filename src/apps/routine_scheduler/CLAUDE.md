@@ -1,7 +1,8 @@
 # App: Routine Scheduler
 
-Stub app for scheduling routines, recurring structures, and calendar-driven automation.
-Currently only registers its `AppDefinition` — no services or API layer yet.
+Stub app for scheduling routines, recurring structures, and calendar-driven
+automation. Currently only registers its `AppDefinition` — no services or API
+layer yet.
 
 ## Files
 | File | Role |
@@ -9,12 +10,28 @@ Currently only registers its `AppDefinition` — no services or API layer yet.
 | `app.py` | `AppDefinition` registration — id, name, route_prefix, icon, status |
 | `static/index.html` | Placeholder UI |
 
+---
+
+## Called By
+| Caller | What it uses |
+|--------|-------------|
+| `src.platform.app_factory` | `get_routine_scheduler_app()` — imports factory to register the app |
+
+---
+
+## Calls Into
+| Dependency | What is called |
+|------------|---------------|
+| `src.platform.registry` | `AppDefinition` (in `app.py`) |
+
+---
+
 ## Adding Features to This App
-When building out this app, follow the same pattern as `chat` or `explorer`:
+Follow the same pattern as `chat` or `explorer`:
 
 1. Create `services.py` with pure business logic functions
 2. Create `api.py` with a FastAPI `APIRouter` that delegates to `services.py`
-3. Update `app.py` to wire in the router
+3. Update `app.py` to wire in the router and `api_prefix`
 
 **Allowed imports:**
 ```python
@@ -29,6 +46,8 @@ from src.agent_platform.public.contracts import AgentRunRequest
 from src.memory.manager import MemoryManager
 from src.core.config import settings
 ```
+
+---
 
 ## What NOT to Do
 - Do not import from other apps
