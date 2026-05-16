@@ -265,21 +265,34 @@
 
     function edgePath(sp, tp, isLTR) {
         if (isLTR) {
-            // Right edge of source → left edge of target
-            const sx = sp.x + NODE_W / 2 + 1;
-            const sy = sp.y;
-            const tx = tp.x - NODE_W / 2 - 1;
-            const ty = tp.y;
+            // Source exits from the right edge; cross-layer edges enter the
+            // target at its TOP edge so arrows point straight down into the
+            // next node instead of sideways into its left edge.
+            const sx = sp.x + NODE_W / 2 + 1;   // source right edge
+            const sy = sp.y;                     // source center y
+            const tx = tp.x;                     // target center x
+            const ty = tp.y - NODE_H / 2 - 1;    // target top edge
             const dx = tx - sx;
+            const dy = ty - sy;
+
             if (dx > 8) {
-                const cp1x = sx + dx * 0.42;
-                const cp2x = tx - dx * 0.42;
-                return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
+                // Forward: extend right from source, then drop into target
+                // from above. The two control points form an L-curve.
+                const cp1x = sx + Math.max(dx * 0.55, 28);
+                const cp1y = sy;
+                const cp2x = tx;
+                const cp2y = ty - Math.max(Math.abs(dy) * 0.45, 28);
+                return `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
             }
-            // Backward / same-column: arc above or below
-            const arcDir = sy < tp.y ? -1 : 1;
-            const offset = 55 + Math.abs(dx) * 0.25;
-            return `M ${sx} ${sy} C ${sx + 30} ${sy + arcDir * offset}, ${tx - 30} ${ty + arcDir * offset}, ${tx} ${ty}`;
+
+            // Backward / same-column: arc up and over so the path still
+            // enters the target from the top.
+            const arcOff = Math.max(80, Math.abs(dx) * 0.3 + 36);
+            const cp1x   = sx + 30;
+            const cp1y   = Math.min(sy, ty) - arcOff;
+            const cp2x   = tx;
+            const cp2y   = ty - arcOff;
+            return `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
         } else {
             // Bottom edge of source → top edge of target
             const sx = sp.x;
