@@ -5,7 +5,9 @@
     // DATA — component coupling map derived from CLAUDE.md files
     // ══════════════════════════════════════════════════════════════════════════
 
-    // col = left-to-right column index (0 = leftmost / entry point)
+    // col = column index shared by both layouts:
+    //   LTR (desktop): col maps to a left→right column position (COL_X)
+    //   TTB (mobile):  col maps to a top→bottom row position   (ROW_Y)
     const LAYER_CONFIG = {
         entry:      { label: 'Entry Points',   color: '#70695f', col: 0 },
         platform:   { label: 'Boot',           color: '#7E91BE', col: 1 },
@@ -18,25 +20,26 @@
         storage:    { label: 'Storage',        color: '#6B8F7A', col: 6 },
     };
 
-    // Column x-fractions (fraction of drawable width, left→right)
-    const COL_X = [0.045, 0.185, 0.340, 0.515, 0.655, 0.800, 0.940];
-
-    // yFrac = vertical position within the column (fraction of drawable height)
+    // yFrac: vertical position within the LTR column  (fraction of drawable height)
+    // xFrac: horizontal position within the TTB row   (fraction of drawable width)
     const NODES = [
         {
-            id: 'main', label: 'main.py', layer: 'entry', yFrac: 0.32,
+            id: 'main', label: 'main.py', layer: 'entry',
+            yFrac: 0.32, xFrac: 0.30,
             desc: 'FastAPI server entry point. Calls create_platform_app() and runs uvicorn.',
             note: null, claudeMd: null,
             calledBy: [], callsInto: ['platform'],
         },
         {
-            id: 'run_bot', label: 'run_bot.py', layer: 'entry', yFrac: 0.68,
+            id: 'run_bot', label: 'run_bot.py', layer: 'entry',
+            yFrac: 0.68, xFrac: 0.70,
             desc: 'Telegram bot entry point. Runs independently of the web server.',
             note: null, claudeMd: null,
             calledBy: [], callsInto: ['bot'],
         },
         {
-            id: 'platform', label: 'platform/', layer: 'platform', yFrac: 0.32,
+            id: 'platform', label: 'platform/', layer: 'platform',
+            yFrac: 0.32, xFrac: 0.30,
             desc: 'FastAPI app factory (create_platform_app), app registry, shell router, graph-ingest endpoint.',
             note: 'The only place that imports all five app get_*_app() factories. Starts/stops RuminationScheduler in lifespan.',
             claudeMd: 'src/platform/CLAUDE.md',
@@ -44,7 +47,8 @@
             callsInto: ['app_chat', 'app_explorer', 'app_credits', 'app_financial', 'app_routine', 'memory', 'rumination', 'core'],
         },
         {
-            id: 'bot', label: 'bot/', layer: 'bot', yFrac: 0.68,
+            id: 'bot', label: 'bot/', layer: 'bot',
+            yFrac: 0.68, xFrac: 0.70,
             desc: 'TelegramBot (handlers, session tracking) + ProactiveBot (outbound digests, reconciliation).',
             note: 'TelegramBot calls src.core.agent.Agent directly — pre-dates AgentService. Migrate to AgentService if refactoring.',
             claudeMd: 'src/bot/CLAUDE.md',
@@ -52,46 +56,53 @@
             callsInto: ['core', 'memory', 'public_gateway'],
         },
         {
-            id: 'app_chat', label: 'apps/chat', layer: 'app', yFrac: 0.09,
+            id: 'app_chat', label: 'apps/chat', layer: 'app',
+            yFrac: 0.09, xFrac: 0.08,
             desc: 'Browser conversation sessions. Session CRUD and message dispatch through the agent platform.',
             note: null, claudeMd: 'src/apps/chat/CLAUDE.md',
             calledBy: ['platform'], callsInto: ['public_gateway', 'memory'],
         },
         {
-            id: 'app_explorer', label: 'apps/explorer', layer: 'app', yFrac: 0.25,
+            id: 'app_explorer', label: 'apps/explorer', layer: 'app',
+            yFrac: 0.25, xFrac: 0.24,
             desc: 'Knowledge graph UI, system status, analyzer controls, canonicalization, eras, pending beliefs.',
             note: 'Only app that imports analyzers directly — it is the admin surface for the extraction pipeline.',
             claudeMd: 'src/apps/explorer/CLAUDE.md',
             calledBy: ['platform'], callsInto: ['public_gateway', 'memory', 'analyzers', 'ingestion'],
         },
         {
-            id: 'app_credits', label: 'apps/credits', layer: 'app', yFrac: 0.41,
+            id: 'app_credits', label: 'apps/credits', layer: 'app',
+            yFrac: 0.41, xFrac: 0.40,
             desc: 'LLM quota management console. Shows per-model headroom, imports rate limits.',
             note: 'Exception to the no-core-import rule — intentionally reads llm_router internals. Other apps use aquota_status() instead.',
             claudeMd: 'src/apps/credits/CLAUDE.md',
             calledBy: ['platform'], callsInto: ['core'],
         },
         {
-            id: 'app_financial', label: 'apps/financial', layer: 'app', yFrac: 0.57,
+            id: 'app_financial', label: 'apps/financial', layer: 'app',
+            yFrac: 0.57, xFrac: 0.57,
             desc: 'Finance workflows — stub. AppDefinition only, no services or API yet.',
             note: null, claudeMd: 'src/apps/financial_manager/CLAUDE.md',
             calledBy: ['platform'], callsInto: [],
         },
         {
-            id: 'app_routine', label: 'apps/routine', layer: 'app', yFrac: 0.71,
+            id: 'app_routine', label: 'apps/routine', layer: 'app',
+            yFrac: 0.71, xFrac: 0.73,
             desc: 'Scheduling automation — stub. AppDefinition only, no services or API yet.',
             note: null, claudeMd: 'src/apps/routine_scheduler/CLAUDE.md',
             calledBy: ['platform'], callsInto: [],
         },
         {
-            id: 'rumination', label: 'rumination/', layer: 'background', yFrac: 0.87,
+            id: 'rumination', label: 'rumination/', layer: 'background',
+            yFrac: 0.87, xFrac: 0.90,
             desc: 'Background scheduler started in FastAPI lifespan. Deep-pass belief synthesis and rabbit-hole ticks.',
             note: 'Disabled by settings.rumination_enabled=False. Manages ProactiveBot lifecycle inside the web server process.',
             claudeMd: 'src/rumination/CLAUDE.md',
             calledBy: ['platform'], callsInto: ['memory', 'public_gateway', 'bot'],
         },
         {
-            id: 'public_gateway', label: 'agent_platform/public', layer: 'gateway', yFrac: 0.35,
+            id: 'public_gateway', label: 'agent_platform/public', layer: 'gateway',
+            yFrac: 0.35, xFrac: 0.50,
             desc: 'AgentService + contracts (AgentRunRequest, AgentRunResult). The only app-facing entry point for the agent.',
             note: 'Wraps src.core.agent.Agent behind a stable interface. Apps must never import Agent directly.',
             claudeMd: 'src/agent_platform/public/CLAUDE.md',
@@ -99,14 +110,16 @@
             callsInto: ['core', 'memory'],
         },
         {
-            id: 'tools', label: 'agent_platform/tools', layer: 'infra', yFrac: 0.24,
+            id: 'tools', label: 'agent_platform/tools', layer: 'infra',
+            yFrac: 0.24, xFrac: 0.22,
             desc: 'LLM-callable tools registered via registry.py: graph_write, search_memories, tasks, beliefs, web_search, calendar.',
             note: 'Loaded by src.core.agent at init. Invoked by the LLM during a turn — not called directly by app code.',
             claudeMd: 'src/agent_platform/tools/CLAUDE.md',
             calledBy: ['core'], callsInto: ['memory'],
         },
         {
-            id: 'analyzers', label: 'agent_platform/analyzers', layer: 'infra', yFrac: 0.50,
+            id: 'analyzers', label: 'agent_platform/analyzers', layer: 'infra',
+            yFrac: 0.50, xFrac: 0.50,
             desc: 'Extraction pipeline: local-LLM (Gemma 4) for entities/tasks, Gemini cloud pass for beliefs, canonicalization.',
             note: 'Auto-triggered from MemoryManager.store() when unanalyzed queue depth ≥ settings.graph_ingest_threshold.',
             claudeMd: 'src/agent_platform/analyzers/CLAUDE.md',
@@ -114,14 +127,16 @@
             callsInto: ['memory', 'core'],
         },
         {
-            id: 'ingestion', label: 'ingestion/', layer: 'infra', yFrac: 0.76,
+            id: 'ingestion', label: 'ingestion/', layer: 'infra',
+            yFrac: 0.76, xFrac: 0.78,
             desc: 'Bulk import pipeline: JSONL, plaintext, Telegram export formats → Chroma queue.',
             note: 'Calls memory.store() only (Chroma). After import, app_explorer calls run_extraction_pass() to populate Neo4j.',
             claudeMd: 'src/ingestion/CLAUDE.md',
             calledBy: ['app_explorer'], callsInto: ['memory'],
         },
         {
-            id: 'core', label: 'src/core', layer: 'core', yFrac: 0.50,
+            id: 'core', label: 'src/core', layer: 'core',
+            yFrac: 0.50, xFrac: 0.50,
             desc: 'Agent, LLM router, rate limiter, config (settings), prompts — internal infrastructure.',
             note: 'Apps must not import from here directly (except settings). Only credits app uses llm_router intentionally.',
             claudeMd: 'src/core/CLAUDE.md',
@@ -129,7 +144,8 @@
             callsInto: ['memory', 'tools'],
         },
         {
-            id: 'memory', label: 'src/memory', layer: 'storage', yFrac: 0.50,
+            id: 'memory', label: 'src/memory', layer: 'storage',
+            yFrac: 0.50, xFrac: 0.50,
             desc: 'MemoryManager facade: ChromaDB (conversation history) + Neo4j (knowledge graph). Lazy singleton via get_memory_manager().',
             note: 'Never access .neo4j or .chroma directly. After store() calls, maybe_trigger() fires the analyzer if queue is full.',
             claudeMd: 'src/memory/CLAUDE.md',
@@ -156,96 +172,154 @@
     NODES.forEach(n => { NODE_BY_ID[n.id] = n; });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // LAYOUT — left-to-right
+    // LAYOUT CONSTANTS
     // ══════════════════════════════════════════════════════════════════════════
 
     const NODE_W  = 116;
     const NODE_H  = 32;
     const NODE_RX = 5;
 
-    // Canvas intrinsic dimensions (SVG viewBox)
-    const CANVAS_W = 1120;
-    const CANVAS_H = 620;
+    // Desktop — columns flow left → right
+    const CANVAS_W_LTR = 1120;
+    const CANVAS_H_LTR = 620;
+    const COL_X = [0.045, 0.185, 0.340, 0.515, 0.655, 0.800, 0.940];
 
-    const PAD_TOP    = 46;   // room for column header labels
+    // Mobile — rows flow top → bottom
+    const CANVAS_W_TTB = 900;
+    const CANVAS_H_TTB = 920;
+    const ROW_Y = [0.045, 0.185, 0.320, 0.465, 0.610, 0.760, 0.940];
+
+    const PAD_TOP    = 46;
     const PAD_BOTTOM = 20;
     const PAD_LEFT   = 18;
     const PAD_RIGHT  = 18;
 
-    function computePositions() {
-        const drawW = CANVAS_W - PAD_LEFT - PAD_RIGHT;
-        const drawH = CANVAS_H - PAD_TOP  - PAD_BOTTOM;
+    // Switch to TTB when the canvas container is narrower than this
+    const MOBILE_BREAKPOINT = 640;
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // POSITIONS
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function computePositions(isLTR) {
+        const canvasW = isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
+        const canvasH = isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
+        const drawW   = canvasW - PAD_LEFT - PAD_RIGHT;
+        const drawH   = canvasH - PAD_TOP  - PAD_BOTTOM;
         const pos = {};
         NODES.forEach(node => {
-            const colX = COL_X[LAYER_CONFIG[node.layer].col];
-            pos[node.id] = {
-                x: PAD_LEFT + colX * drawW,
-                y: PAD_TOP  + node.yFrac * drawH,
-            };
+            const ci = LAYER_CONFIG[node.layer].col;
+            if (isLTR) {
+                pos[node.id] = {
+                    x: PAD_LEFT + COL_X[ci] * drawW,
+                    y: PAD_TOP  + node.yFrac * drawH,
+                };
+            } else {
+                pos[node.id] = {
+                    x: PAD_LEFT + node.xFrac * drawW,
+                    y: PAD_TOP  + ROW_Y[ci]  * drawH,
+                };
+            }
         });
         return pos;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // EDGE PATHS — horizontal flow (right side of source → left side of target)
+    // EDGE PATHS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function edgePath(sp, tp) {
-        const sx = sp.x + NODE_W / 2 + 1;   // right edge of source
-        const sy = sp.y;
-        const tx = tp.x - NODE_W / 2 - 1;   // left edge of target
-        const ty = tp.y;
-
-        const dx = tx - sx;
-
-        if (dx > 8) {
-            // Forward (leftward→rightward): smooth horizontal S-curve
-            const cp1x = sx + dx * 0.42;
-            const cp2x = tx - dx * 0.42;
-            return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
+    function edgePath(sp, tp, isLTR) {
+        if (isLTR) {
+            // Right edge of source → left edge of target
+            const sx = sp.x + NODE_W / 2 + 1;
+            const sy = sp.y;
+            const tx = tp.x - NODE_W / 2 - 1;
+            const ty = tp.y;
+            const dx = tx - sx;
+            if (dx > 8) {
+                const cp1x = sx + dx * 0.42;
+                const cp2x = tx - dx * 0.42;
+                return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
+            }
+            // Backward / same-column: arc above or below
+            const arcDir = sy < tp.y ? -1 : 1;
+            const offset = 55 + Math.abs(dx) * 0.25;
+            return `M ${sx} ${sy} C ${sx + 30} ${sy + arcDir * offset}, ${tx - 30} ${ty + arcDir * offset}, ${tx} ${ty}`;
+        } else {
+            // Bottom edge of source → top edge of target
+            const sx = sp.x;
+            const sy = sp.y + NODE_H / 2 + 1;
+            const tx = tp.x;
+            const ty = tp.y - NODE_H / 2 - 1;
+            const dy = ty - sy;
+            if (dy > 8) {
+                const cp1y = sy + dy * 0.42;
+                const cp2y = ty - dy * 0.42;
+                return `M ${sx} ${sy} C ${sx} ${cp1y}, ${tx} ${cp2y}, ${tx} ${ty}`;
+            }
+            // Backward / same-row: arc left or right
+            const arcDir = sx < tp.x ? -1 : 1;
+            const offset = 55 + Math.abs(dy) * 0.25;
+            return `M ${sx} ${sy} C ${sx + arcDir * offset} ${sy + 30}, ${tx + arcDir * offset} ${ty - 30}, ${tx} ${ty}`;
         }
-
-        // Backward or same-column: arc above/below to avoid crossing nodes
-        const arcDir = sy < tp.y ? -1 : 1;  // go above if source is higher
-        const offset = 55 + Math.abs(dx) * 0.25;
-        return `M ${sx} ${sy} C ${sx + 30} ${sy + arcDir * offset}, ${tx - 30} ${ty + arcDir * offset}, ${tx} ${ty}`;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // STATE
     // ══════════════════════════════════════════════════════════════════════════
 
-    let _positions  = null;
-    let _selectedId = null;
-    let _svg        = null;
-    let _g          = null;
-    let _zoom       = null;
-    let _mounted    = false;
-    let _tooltip    = null;
+    let _positions      = null;
+    let _selectedId     = null;
+    let _svg            = null;
+    let _g              = null;
+    let _zoom           = null;
+    let _mounted        = false;
+    let _tooltip        = null;
+    let _isLTR          = true;
+    let _resizeObserver = null;
+    let _toolbarWired   = false;
 
     // ══════════════════════════════════════════════════════════════════════════
-    // RENDER
+    // RENDER / TEARDOWN / FIT
     // ══════════════════════════════════════════════════════════════════════════
+
+    function teardown(canvasId) {
+        const wrap = document.getElementById(canvasId);
+        if (wrap) wrap.innerHTML = '';
+        _svg = null; _g = null; _zoom = null; _positions = null; _selectedId = null;
+        clearDetail();
+    }
+
+    function fitToContainer(w, h) {
+        if (!_svg || !_zoom) return;
+        const cvW = _isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
+        const cvH = _isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
+        const s   = Math.min(w / cvW, h / cvH) * 0.96;
+        _svg.call(_zoom.transform,
+            d3.zoomIdentity.translate((w - cvW * s) / 2, (h - cvH * s) / 2).scale(s)
+        );
+    }
 
     function render(canvasId) {
         const wrap = document.getElementById(canvasId);
         if (!wrap) return;
 
-        _positions = computePositions();
+        const isLTR   = _isLTR;
+        const canvasW = isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
+        const canvasH = isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
 
-        // SVG — fixed viewBox, scales to fill container
+        _positions = computePositions(isLTR);
+
         _svg = d3.select(`#${canvasId}`)
             .append('svg')
             .attr('width', '100%')
             .attr('height', '100%')
-            .attr('viewBox', `0 0 ${CANVAS_W} ${CANVAS_H}`)
+            .attr('viewBox', `0 0 ${canvasW} ${canvasH}`)
             .attr('preserveAspectRatio', 'xMidYMid meet')
             .on('click', () => deselect());
 
-        // ── Arrow markers ─────────────────────────────────────────────────
-
+        // ── Arrow markers ─────────────────────────────────────────────────────
         const defs = _svg.append('defs');
-
         Object.entries(LAYER_CONFIG).forEach(([layerId, cfg]) => {
             defs.append('marker')
                 .attr('id', `arr-${layerId}`)
@@ -253,88 +327,73 @@
                 .attr('refX', 7).attr('refY', 0)
                 .attr('markerWidth', 5).attr('markerHeight', 5)
                 .attr('orient', 'auto')
-                .append('path').attr('d', 'M0,-4L8,0L0,4')
-                .attr('fill', cfg.color);
+                .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', cfg.color);
         });
-
         defs.append('marker')
             .attr('id', 'arr-dim')
             .attr('viewBox', '0 -4 8 8')
             .attr('refX', 7).attr('refY', 0)
             .attr('markerWidth', 5).attr('markerHeight', 5)
             .attr('orient', 'auto')
-            .append('path').attr('d', 'M0,-4L8,0L0,4')
-            .attr('fill', '#3a3835');
+            .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#3a3835');
 
-        // ── Zoom group ────────────────────────────────────────────────────
-
+        // ── Zoom group ────────────────────────────────────────────────────────
         _g = _svg.append('g').attr('class', 'arch-root');
-
         _zoom = d3.zoom()
-            .scaleExtent([0.3, 4.0])
+            .scaleExtent([0.25, 4.0])
             .on('zoom', (ev) => { _g.attr('transform', ev.transform); });
         _svg.call(_zoom);
 
-        // Fit diagram to the actual container on first render
-        const containerW = wrap.clientWidth  || CANVAS_W;
-        const containerH = wrap.clientHeight || CANVAS_H;
-        const initScale  = Math.min(containerW / CANVAS_W, containerH / CANVAS_H) * 0.96;
-        const initTx     = (containerW - CANVAS_W * initScale) / 2;
-        const initTy     = (containerH - CANVAS_H * initScale) / 2;
-        _svg.call(_zoom.transform, d3.zoomIdentity.translate(initTx, initTy).scale(initScale));
+        // ── Band lines + header labels ─────────────────────────────────────────
+        const drawW = canvasW - PAD_LEFT - PAD_RIGHT;
+        const drawH = canvasH - PAD_TOP  - PAD_BOTTOM;
 
-        // ── Column band lines + header labels ─────────────────────────────
+        const bandMeta = {};
+        Object.values(LAYER_CONFIG).forEach(cfg => {
+            if (!bandMeta[cfg.col]) bandMeta[cfg.col] = new Set();
+            bandMeta[cfg.col].add(cfg.label);
+        });
 
-        const drawW = CANVAS_W - PAD_LEFT - PAD_RIGHT;
-        const drawH = CANVAS_H - PAD_TOP  - PAD_BOTTOM;
+        Object.entries(bandMeta).forEach(([ci, labelSet]) => {
+            const label = [...labelSet].join(' / ');
+            const idx   = parseInt(ci, 10);
 
-        // Collect unique columns
-        const colMeta = {};
-        Object.entries(LAYER_CONFIG).forEach(([layerId, cfg]) => {
-            const ci = cfg.col;
-            if (!colMeta[ci]) {
-                colMeta[ci] = { x: PAD_LEFT + COL_X[ci] * drawW, labels: new Set() };
+            if (isLTR) {
+                const x = PAD_LEFT + COL_X[idx] * drawW;
+                _g.append('line')
+                    .attr('x1', x).attr('y1', PAD_TOP - 6)
+                    .attr('x2', x).attr('y2', canvasH - PAD_BOTTOM)
+                    .attr('stroke', '#2c2a27').attr('stroke-width', 1).attr('stroke-dasharray', '3,8');
+                _g.append('text')
+                    .attr('x', x).attr('y', PAD_TOP - 10)
+                    .attr('text-anchor', 'middle').attr('font-size', '9')
+                    .attr('font-family', 'Inter, sans-serif').attr('fill', '#5a5650')
+                    .attr('letter-spacing', '0.06em').text(label.toUpperCase());
+            } else {
+                const y = PAD_TOP + ROW_Y[idx] * drawH;
+                _g.append('line')
+                    .attr('x1', PAD_LEFT).attr('y1', y)
+                    .attr('x2', canvasW - PAD_RIGHT).attr('y2', y)
+                    .attr('stroke', '#2c2a27').attr('stroke-width', 1).attr('stroke-dasharray', '3,8');
+                _g.append('text')
+                    .attr('x', PAD_LEFT + 4).attr('y', y - 6)
+                    .attr('text-anchor', 'start').attr('font-size', '9')
+                    .attr('font-family', 'Inter, sans-serif').attr('fill', '#5a5650')
+                    .attr('letter-spacing', '0.06em').text(label.toUpperCase());
             }
-            colMeta[ci].labels.add(cfg.label);
         });
 
-        Object.values(colMeta).forEach(col => {
-            const label = [...col.labels].join(' / ');
-
-            // Vertical dashed band line
-            _g.append('line')
-                .attr('x1', col.x).attr('y1', PAD_TOP - 6)
-                .attr('x2', col.x).attr('y2', CANVAS_H - PAD_BOTTOM)
-                .attr('stroke', '#2c2a27')
-                .attr('stroke-width', 1)
-                .attr('stroke-dasharray', '3,8');
-
-            // Column header label
-            _g.append('text')
-                .attr('x', col.x)
-                .attr('y', PAD_TOP - 10)
-                .attr('text-anchor', 'middle')
-                .attr('font-size', '9')
-                .attr('font-family', 'Inter, sans-serif')
-                .attr('fill', '#5a5650')
-                .attr('letter-spacing', '0.06em')
-                .text(label.toUpperCase());
-        });
-
-        // ── Edges ─────────────────────────────────────────────────────────
-
+        // ── Edges ─────────────────────────────────────────────────────────────
         const edgeG = _g.append('g').attr('class', 'edge-layer');
-
         EDGES.forEach(edge => {
             const sp = _positions[edge.source];
             const tp = _positions[edge.target];
             if (!sp || !tp) return;
             const srcNode = NODE_BY_ID[edge.source];
             const color   = LAYER_CONFIG[srcNode.layer].color;
-
             edgeG.append('path')
                 .attr('class', `edge e-src-${edge.source} e-tgt-${edge.target}`)
-                .attr('d', edgePath(sp, tp))
+                .attr('d', edgePath(sp, tp, isLTR))
                 .attr('fill', 'none')
                 .attr('stroke', color)
                 .attr('stroke-width', 1.4)
@@ -342,10 +401,8 @@
                 .attr('marker-end', `url(#arr-${srcNode.layer})`);
         });
 
-        // ── Nodes ─────────────────────────────────────────────────────────
-
+        // ── Nodes ─────────────────────────────────────────────────────────────
         const nodeG = _g.append('g').attr('class', 'node-layer');
-
         NODES.forEach(node => {
             const p     = _positions[node.id];
             const color = LAYER_CONFIG[node.layer].color;
@@ -354,43 +411,67 @@
                 .attr('class', `node nd-${node.id}`)
                 .attr('transform', `translate(${p.x - NODE_W / 2}, ${p.y - NODE_H / 2})`)
                 .attr('cursor', 'pointer')
-                .on('click', (ev) => { ev.stopPropagation(); select(node.id); })
+                .on('click',      (ev) => { ev.stopPropagation(); select(node.id); })
                 .on('mouseenter', (ev) => { hovering(node.id, true); showTooltip(ev, node.desc); })
                 .on('mousemove',  (ev) => moveTooltip(ev))
                 .on('mouseleave', ()   => { hovering(node.id, false); hideTooltip(); });
 
-            // Background rect
-            g.append('rect')
-                .attr('class', 'nd-bg')
-                .attr('width', NODE_W).attr('height', NODE_H)
-                .attr('rx', NODE_RX)
-                .attr('fill', '#21201d')
-                .attr('stroke', color)
-                .attr('stroke-width', 1.4)
-                .attr('stroke-opacity', 0.65);
+            g.append('rect').attr('class', 'nd-bg')
+                .attr('width', NODE_W).attr('height', NODE_H).attr('rx', NODE_RX)
+                .attr('fill', '#21201d').attr('stroke', color)
+                .attr('stroke-width', 1.4).attr('stroke-opacity', 0.65);
 
-            // Top color strip (horizontal, matches LTR direction)
-            g.append('rect')
-                .attr('class', 'nd-strip')
-                .attr('x', 1).attr('y', 1)
-                .attr('width', NODE_W - 2).attr('height', 3)
-                .attr('rx', NODE_RX - 1)
-                .attr('fill', color)
-                .attr('opacity', 0.70);
+            // Top strip for LTR, left strip for TTB
+            if (isLTR) {
+                g.append('rect').attr('class', 'nd-strip')
+                    .attr('x', 1).attr('y', 1)
+                    .attr('width', NODE_W - 2).attr('height', 3)
+                    .attr('rx', NODE_RX - 1).attr('fill', color).attr('opacity', 0.70);
+            } else {
+                g.append('rect').attr('class', 'nd-strip')
+                    .attr('x', 1).attr('y', 1)
+                    .attr('width', 3).attr('height', NODE_H - 2)
+                    .attr('rx', NODE_RX - 1).attr('fill', color).attr('opacity', 0.70);
+            }
 
-            // Label
-            g.append('text')
-                .attr('class', 'nd-label')
-                .attr('x', NODE_W / 2)
-                .attr('y', NODE_H / 2 + 2)
-                .attr('text-anchor', 'middle')
-                .attr('dominant-baseline', 'middle')
-                .attr('font-size', '10')
-                .attr('font-family', 'Inter, sans-serif')
-                .attr('fill', '#DFDCD6')
-                .attr('pointer-events', 'none')
+            g.append('text').attr('class', 'nd-label')
+                .attr('x', NODE_W / 2).attr('y', NODE_H / 2 + 2)
+                .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
+                .attr('font-size', '10').attr('font-family', 'Inter, sans-serif')
+                .attr('fill', '#DFDCD6').attr('pointer-events', 'none')
                 .text(node.label);
         });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // RESPONSIVE — re-render on orientation switch, fit on resize
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function setupResponsive(canvasId) {
+        if (typeof ResizeObserver === 'undefined') return;
+        const wrap = document.getElementById(canvasId);
+        if (!wrap) return;
+
+        let lastLTR = _isLTR;
+
+        _resizeObserver = new ResizeObserver((entries) => {
+            if (!_mounted) return;
+            const rect  = entries[0].contentRect;
+            const w     = rect.width;
+            const h     = rect.height;
+            if (w === 0 || h === 0) return;
+
+            const nowLTR = w >= MOBILE_BREAKPOINT;
+            if (nowLTR !== lastLTR) {
+                lastLTR = nowLTR;
+                _isLTR  = nowLTR;
+                teardown(canvasId);
+                render(canvasId);
+            }
+            // Always re-fit to the actual container dimensions
+            fitToContainer(w, h);
+        });
+        _resizeObserver.observe(wrap);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -435,14 +516,13 @@
             d3.select(`.nd-${n.id} .nd-label`).attr('opacity', isConn ? 1 : 0.2);
             d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', isConn ? 0.80 : 0.15);
         });
-
         d3.selectAll('.edge').each(function () {
-            const el  = d3.select(this);
-            const cls = this.getAttribute('class') || '';
-            const src = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
-            const tgt = (cls.match(/e-tgt-([^\s]+)/) || [])[1] || '';
-            const active = (src === selectedId || tgt === selectedId);
-            const srcNode = NODE_BY_ID[src];
+            const el   = d3.select(this);
+            const cls  = this.getAttribute('class') || '';
+            const src  = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
+            const tgt  = (cls.match(/e-tgt-([^\s]+)/) || [])[1] || '';
+            const active   = (src === selectedId || tgt === selectedId);
+            const srcNode  = NODE_BY_ID[src];
             el.attr('stroke-opacity', active ? 0.85 : 0.05)
               .attr('stroke-width',   active ? 2.2 : 1.4)
               .attr('marker-end', active
@@ -459,8 +539,8 @@
             d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', 0.70);
         });
         d3.selectAll('.edge').each(function () {
-            const cls = this.getAttribute('class') || '';
-            const src = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
+            const cls     = this.getAttribute('class') || '';
+            const src     = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
             const srcNode = NODE_BY_ID[src];
             d3.select(this)
                 .attr('stroke-opacity', 0.28).attr('stroke-width', 1.4)
@@ -476,7 +556,6 @@
         const panel   = document.getElementById('archDetail');
         const content = document.getElementById('archDetailContent');
         if (!panel || !content) return;
-
         const node  = NODE_BY_ID[nodeId];
         if (!node) return;
         const cfg   = LAYER_CONFIG[node.layer];
@@ -562,7 +641,7 @@
     function buildLegend() {
         const legend = document.getElementById('archLegend');
         if (!legend) return;
-        const seen = new Set();
+        const seen  = new Set();
         const items = [];
         Object.values(LAYER_CONFIG).forEach(cfg => {
             if (!seen.has(cfg.label)) {
@@ -579,22 +658,13 @@
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PAGE MODULE
+    // TOOLBAR
     // ══════════════════════════════════════════════════════════════════════════
 
-    function mount(container, shell) {
-        if (_mounted) return;
-        _mounted = true;
-        _tooltip = document.getElementById('archTooltip');
-        buildLegend();
-        requestAnimationFrame(() => {
-            render('archCanvas');
-            _wireToolbar();
-        });
-        shell?.setSearchPlaceholder('Filter components...');
-    }
-
     function _wireToolbar() {
+        if (_toolbarWired) return;
+        _toolbarWired = true;
+
         document.getElementById('archZoomInBtn')?.addEventListener('click', (ev) => {
             ev.stopPropagation();
             if (_svg && _zoom) _svg.transition().duration(220).call(_zoom.scaleBy, 1.4);
@@ -607,23 +677,48 @@
             ev.stopPropagation();
             if (!_svg || !_zoom) return;
             const wrap = document.getElementById('archCanvas');
-            const cW = wrap?.clientWidth  || CANVAS_W;
-            const cH = wrap?.clientHeight || CANVAS_H;
-            const s  = Math.min(cW / CANVAS_W, cH / CANVAS_H) * 0.96;
+            const w = wrap?.clientWidth  || (_isLTR ? CANVAS_W_LTR : CANVAS_W_TTB);
+            const h = wrap?.clientHeight || (_isLTR ? CANVAS_H_LTR : CANVAS_H_TTB);
+            const cvW = _isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
+            const cvH = _isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
+            const s   = Math.min(w / cvW, h / cvH) * 0.96;
             _svg.transition().duration(320).call(
                 _zoom.transform,
-                d3.zoomIdentity.translate((cW - CANVAS_W * s) / 2, (cH - CANVAS_H * s) / 2).scale(s)
+                d3.zoomIdentity.translate((w - cvW * s) / 2, (h - cvH * s) / 2).scale(s)
             );
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // PAGE MODULE
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function mount(container, shell) {
+        if (_mounted) return;
+        _mounted = true;
+        _tooltip = document.getElementById('archTooltip');
+        _isLTR   = (window.innerWidth >= MOBILE_BREAKPOINT);
+        buildLegend();
+        requestAnimationFrame(() => {
+            render('archCanvas');
+            _wireToolbar();
+            setupResponsive('archCanvas');
+        });
+        shell?.setSearchPlaceholder('Filter components...');
+    }
+
     function unmount() {
-        _mounted    = false;
-        _selectedId = null;
-        _svg        = null;
-        _g          = null;
-        _zoom       = null;
-        _positions  = null;
+        _mounted      = false;
+        _toolbarWired = false;
+        _selectedId   = null;
+        _svg          = null;
+        _g            = null;
+        _zoom         = null;
+        _positions    = null;
+        if (_resizeObserver) {
+            _resizeObserver.disconnect();
+            _resizeObserver = null;
+        }
         hideTooltip();
     }
 
@@ -645,9 +740,9 @@
     }
 
     window.PageRouter?.register({
-        id: 'arch',
-        label: 'Architecture',
-        paths: ['/arch', '/architecture'],
+        id:     'arch',
+        label:  'Architecture',
+        paths:  ['/arch', '/architecture'],
         mount,
         unmount,
         onSearch,
