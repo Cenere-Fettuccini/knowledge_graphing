@@ -5,9 +5,11 @@
     // DATA — component coupling map derived from CLAUDE.md files
     // ══════════════════════════════════════════════════════════════════════════
 
-    // col = column index shared by both layouts:
+    // col = column index used by both layouts:
     //   LTR (desktop): col maps to a left→right column position (COL_X)
     //   TTB (mobile):  col maps to a top→bottom row position   (ROW_Y)
+    // Layers without a col are "band" layers — rendered as full-width
+    // bars at the top or bottom of the canvas (see node.band).
     const LAYER_CONFIG = {
         entry:      { label: 'Entry Points',   color: '#70695f', col: 0 },
         platform:   { label: 'Boot',           color: '#7E91BE', col: 1 },
@@ -17,7 +19,7 @@
         gateway:    { label: 'Public Gateway', color: '#BEAA7E', col: 3 },
         infra:      { label: 'Infrastructure', color: '#A37A87', col: 4 },
         core:       { label: 'Core',           color: '#7E91BE', col: 5 },
-        storage:    { label: 'Storage',        color: '#6B8F7A', col: 6 },
+        storage:    { label: 'Storage',        color: '#6B8F7A' },
     };
 
     // yFrac: vertical position within the LTR column  (fraction of drawable height)
@@ -145,7 +147,7 @@
         },
         {
             id: 'memory_read', label: 'memory · read', layer: 'storage',
-            yFrac: 0.15, xFrac: 0.30,
+            band: 'top',
             desc: 'MemoryManager (read facade): graph queries, conversation history, status, schema introspection. Methods: status(), graph_*(), search_memories(), list_*(), count_*(), eras_active_at(), graph_schema_snapshot().',
             note: 'Same MemoryManager singleton as the write node — split visually to clarify data direction. Obtained via get_memory_manager().',
             claudeMd: 'src/memory/CLAUDE.md',
@@ -154,7 +156,7 @@
         },
         {
             id: 'memory_write', label: 'memory · write', layer: 'storage',
-            yFrac: 0.85, xFrac: 0.70,
+            band: 'bottom',
             desc: 'MemoryManager (write facade): store() messages, bootstrap_user_root(), mark_analyzed/failed, era + belief CRUD, merge proposals, graph_write tool output, bulk ingest.',
             note: 'After store() calls, maybe_trigger() fires the analyzer if the unanalyzed queue is full — that is the outbound edge to analyzers.',
             claudeMd: 'src/memory/CLAUDE.md',
@@ -188,23 +190,35 @@
     const NODE_H  = 32;
     const NODE_RX = 5;
 
-    // Desktop — columns flow left → right
+    // Desktop — six middle columns flow left → right (storage is band-only)
     const CANVAS_W_LTR = 1120;
     const CANVAS_H_LTR = 620;
-    const COL_X = [0.045, 0.185, 0.340, 0.515, 0.655, 0.800, 0.940];
+    const COL_X = [0.06, 0.22, 0.40, 0.58, 0.76, 0.94];
 
-    // Mobile — rows flow top → bottom
+    // Mobile — six middle rows flow top → bottom (storage is band-only)
     const CANVAS_W_TTB = 900;
     const CANVAS_H_TTB = 920;
-    const ROW_Y = [0.045, 0.185, 0.320, 0.465, 0.610, 0.760, 0.940];
+    const ROW_Y = [0.06, 0.22, 0.38, 0.55, 0.72, 0.92];
 
-    const PAD_TOP    = 46;
-    const PAD_BOTTOM = 20;
+    const PAD_TOP    = 26;
+    const PAD_BOTTOM = 22;
     const PAD_LEFT   = 18;
     const PAD_RIGHT  = 18;
 
+    // Reserved top + bottom zones for the memory · read / memory · write bands
+    const BAND_H            = 56;
+    const COL_LABEL_GUTTER  = 18;  // LTR only — space for column header labels
+
     // Switch to TTB when the canvas container is narrower than this
     const MOBILE_BREAKPOINT = 640;
+
+    // Middle (non-band) drawing zone — bracketed by the two memory bands
+    function middleZone(canvasH, isLTR) {
+        const labelGutter = isLTR ? COL_LABEL_GUTTER : 0;
+        const drawTop = PAD_TOP    + BAND_H + labelGutter;
+        const drawBot = canvasH    - PAD_BOTTOM - BAND_H;
+        return { drawTop, drawBot, drawH: drawBot - drawTop };
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // POSITIONS
@@ -214,19 +228,31 @@
         const canvasW = isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
         const canvasH = isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
         const drawW   = canvasW - PAD_LEFT - PAD_RIGHT;
-        const drawH   = canvasH - PAD_TOP  - PAD_BOTTOM;
+        const { drawTop, drawH } = middleZone(canvasH, isLTR);
+
+        const topBandY = PAD_TOP + BAND_H / 2;
+        const botBandY = canvasH - PAD_BOTTOM - BAND_H / 2;
+
         const pos = {};
         NODES.forEach(node => {
+            if (node.band === 'top') {
+                pos[node.id] = { x: canvasW / 2, y: topBandY };
+                return;
+            }
+            if (node.band === 'bottom') {
+                pos[node.id] = { x: canvasW / 2, y: botBandY };
+                return;
+            }
             const ci = LAYER_CONFIG[node.layer].col;
             if (isLTR) {
                 pos[node.id] = {
                     x: PAD_LEFT + COL_X[ci] * drawW,
-                    y: PAD_TOP  + node.yFrac * drawH,
+                    y: drawTop  + node.yFrac * drawH,
                 };
             } else {
                 pos[node.id] = {
                     x: PAD_LEFT + node.xFrac * drawW,
-                    y: PAD_TOP  + ROW_Y[ci]  * drawH,
+                    y: drawTop  + ROW_Y[ci]  * drawH,
                 };
             }
         });
@@ -354,10 +380,23 @@
 
         // ── Band lines + header labels ─────────────────────────────────────────
         const drawW = canvasW - PAD_LEFT - PAD_RIGHT;
-        const drawH = canvasH - PAD_TOP  - PAD_BOTTOM;
+        const { drawTop, drawBot, drawH } = middleZone(canvasH, isLTR);
 
+        // Horizontal separators bracketing the middle zone (memory bands sit
+        // outside these lines, top and bottom).
+        const sepTopY = PAD_TOP + BAND_H;
+        const sepBotY = canvasH - PAD_BOTTOM - BAND_H;
+        [sepTopY, sepBotY].forEach(y => {
+            _g.append('line')
+                .attr('x1', PAD_LEFT).attr('y1', y)
+                .attr('x2', canvasW - PAD_RIGHT).attr('y2', y)
+                .attr('stroke', '#3a3835').attr('stroke-width', 1).attr('stroke-dasharray', '5,5');
+        });
+
+        // Per-layer band lines + labels — skip layers without a `col` (storage)
         const bandMeta = {};
         Object.values(LAYER_CONFIG).forEach(cfg => {
+            if (cfg.col == null) return;
             if (!bandMeta[cfg.col]) bandMeta[cfg.col] = new Set();
             bandMeta[cfg.col].add(cfg.label);
         });
@@ -369,16 +408,16 @@
             if (isLTR) {
                 const x = PAD_LEFT + COL_X[idx] * drawW;
                 _g.append('line')
-                    .attr('x1', x).attr('y1', PAD_TOP - 6)
-                    .attr('x2', x).attr('y2', canvasH - PAD_BOTTOM)
+                    .attr('x1', x).attr('y1', drawTop - 6)
+                    .attr('x2', x).attr('y2', drawBot + 6)
                     .attr('stroke', '#2c2a27').attr('stroke-width', 1).attr('stroke-dasharray', '3,8');
                 _g.append('text')
-                    .attr('x', x).attr('y', PAD_TOP - 10)
+                    .attr('x', x).attr('y', drawTop - 10)
                     .attr('text-anchor', 'middle').attr('font-size', '9')
                     .attr('font-family', 'Inter, sans-serif').attr('fill', '#5a5650')
                     .attr('letter-spacing', '0.06em').text(label.toUpperCase());
             } else {
-                const y = PAD_TOP + ROW_Y[idx] * drawH;
+                const y = drawTop + ROW_Y[idx] * drawH;
                 _g.append('line')
                     .attr('x1', PAD_LEFT).attr('y1', y)
                     .attr('x2', canvasW - PAD_RIGHT).attr('y2', y)
