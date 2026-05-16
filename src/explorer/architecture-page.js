@@ -263,21 +263,36 @@
     // EDGE PATHS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function edgePath(sp, tp, isLTR) {
+    function edgePath(sp, tp, srcNode, tgtNode, isLTR) {
         if (isLTR) {
-            // Source exits from the right edge; cross-layer edges enter the
-            // target at its TOP edge so arrows point straight down into the
-            // next node instead of sideways into its left edge.
-            const sx = sp.x + NODE_W / 2 + 1;   // source right edge
-            const sy = sp.y;                     // source center y
-            const tx = tp.x;                     // target center x
-            const ty = tp.y - NODE_H / 2 - 1;    // target top edge
-            const dx = tx - sx;
-            const dy = ty - sy;
+            // LTR attachment depends on how many layers the edge crosses:
+            //   • adjacent forward (next layer)    → enter from LEFT
+            //   • skip forward    (cross layers)   → enter from TOP
+            //   • backward        (previous layer) → enter from BOTTOM
+            const srcCol = LAYER_CONFIG[srcNode.layer].col;
+            const tgtCol = LAYER_CONFIG[tgtNode.layer].col;
+            const diff   = tgtCol - srcCol;
 
-            if (dx > 8) {
-                // Forward: extend right from source, then drop into target
-                // from above. The two control points form an L-curve.
+            if (diff === 1) {
+                // Adjacent forward — sideways into target's left edge.
+                const sx = sp.x + NODE_W / 2 + 1;
+                const sy = sp.y;
+                const tx = tp.x - NODE_W / 2 - 1;
+                const ty = tp.y;
+                const dx = tx - sx;
+                const cp1x = sx + dx * 0.42;
+                const cp2x = tx - dx * 0.42;
+                return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
+            }
+
+            if (diff > 1) {
+                // Skip forward — extend right, then drop into target from above.
+                const sx = sp.x + NODE_W / 2 + 1;
+                const sy = sp.y;
+                const tx = tp.x;
+                const ty = tp.y - NODE_H / 2 - 1;
+                const dx = tx - sx;
+                const dy = ty - sy;
                 const cp1x = sx + Math.max(dx * 0.55, 28);
                 const cp1y = sy;
                 const cp2x = tx;
@@ -285,14 +300,14 @@
                 return `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
             }
 
-            // Backward / same-column: arc up and over so the path still
-            // enters the target from the top.
-            const arcOff = Math.max(80, Math.abs(dx) * 0.3 + 36);
-            const cp1x   = sx + 30;
-            const cp1y   = Math.min(sy, ty) - arcOff;
-            const cp2x   = tx;
-            const cp2y   = ty - arcOff;
-            return `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
+            // Backward (or same column) — drop below both nodes and rise up
+            // into the target from underneath.
+            const sx = sp.x;
+            const sy = sp.y + NODE_H / 2 + 1;   // source bottom
+            const tx = tp.x;
+            const ty = tp.y + NODE_H / 2 + 1;   // target bottom
+            const offset = Math.max(70, Math.abs(tx - sx) * 0.25 + 30);
+            return `M ${sx} ${sy} C ${sx} ${sy + offset}, ${tx} ${ty + offset}, ${tx} ${ty}`;
         } else {
             // Bottom edge of source → top edge of target
             const sx = sp.x;
@@ -473,7 +488,7 @@
                 // shows in the detail panel.
                 return;
             } else {
-                pathD       = edgePath(sp, tp, isLTR);
+                pathD       = edgePath(sp, tp, srcNode, tgtNode, isLTR);
                 strokeLayer = srcNode.layer;
             }
 
