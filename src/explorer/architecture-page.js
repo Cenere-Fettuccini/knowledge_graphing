@@ -168,15 +168,31 @@
     // ── Edge kinds (colour-by-purpose) ─────────────────────────────────────────
 
     const EDGE_KINDS = {
-        call:  { color: '#8AA3C9', label: 'Call'  },   // function/method invocation
-        read:  { color: '#7FB099', label: 'Read'  },   // anything → memory_read band
-        write: { color: '#D4A876', label: 'Write' },   // anything → memory_write band
+        boot:     { color: '#9C8B7A', label: 'Boot'     },   // lifecycle / wiring
+        request:  { color: '#6B8FBC', label: 'Request'  },   // cross-boundary RPC
+        internal: { color: '#A878B8', label: 'Internal' },   // within agent platform
+        read:     { color: '#5FAA89', label: 'Read'     },   // → memory · read
+        write:    { color: '#D08555', label: 'Write'    },   // → memory · write
     };
 
     function classifyEdge(srcNode, tgtNode) {
+        // Storage direction wins: anything pointed at a memory band is a
+        // read or a write regardless of where the call originated.
         if (tgtNode.band === 'top')    return 'read';
         if (tgtNode.band === 'bottom') return 'write';
-        return 'call';
+
+        // Lifecycle: entry points booting things, platform registering apps.
+        if (srcNode.layer === 'entry')    return 'boot';
+        if (srcNode.layer === 'platform') return 'boot';
+
+        // RPC / app-facing requests across architectural boundaries.
+        if (tgtNode.layer === 'gateway') return 'request';
+        if (srcNode.layer === 'app' &&
+            (tgtNode.layer === 'infra' || tgtNode.layer === 'core')) return 'request';
+        if (srcNode.layer === 'background' && tgtNode.layer === 'bot') return 'request';
+
+        // Everything left — gateway/infra/core/tools talking among themselves.
+        return 'internal';
     }
 
     // ── Lookup + derived edges ─────────────────────────────────────────────────
