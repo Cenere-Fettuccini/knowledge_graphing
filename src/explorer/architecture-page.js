@@ -5,40 +5,38 @@
     // DATA — component coupling map derived from CLAUDE.md files
     // ══════════════════════════════════════════════════════════════════════════
 
+    // col = left-to-right column index (0 = leftmost / entry point)
     const LAYER_CONFIG = {
-        entry:      { label: 'Entry Points',   color: '#70695f', row: 0 },
-        platform:   { label: 'Boot',           color: '#7E91BE', row: 1 },
-        bot:        { label: 'Boot',           color: '#8F859A', row: 1 },
-        app:        { label: 'App Layer',      color: '#7FA38D', row: 2 },
-        background: { label: 'Background',     color: '#C49B76', row: 2 },
-        gateway:    { label: 'Public Gateway', color: '#BEAA7E', row: 3 },
-        infra:      { label: 'Infrastructure', color: '#A37A87', row: 4 },
-        core:       { label: 'Core',           color: '#7E91BE', row: 5 },
-        storage:    { label: 'Storage',        color: '#6B8F7A', row: 6 },
+        entry:      { label: 'Entry Points',   color: '#70695f', col: 0 },
+        platform:   { label: 'Boot',           color: '#7E91BE', col: 1 },
+        bot:        { label: 'Boot',           color: '#8F859A', col: 1 },
+        app:        { label: 'App Layer',      color: '#7FA38D', col: 2 },
+        background: { label: 'Background',     color: '#C49B76', col: 2 },
+        gateway:    { label: 'Public Gateway', color: '#BEAA7E', col: 3 },
+        infra:      { label: 'Infrastructure', color: '#A37A87', col: 4 },
+        core:       { label: 'Core',           color: '#7E91BE', col: 5 },
+        storage:    { label: 'Storage',        color: '#6B8F7A', col: 6 },
     };
 
-    // Row y-fractions (fraction of drawable height)
-    const ROW_Y = [0.055, 0.175, 0.335, 0.510, 0.655, 0.800, 0.930];
+    // Column x-fractions (fraction of drawable width, left→right)
+    const COL_X = [0.045, 0.185, 0.340, 0.515, 0.655, 0.800, 0.940];
 
+    // yFrac = vertical position within the column (fraction of drawable height)
     const NODES = [
         {
-            id: 'main', label: 'main.py', layer: 'entry', xFrac: 0.30,
+            id: 'main', label: 'main.py', layer: 'entry', yFrac: 0.32,
             desc: 'FastAPI server entry point. Calls create_platform_app() and runs uvicorn.',
-            note: null,
-            claudeMd: null,
-            calledBy: [],
-            callsInto: ['platform'],
+            note: null, claudeMd: null,
+            calledBy: [], callsInto: ['platform'],
         },
         {
-            id: 'run_bot', label: 'run_bot.py', layer: 'entry', xFrac: 0.70,
+            id: 'run_bot', label: 'run_bot.py', layer: 'entry', yFrac: 0.68,
             desc: 'Telegram bot entry point. Runs independently of the web server.',
-            note: null,
-            claudeMd: null,
-            calledBy: [],
-            callsInto: ['bot'],
+            note: null, claudeMd: null,
+            calledBy: [], callsInto: ['bot'],
         },
         {
-            id: 'platform', label: 'platform/', layer: 'platform', xFrac: 0.33,
+            id: 'platform', label: 'platform/', layer: 'platform', yFrac: 0.32,
             desc: 'FastAPI app factory (create_platform_app), app registry, shell router, graph-ingest endpoint.',
             note: 'The only place that imports all five app get_*_app() factories. Starts/stops RuminationScheduler in lifespan.',
             claudeMd: 'src/platform/CLAUDE.md',
@@ -46,7 +44,7 @@
             callsInto: ['app_chat', 'app_explorer', 'app_credits', 'app_financial', 'app_routine', 'memory', 'rumination', 'core'],
         },
         {
-            id: 'bot', label: 'bot/', layer: 'bot', xFrac: 0.70,
+            id: 'bot', label: 'bot/', layer: 'bot', yFrac: 0.68,
             desc: 'TelegramBot (handlers, session tracking) + ProactiveBot (outbound digests, reconciliation).',
             note: 'TelegramBot calls src.core.agent.Agent directly — pre-dates AgentService. Migrate to AgentService if refactoring.',
             claudeMd: 'src/bot/CLAUDE.md',
@@ -54,71 +52,61 @@
             callsInto: ['core', 'memory', 'public_gateway'],
         },
         {
-            id: 'app_chat', label: 'apps/chat', layer: 'app', xFrac: 0.06,
+            id: 'app_chat', label: 'apps/chat', layer: 'app', yFrac: 0.09,
             desc: 'Browser conversation sessions. Session CRUD and message dispatch through the agent platform.',
-            note: null,
-            claudeMd: 'src/apps/chat/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: ['public_gateway', 'memory'],
+            note: null, claudeMd: 'src/apps/chat/CLAUDE.md',
+            calledBy: ['platform'], callsInto: ['public_gateway', 'memory'],
         },
         {
-            id: 'app_explorer', label: 'apps/explorer', layer: 'app', xFrac: 0.22,
+            id: 'app_explorer', label: 'apps/explorer', layer: 'app', yFrac: 0.25,
             desc: 'Knowledge graph UI, system status, analyzer controls, canonicalization, eras, pending beliefs.',
             note: 'Only app that imports analyzers directly — it is the admin surface for the extraction pipeline.',
             claudeMd: 'src/apps/explorer/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: ['public_gateway', 'memory', 'analyzers', 'ingestion'],
+            calledBy: ['platform'], callsInto: ['public_gateway', 'memory', 'analyzers', 'ingestion'],
         },
         {
-            id: 'app_credits', label: 'apps/credits', layer: 'app', xFrac: 0.38,
+            id: 'app_credits', label: 'apps/credits', layer: 'app', yFrac: 0.41,
             desc: 'LLM quota management console. Shows per-model headroom, imports rate limits.',
             note: 'Exception to the no-core-import rule — intentionally reads llm_router internals. Other apps use aquota_status() instead.',
             claudeMd: 'src/apps/credits/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: ['core'],
+            calledBy: ['platform'], callsInto: ['core'],
         },
         {
-            id: 'app_financial', label: 'apps/financial', layer: 'app', xFrac: 0.54,
+            id: 'app_financial', label: 'apps/financial', layer: 'app', yFrac: 0.57,
             desc: 'Finance workflows — stub. AppDefinition only, no services or API yet.',
-            note: null,
-            claudeMd: 'src/apps/financial_manager/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: [],
+            note: null, claudeMd: 'src/apps/financial_manager/CLAUDE.md',
+            calledBy: ['platform'], callsInto: [],
         },
         {
-            id: 'app_routine', label: 'apps/routine', layer: 'app', xFrac: 0.68,
+            id: 'app_routine', label: 'apps/routine', layer: 'app', yFrac: 0.71,
             desc: 'Scheduling automation — stub. AppDefinition only, no services or API yet.',
-            note: null,
-            claudeMd: 'src/apps/routine_scheduler/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: [],
+            note: null, claudeMd: 'src/apps/routine_scheduler/CLAUDE.md',
+            calledBy: ['platform'], callsInto: [],
         },
         {
-            id: 'rumination', label: 'rumination/', layer: 'background', xFrac: 0.86,
-            desc: 'Background scheduler started in FastAPI lifespan. Deep-pass (belief synthesis) and rabbit-hole ticks.',
+            id: 'rumination', label: 'rumination/', layer: 'background', yFrac: 0.87,
+            desc: 'Background scheduler started in FastAPI lifespan. Deep-pass belief synthesis and rabbit-hole ticks.',
             note: 'Disabled by settings.rumination_enabled=False. Manages ProactiveBot lifecycle inside the web server process.',
             claudeMd: 'src/rumination/CLAUDE.md',
-            calledBy: ['platform'],
-            callsInto: ['memory', 'public_gateway', 'bot'],
+            calledBy: ['platform'], callsInto: ['memory', 'public_gateway', 'bot'],
         },
         {
-            id: 'public_gateway', label: 'agent_platform/public', layer: 'gateway', xFrac: 0.50,
-            desc: 'AgentService + contracts (AgentRunRequest, AgentRunResult). The only app-facing entry point for running the agent.',
+            id: 'public_gateway', label: 'agent_platform/public', layer: 'gateway', yFrac: 0.35,
+            desc: 'AgentService + contracts (AgentRunRequest, AgentRunResult). The only app-facing entry point for the agent.',
             note: 'Wraps src.core.agent.Agent behind a stable interface. Apps must never import Agent directly.',
             claudeMd: 'src/agent_platform/public/CLAUDE.md',
             calledBy: ['app_chat', 'app_explorer', 'bot', 'rumination'],
             callsInto: ['core', 'memory'],
         },
         {
-            id: 'tools', label: 'agent_platform/tools', layer: 'infra', xFrac: 0.18,
+            id: 'tools', label: 'agent_platform/tools', layer: 'infra', yFrac: 0.24,
             desc: 'LLM-callable tools registered via registry.py: graph_write, search_memories, tasks, beliefs, web_search, calendar.',
             note: 'Loaded by src.core.agent at init. Invoked by the LLM during a turn — not called directly by app code.',
             claudeMd: 'src/agent_platform/tools/CLAUDE.md',
-            calledBy: ['core'],
-            callsInto: ['memory'],
+            calledBy: ['core'], callsInto: ['memory'],
         },
         {
-            id: 'analyzers', label: 'agent_platform/analyzers', layer: 'infra', xFrac: 0.50,
+            id: 'analyzers', label: 'agent_platform/analyzers', layer: 'infra', yFrac: 0.50,
             desc: 'Extraction pipeline: local-LLM (Gemma 4) for entities/tasks, Gemini cloud pass for beliefs, canonicalization.',
             note: 'Auto-triggered from MemoryManager.store() when unanalyzed queue depth ≥ settings.graph_ingest_threshold.',
             claudeMd: 'src/agent_platform/analyzers/CLAUDE.md',
@@ -126,15 +114,14 @@
             callsInto: ['memory', 'core'],
         },
         {
-            id: 'ingestion', label: 'ingestion/', layer: 'infra', xFrac: 0.82,
+            id: 'ingestion', label: 'ingestion/', layer: 'infra', yFrac: 0.76,
             desc: 'Bulk import pipeline: JSONL, plaintext, Telegram export formats → Chroma queue.',
             note: 'Calls memory.store() only (Chroma). After import, app_explorer calls run_extraction_pass() to populate Neo4j.',
             claudeMd: 'src/ingestion/CLAUDE.md',
-            calledBy: ['app_explorer'],
-            callsInto: ['memory'],
+            calledBy: ['app_explorer'], callsInto: ['memory'],
         },
         {
-            id: 'core', label: 'src/core', layer: 'core', xFrac: 0.50,
+            id: 'core', label: 'src/core', layer: 'core', yFrac: 0.50,
             desc: 'Agent, LLM router, rate limiter, config (settings), prompts — internal infrastructure.',
             note: 'Apps must not import from here directly (except settings). Only credits app uses llm_router intentionally.',
             claudeMd: 'src/core/CLAUDE.md',
@@ -142,7 +129,7 @@
             callsInto: ['memory', 'tools'],
         },
         {
-            id: 'memory', label: 'src/memory', layer: 'storage', xFrac: 0.50,
+            id: 'memory', label: 'src/memory', layer: 'storage', yFrac: 0.50,
             desc: 'MemoryManager facade: ChromaDB (conversation history) + Neo4j (knowledge graph). Lazy singleton via get_memory_manager().',
             note: 'Never access .neo4j or .chroma directly. After store() calls, maybe_trigger() fires the analyzer if queue is full.',
             claudeMd: 'src/memory/CLAUDE.md',
@@ -151,7 +138,7 @@
         },
     ];
 
-    // ── Build edges from node data ─────────────────────────────────────────
+    // ── Derived edges ──────────────────────────────────────────────────────────
 
     const EDGES = [];
     const _edgeSet = new Set();
@@ -169,69 +156,72 @@
     NODES.forEach(n => { NODE_BY_ID[n.id] = n; });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // LAYOUT
+    // LAYOUT — left-to-right
     // ══════════════════════════════════════════════════════════════════════════
 
-    const NODE_W = 128;
-    const NODE_H = 32;
+    const NODE_W  = 116;
+    const NODE_H  = 32;
     const NODE_RX = 5;
-    const PAD_TOP = 32;
-    const PAD_BOTTOM = 44;
-    const PAD_LEFT = 108;   // space for layer labels
-    const PAD_RIGHT = 24;
 
-    function computePositions(canvasW, canvasH) {
-        const drawW = canvasW - PAD_LEFT - PAD_RIGHT;
-        const drawH = canvasH - PAD_TOP - PAD_BOTTOM;
+    // Canvas intrinsic dimensions (SVG viewBox)
+    const CANVAS_W = 1120;
+    const CANVAS_H = 620;
+
+    const PAD_TOP    = 46;   // room for column header labels
+    const PAD_BOTTOM = 20;
+    const PAD_LEFT   = 18;
+    const PAD_RIGHT  = 18;
+
+    function computePositions() {
+        const drawW = CANVAS_W - PAD_LEFT - PAD_RIGHT;
+        const drawH = CANVAS_H - PAD_TOP  - PAD_BOTTOM;
         const pos = {};
         NODES.forEach(node => {
-            const rowY = ROW_Y[LAYER_CONFIG[node.layer].row];
+            const colX = COL_X[LAYER_CONFIG[node.layer].col];
             pos[node.id] = {
-                x: PAD_LEFT + node.xFrac * drawW,
-                y: PAD_TOP + rowY * drawH,
+                x: PAD_LEFT + colX * drawW,
+                y: PAD_TOP  + node.yFrac * drawH,
             };
         });
         return pos;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // EDGE PATHS
+    // EDGE PATHS — horizontal flow (right side of source → left side of target)
     // ══════════════════════════════════════════════════════════════════════════
 
-    function edgePath(srcPos, tgtPos) {
-        const sx = srcPos.x;
-        const sy = srcPos.y + NODE_H / 2 + 1;   // bottom of source
-        const tx = tgtPos.x;
-        const ty = tgtPos.y - NODE_H / 2 - 1;   // top of target
+    function edgePath(sp, tp) {
+        const sx = sp.x + NODE_W / 2 + 1;   // right edge of source
+        const sy = sp.y;
+        const tx = tp.x - NODE_W / 2 - 1;   // left edge of target
+        const ty = tp.y;
 
-        const dy = ty - sy;
+        const dx = tx - sx;
 
-        if (dy > 8) {
-            // Downward: smooth S-curve keeping x, meet in the middle
-            const cp1y = sy + dy * 0.38;
-            const cp2y = ty - dy * 0.38;
-            return `M ${sx} ${sy} C ${sx} ${cp1y}, ${tx} ${cp2y}, ${tx} ${ty}`;
+        if (dx > 8) {
+            // Forward (leftward→rightward): smooth horizontal S-curve
+            const cp1x = sx + dx * 0.42;
+            const cp2x = tx - dx * 0.42;
+            return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
         }
 
-        // Upward or same-level: route wide around to avoid overlapping nodes
-        // Direction: go to the side that has more space from source
-        const sideDir = sx > (PAD_LEFT + (800 - PAD_LEFT - PAD_RIGHT) * 0.5) ? 1 : -1;
-        const offset = 80 + Math.abs(dy) * 0.3;
-        const midY = (sy + ty) / 2;
-        return `M ${sx} ${sy} C ${sx + sideDir * offset} ${sy + 24}, ${tx + sideDir * offset} ${ty - 24}, ${tx} ${ty}`;
+        // Backward or same-column: arc above/below to avoid crossing nodes
+        const arcDir = sy < tp.y ? -1 : 1;  // go above if source is higher
+        const offset = 55 + Math.abs(dx) * 0.25;
+        return `M ${sx} ${sy} C ${sx + 30} ${sy + arcDir * offset}, ${tx - 30} ${ty + arcDir * offset}, ${tx} ${ty}`;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // STATE
     // ══════════════════════════════════════════════════════════════════════════
 
-    let _positions = null;
+    let _positions  = null;
     let _selectedId = null;
-    let _svg = null;
-    let _g = null;
-    let _zoom = null;
-    let _mounted = false;
-    let _tooltip = null;
+    let _svg        = null;
+    let _g          = null;
+    let _zoom       = null;
+    let _mounted    = false;
+    let _tooltip    = null;
 
     // ══════════════════════════════════════════════════════════════════════════
     // RENDER
@@ -241,25 +231,21 @@
         const wrap = document.getElementById(canvasId);
         if (!wrap) return;
 
-        const W = wrap.clientWidth || 880;
-        const H = Math.max(wrap.clientHeight || 680, 640);
+        _positions = computePositions();
 
-        _positions = computePositions(W, H);
-
-        // SVG root
+        // SVG — fixed viewBox, scales to fill container
         _svg = d3.select(`#${canvasId}`)
             .append('svg')
             .attr('width', '100%')
             .attr('height', '100%')
-            .attr('viewBox', `0 0 ${W} ${H}`)
+            .attr('viewBox', `0 0 ${CANVAS_W} ${CANVAS_H}`)
             .attr('preserveAspectRatio', 'xMidYMid meet')
             .on('click', () => deselect());
 
-        // ── Defs: arrow markers ───────────────────────────────────────────
+        // ── Arrow markers ─────────────────────────────────────────────────
 
         const defs = _svg.append('defs');
 
-        // Arrow for each layer color
         Object.entries(LAYER_CONFIG).forEach(([layerId, cfg]) => {
             defs.append('marker')
                 .attr('id', `arr-${layerId}`)
@@ -267,12 +253,10 @@
                 .attr('refX', 7).attr('refY', 0)
                 .attr('markerWidth', 5).attr('markerHeight', 5)
                 .attr('orient', 'auto')
-                .append('path')
-                .attr('d', 'M0,-4L8,0L0,4')
+                .append('path').attr('d', 'M0,-4L8,0L0,4')
                 .attr('fill', cfg.color);
         });
 
-        // Dimmed arrow
         defs.append('marker')
             .attr('id', 'arr-dim')
             .attr('viewBox', '0 -4 8 8')
@@ -287,39 +271,49 @@
         _g = _svg.append('g').attr('class', 'arch-root');
 
         _zoom = d3.zoom()
-            .scaleExtent([0.35, 3.0])
+            .scaleExtent([0.3, 4.0])
             .on('zoom', (ev) => { _g.attr('transform', ev.transform); });
         _svg.call(_zoom);
 
-        // ── Layer band guidelines ─────────────────────────────────────────
+        // Fit diagram to the actual container on first render
+        const containerW = wrap.clientWidth  || CANVAS_W;
+        const containerH = wrap.clientHeight || CANVAS_H;
+        const initScale  = Math.min(containerW / CANVAS_W, containerH / CANVAS_H) * 0.96;
+        const initTx     = (containerW - CANVAS_W * initScale) / 2;
+        const initTy     = (containerH - CANVAS_H * initScale) / 2;
+        _svg.call(_zoom.transform, d3.zoomIdentity.translate(initTx, initTy).scale(initScale));
 
-        const drawnRows = new Set();
-        const drawH = H - PAD_TOP - PAD_BOTTOM;
+        // ── Column band lines + header labels ─────────────────────────────
 
-        // Build unique rows
-        const rowMeta = {};
+        const drawW = CANVAS_W - PAD_LEFT - PAD_RIGHT;
+        const drawH = CANVAS_H - PAD_TOP  - PAD_BOTTOM;
+
+        // Collect unique columns
+        const colMeta = {};
         Object.entries(LAYER_CONFIG).forEach(([layerId, cfg]) => {
-            const ri = cfg.row;
-            if (!rowMeta[ri]) {
-                rowMeta[ri] = { y: PAD_TOP + ROW_Y[ri] * drawH, labels: new Set() };
+            const ci = cfg.col;
+            if (!colMeta[ci]) {
+                colMeta[ci] = { x: PAD_LEFT + COL_X[ci] * drawW, labels: new Set() };
             }
-            rowMeta[ri].labels.add(cfg.label);
+            colMeta[ci].labels.add(cfg.label);
         });
 
-        Object.values(rowMeta).forEach(row => {
-            const label = [...row.labels].join(' / ');
-            // Dashed band line
+        Object.values(colMeta).forEach(col => {
+            const label = [...col.labels].join(' / ');
+
+            // Vertical dashed band line
             _g.append('line')
-                .attr('x1', PAD_LEFT - 8).attr('y1', row.y)
-                .attr('x2', W - PAD_RIGHT).attr('y2', row.y)
+                .attr('x1', col.x).attr('y1', PAD_TOP - 6)
+                .attr('x2', col.x).attr('y2', CANVAS_H - PAD_BOTTOM)
                 .attr('stroke', '#2c2a27')
                 .attr('stroke-width', 1)
                 .attr('stroke-dasharray', '3,8');
 
-            // Label
+            // Column header label
             _g.append('text')
-                .attr('x', PAD_LEFT - 11).attr('y', row.y + 5)
-                .attr('text-anchor', 'end')
+                .attr('x', col.x)
+                .attr('y', PAD_TOP - 10)
+                .attr('text-anchor', 'middle')
                 .attr('font-size', '9')
                 .attr('font-family', 'Inter, sans-serif')
                 .attr('fill', '#5a5650')
@@ -336,12 +330,11 @@
             const tp = _positions[edge.target];
             if (!sp || !tp) return;
             const srcNode = NODE_BY_ID[edge.source];
-            const color = LAYER_CONFIG[srcNode.layer].color;
-            const d = edgePath(sp, tp);
+            const color   = LAYER_CONFIG[srcNode.layer].color;
 
             edgeG.append('path')
                 .attr('class', `edge e-src-${edge.source} e-tgt-${edge.target}`)
-                .attr('d', d)
+                .attr('d', edgePath(sp, tp))
                 .attr('fill', 'none')
                 .attr('stroke', color)
                 .attr('stroke-width', 1.4)
@@ -354,26 +347,17 @@
         const nodeG = _g.append('g').attr('class', 'node-layer');
 
         NODES.forEach(node => {
-            const p = _positions[node.id];
+            const p     = _positions[node.id];
             const color = LAYER_CONFIG[node.layer].color;
 
             const g = nodeG.append('g')
                 .attr('class', `node nd-${node.id}`)
                 .attr('transform', `translate(${p.x - NODE_W / 2}, ${p.y - NODE_H / 2})`)
                 .attr('cursor', 'pointer')
-                .on('click', (ev) => {
-                    ev.stopPropagation();
-                    select(node.id);
-                })
-                .on('mouseenter', (ev) => {
-                    hovering(node.id, true);
-                    showTooltip(ev, node.desc);
-                })
-                .on('mousemove', (ev) => moveTooltip(ev))
-                .on('mouseleave', () => {
-                    hovering(node.id, false);
-                    hideTooltip();
-                });
+                .on('click', (ev) => { ev.stopPropagation(); select(node.id); })
+                .on('mouseenter', (ev) => { hovering(node.id, true); showTooltip(ev, node.desc); })
+                .on('mousemove',  (ev) => moveTooltip(ev))
+                .on('mouseleave', ()   => { hovering(node.id, false); hideTooltip(); });
 
             // Background rect
             g.append('rect')
@@ -385,23 +369,23 @@
                 .attr('stroke-width', 1.4)
                 .attr('stroke-opacity', 0.65);
 
-            // Left color strip
+            // Top color strip (horizontal, matches LTR direction)
             g.append('rect')
                 .attr('class', 'nd-strip')
                 .attr('x', 1).attr('y', 1)
-                .attr('width', 3).attr('height', NODE_H - 2)
-                .attr('rx', 2)
+                .attr('width', NODE_W - 2).attr('height', 3)
+                .attr('rx', NODE_RX - 1)
                 .attr('fill', color)
-                .attr('opacity', 0.75);
+                .attr('opacity', 0.70);
 
             // Label
             g.append('text')
                 .attr('class', 'nd-label')
-                .attr('x', NODE_W / 2 + 3)
-                .attr('y', NODE_H / 2 + 1)
+                .attr('x', NODE_W / 2)
+                .attr('y', NODE_H / 2 + 2)
                 .attr('text-anchor', 'middle')
                 .attr('dominant-baseline', 'middle')
-                .attr('font-size', '10.5')
+                .attr('font-size', '10')
                 .attr('font-family', 'Inter, sans-serif')
                 .attr('fill', '#DFDCD6')
                 .attr('pointer-events', 'none')
@@ -424,18 +408,13 @@
 
     function hovering(nodeId, on) {
         if (_selectedId) return;
-        if (!on) {
-            resetVisuals();
-            return;
-        }
-        const connected = connectedIds(nodeId);
-        applyDimming(nodeId, connected, 0.22, 0.08);
+        if (!on) { resetVisuals(); return; }
+        applyDimming(nodeId, connectedIds(nodeId));
     }
 
     function select(nodeId) {
         _selectedId = nodeId;
-        const connected = connectedIds(nodeId);
-        applyDimming(nodeId, connected, 0.28, 0.06);
+        applyDimming(nodeId, connectedIds(nodeId));
         renderDetail(nodeId);
     }
 
@@ -445,33 +424,27 @@
         clearDetail();
     }
 
-    function applyDimming(selectedId, connected, edgeActiveOpacity, edgeDimOpacity) {
-        // Nodes
+    function applyDimming(selectedId, connected) {
         NODES.forEach(n => {
-            const isSelected = n.id === selectedId;
-            const isConnected = connected.has(n.id);
+            const isSel  = n.id === selectedId;
+            const isConn = connected.has(n.id);
             d3.select(`.nd-${n.id} .nd-bg`)
-                .attr('stroke-width', isSelected ? 2.2 : 1.4)
-                .attr('stroke-opacity', isConnected ? 0.95 : 0.18)
-                .attr('fill', isSelected ? '#2a2927' : '#21201d');
-            d3.select(`.nd-${n.id} .nd-label`)
-                .attr('opacity', isConnected ? 1 : 0.25);
-            d3.select(`.nd-${n.id} .nd-strip`)
-                .attr('opacity', isConnected ? 0.85 : 0.2);
+                .attr('stroke-width',   isSel ? 2.4 : 1.4)
+                .attr('stroke-opacity', isConn ? 1.0 : 0.15)
+                .attr('fill',           isSel ? '#2a2927' : '#21201d');
+            d3.select(`.nd-${n.id} .nd-label`).attr('opacity', isConn ? 1 : 0.2);
+            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', isConn ? 0.80 : 0.15);
         });
 
-        // Edges
         d3.selectAll('.edge').each(function () {
-            const el = d3.select(this);
+            const el  = d3.select(this);
             const cls = this.getAttribute('class') || '';
-            const srcMatch = cls.match(/e-src-([^\s]+)/);
-            const tgtMatch = cls.match(/e-tgt-([^\s]+)/);
-            const src = srcMatch ? srcMatch[1] : '';
-            const tgt = tgtMatch ? tgtMatch[1] : '';
+            const src = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
+            const tgt = (cls.match(/e-tgt-([^\s]+)/) || [])[1] || '';
             const active = (src === selectedId || tgt === selectedId);
             const srcNode = NODE_BY_ID[src];
-            el.attr('stroke-opacity', active ? edgeActiveOpacity * 3.2 : edgeDimOpacity)
-              .attr('stroke-width', active ? 2.2 : 1.4)
+            el.attr('stroke-opacity', active ? 0.85 : 0.05)
+              .attr('stroke-width',   active ? 2.2 : 1.4)
               .attr('marker-end', active
                   ? (srcNode ? `url(#arr-${srcNode.layer})` : 'url(#arr-dim)')
                   : 'url(#arr-dim)');
@@ -481,21 +454,17 @@
     function resetVisuals() {
         NODES.forEach(n => {
             d3.select(`.nd-${n.id} .nd-bg`)
-                .attr('stroke-width', 1.4)
-                .attr('stroke-opacity', 0.65)
-                .attr('fill', '#21201d');
+                .attr('stroke-width', 1.4).attr('stroke-opacity', 0.65).attr('fill', '#21201d');
             d3.select(`.nd-${n.id} .nd-label`).attr('opacity', 1);
-            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', 0.75);
+            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', 0.70);
         });
         d3.selectAll('.edge').each(function () {
-            const el = d3.select(this);
             const cls = this.getAttribute('class') || '';
-            const srcMatch = cls.match(/e-src-([^\s]+)/);
-            const src = srcMatch ? srcMatch[1] : '';
+            const src = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
             const srcNode = NODE_BY_ID[src];
-            el.attr('stroke-opacity', 0.28)
-              .attr('stroke-width', 1.4)
-              .attr('marker-end', srcNode ? `url(#arr-${srcNode.layer})` : 'url(#arr-dim)');
+            d3.select(this)
+                .attr('stroke-opacity', 0.28).attr('stroke-width', 1.4)
+                .attr('marker-end', srcNode ? `url(#arr-${srcNode.layer})` : 'url(#arr-dim)');
         });
     }
 
@@ -504,17 +473,16 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     function renderDetail(nodeId) {
-        const panel = document.getElementById('archDetail');
+        const panel   = document.getElementById('archDetail');
         const content = document.getElementById('archDetailContent');
         if (!panel || !content) return;
 
-        const node = NODE_BY_ID[nodeId];
+        const node  = NODE_BY_ID[nodeId];
         if (!node) return;
-
-        const cfg = LAYER_CONFIG[node.layer];
+        const cfg   = LAYER_CONFIG[node.layer];
         const color = cfg.color;
 
-        const renderChips = (ids) => {
+        const chips = (ids) => {
             if (!ids.length) return '<span class="arch-detail-empty-chips">None</span>';
             return ids.map(id => {
                 const n = NODE_BY_ID[id];
@@ -534,25 +502,22 @@
                 <div class="arch-detail-desc">${node.desc}</div>
                 ${node.note ? `<div class="arch-detail-note">${node.note}</div>` : ''}
             </div>
-
             <div class="arch-detail-section">
                 <div class="arch-detail-section-label">Called By</div>
                 <div class="arch-chips">
                     ${node.calledBy.length
-                        ? renderChips(node.calledBy)
+                        ? chips(node.calledBy)
                         : '<span class="arch-detail-empty-chips">Top-level entry point</span>'}
                 </div>
             </div>
-
             <div class="arch-detail-section">
                 <div class="arch-detail-section-label">Calls Into</div>
                 <div class="arch-chips">
                     ${node.callsInto.length
-                        ? renderChips(node.callsInto)
+                        ? chips(node.callsInto)
                         : '<span class="arch-detail-empty-chips">No outbound dependencies</span>'}
                 </div>
             </div>
-
             <div class="arch-detail-section">
                 <div class="arch-detail-section-label">CLAUDE.md</div>
                 ${node.claudeMd
@@ -569,10 +534,7 @@
         if (panel) panel.classList.remove('is-open');
     }
 
-    // Exposed for chip onclick callbacks
-    window._archSelectNode = function (nodeId) {
-        select(nodeId);
-    };
+    window._archSelectNode = function (nodeId) { select(nodeId); };
 
     // ══════════════════════════════════════════════════════════════════════════
     // TOOLTIP
@@ -584,15 +546,11 @@
         _tooltip.classList.add('is-visible');
         moveTooltip(ev);
     }
-
     function moveTooltip(ev) {
         if (!_tooltip) return;
-        const x = ev.clientX + 14;
-        const y = ev.clientY + 14;
-        _tooltip.style.left = `${x}px`;
-        _tooltip.style.top = `${y}px`;
+        _tooltip.style.left = `${ev.clientX + 14}px`;
+        _tooltip.style.top  = `${ev.clientY + 14}px`;
     }
-
     function hideTooltip() {
         if (_tooltip) _tooltip.classList.remove('is-visible');
     }
@@ -604,8 +562,6 @@
     function buildLegend() {
         const legend = document.getElementById('archLegend');
         if (!legend) return;
-
-        // Deduplicate by label
         const seen = new Set();
         const items = [];
         Object.values(LAYER_CONFIG).forEach(cfg => {
@@ -614,11 +570,10 @@
                 items.push({ label: cfg.label, color: cfg.color });
             }
         });
-
-        legend.innerHTML = items.map(item =>
+        legend.innerHTML = items.map(it =>
             `<div class="arch-legend-item">
-                <div class="arch-legend-dot" style="background:${item.color};"></div>
-                <span>${item.label}</span>
+                <div class="arch-legend-dot" style="background:${it.color};"></div>
+                <span>${it.label}</span>
             </div>`
         ).join('');
     }
@@ -630,15 +585,12 @@
     function mount(container, shell) {
         if (_mounted) return;
         _mounted = true;
-
         _tooltip = document.getElementById('archTooltip');
-
         buildLegend();
         requestAnimationFrame(() => {
             render('archCanvas');
             _wireToolbar();
         });
-
         shell?.setSearchPlaceholder('Filter components...');
     }
 
@@ -653,39 +605,43 @@
         });
         document.getElementById('archResetBtn')?.addEventListener('click', (ev) => {
             ev.stopPropagation();
-            if (_svg && _zoom) _svg.transition().duration(320).call(_zoom.transform, d3.zoomIdentity);
+            if (!_svg || !_zoom) return;
+            const wrap = document.getElementById('archCanvas');
+            const cW = wrap?.clientWidth  || CANVAS_W;
+            const cH = wrap?.clientHeight || CANVAS_H;
+            const s  = Math.min(cW / CANVAS_W, cH / CANVAS_H) * 0.96;
+            _svg.transition().duration(320).call(
+                _zoom.transform,
+                d3.zoomIdentity.translate((cW - CANVAS_W * s) / 2, (cH - CANVAS_H * s) / 2).scale(s)
+            );
         });
     }
 
     function unmount() {
-        _mounted = false;
+        _mounted    = false;
         _selectedId = null;
-        _svg = null;
-        _g = null;
-        _zoom = null;
-        _positions = null;
+        _svg        = null;
+        _g          = null;
+        _zoom       = null;
+        _positions  = null;
         hideTooltip();
     }
 
     function onSearch(query, _shell) {
         if (!_g) return;
         const q = query.trim().toLowerCase();
-        if (!q) {
-            resetVisuals();
-            return;
-        }
+        if (!q) { resetVisuals(); return; }
         const matched = new Set(
-            NODES
-                .filter(n => n.label.toLowerCase().includes(q) || n.desc.toLowerCase().includes(q))
-                .map(n => n.id)
+            NODES.filter(n => n.label.toLowerCase().includes(q) || n.desc.toLowerCase().includes(q))
+                 .map(n => n.id)
         );
         NODES.forEach(n => {
             const dim = !matched.has(n.id);
-            d3.select(`.nd-${n.id} .nd-bg`).attr('stroke-opacity', dim ? 0.15 : 0.8);
-            d3.select(`.nd-${n.id} .nd-label`).attr('opacity', dim ? 0.2 : 1);
-            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', dim ? 0.15 : 0.8);
+            d3.select(`.nd-${n.id} .nd-bg`).attr('stroke-opacity', dim ? 0.12 : 0.80);
+            d3.select(`.nd-${n.id} .nd-label`).attr('opacity', dim ? 0.18 : 1);
+            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', dim ? 0.12 : 0.80);
         });
-        d3.selectAll('.edge').attr('stroke-opacity', 0.08);
+        d3.selectAll('.edge').attr('stroke-opacity', 0.06);
     }
 
     window.PageRouter?.register({
