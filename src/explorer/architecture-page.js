@@ -290,14 +290,13 @@
         clearDetail();
     }
 
-    function fitToContainer(w, h) {
+    function resetZoom(animated) {
+        // The SVG viewBox + preserveAspectRatio="xMidYMid meet" already auto-fits
+        // the canvas to the container. The zoom transform sits on top in viewBox
+        // coordinates — reset = identity.
         if (!_svg || !_zoom) return;
-        const cvW = _isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
-        const cvH = _isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
-        const s   = Math.min(w / cvW, h / cvH) * 0.96;
-        _svg.call(_zoom.transform,
-            d3.zoomIdentity.translate((w - cvW * s) / 2, (h - cvH * s) / 2).scale(s)
-        );
+        const target = animated ? _svg.transition().duration(320) : _svg;
+        target.call(_zoom.transform, d3.zoomIdentity);
     }
 
     function render(canvasId) {
@@ -456,10 +455,9 @@
 
         _resizeObserver = new ResizeObserver((entries) => {
             if (!_mounted) return;
-            const rect  = entries[0].contentRect;
-            const w     = rect.width;
-            const h     = rect.height;
-            if (w === 0 || h === 0) return;
+            const rect = entries[0].contentRect;
+            const w    = rect.width;
+            if (w === 0) return;
 
             const nowLTR = w >= MOBILE_BREAKPOINT;
             if (nowLTR !== lastLTR) {
@@ -468,8 +466,7 @@
                 teardown(canvasId);
                 render(canvasId);
             }
-            // Always re-fit to the actual container dimensions
-            fitToContainer(w, h);
+            // No manual fit needed — viewBox + preserveAspectRatio="meet" auto-fits.
         });
         _resizeObserver.observe(wrap);
     }
@@ -675,17 +672,7 @@
         });
         document.getElementById('archResetBtn')?.addEventListener('click', (ev) => {
             ev.stopPropagation();
-            if (!_svg || !_zoom) return;
-            const wrap = document.getElementById('archCanvas');
-            const w = wrap?.clientWidth  || (_isLTR ? CANVAS_W_LTR : CANVAS_W_TTB);
-            const h = wrap?.clientHeight || (_isLTR ? CANVAS_H_LTR : CANVAS_H_TTB);
-            const cvW = _isLTR ? CANVAS_W_LTR : CANVAS_W_TTB;
-            const cvH = _isLTR ? CANVAS_H_LTR : CANVAS_H_TTB;
-            const s   = Math.min(w / cvW, h / cvH) * 0.96;
-            _svg.transition().duration(320).call(
-                _zoom.transform,
-                d3.zoomIdentity.translate((w - cvW * s) / 2, (h - cvH * s) / 2).scale(s)
-            );
+            resetZoom(true);
         });
     }
 
