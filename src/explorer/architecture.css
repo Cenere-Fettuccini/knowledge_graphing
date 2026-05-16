@@ -1,0 +1,243 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Architecture Page — Component Coupling Map
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.arch-layout {
+    display: flex;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-app);
+}
+
+/* ── Canvas ──────────────────────────────────────────────────────────────── */
+
+.arch-canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.arch-canvas-wrap svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+.arch-canvas-wrap svg:active {
+    cursor: grabbing;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+
+.arch-toolbar {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    z-index: 10;
+}
+
+.arch-toolbar .theme-btn {
+    width: 26px;
+    height: 26px;
+    margin: 0;
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+
+.arch-legend {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.arch-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10px;
+    color: var(--fg-dim);
+    font-family: var(--font);
+}
+
+.arch-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* ── Detail Panel ────────────────────────────────────────────────────────── */
+
+.arch-detail {
+    width: 0;
+    flex-shrink: 0;
+    background: var(--bg-module);
+    border-left: 1px solid var(--border-main);
+    overflow: hidden;
+    overflow-y: auto;
+    transition: width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+}
+
+.arch-detail.is-open {
+    width: 272px;
+}
+
+.arch-detail-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 32px 24px;
+    text-align: center;
+    color: var(--fg-muted);
+    font-size: 12px;
+    line-height: 1.6;
+    gap: 12px;
+}
+
+.arch-detail-empty-state svg {
+    opacity: 0.3;
+}
+
+/* ── Detail Content ──────────────────────────────────────────────────────── */
+
+.arch-detail-header {
+    padding: 18px 16px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.arch-detail-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+
+.arch-detail-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--fg-primary);
+    margin-bottom: 7px;
+    line-height: 1.3;
+}
+
+.arch-detail-desc {
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    line-height: 1.65;
+}
+
+.arch-detail-note {
+    font-size: 11px;
+    color: #C49B76;
+    background: rgba(196, 155, 118, 0.08);
+    border: 1px solid rgba(196, 155, 118, 0.2);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    margin-top: 10px;
+    line-height: 1.55;
+}
+
+/* ── Coupling Sections ───────────────────────────────────────────────────── */
+
+.arch-detail-section {
+    padding: 11px 16px 13px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.arch-detail-section:last-child {
+    border-bottom: none;
+}
+
+.arch-detail-section-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.arch-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.arch-chip {
+    font-size: 10px;
+    font-family: var(--font);
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+    border: 1px solid;
+    cursor: pointer;
+    transition: opacity 0.12s, background 0.12s;
+    white-space: nowrap;
+    background: transparent;
+}
+
+.arch-chip:hover {
+    filter: brightness(1.15);
+}
+
+.arch-detail-empty-chips {
+    font-size: 11px;
+    color: var(--fg-muted);
+    font-style: italic;
+}
+
+.arch-detail-path {
+    font-size: 10px;
+    color: var(--fg-dim);
+    font-family: 'Courier New', monospace;
+    margin-top: 4px;
+    word-break: break-all;
+}
+
+.arch-detail-path-none {
+    font-size: 11px;
+    color: var(--fg-muted);
+    font-style: italic;
+    margin-top: 4px;
+}
+
+/* ── Node hover tooltip ──────────────────────────────────────────────────── */
+
+.arch-tooltip {
+    position: fixed;
+    z-index: 200;
+    background: var(--bg-module);
+    border: 1px solid var(--border-focus);
+    border-radius: var(--radius-sm);
+    padding: 8px 11px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    max-width: 220px;
+    line-height: 1.5;
+    pointer-events: none;
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    transition: opacity 0.12s;
+}
+
+.arch-tooltip.is-visible {
+    opacity: 1;
+}

@@ -1,19 +1,43 @@
 # Agent Platform — Tools
 
-Agent tools are the functions the LLM can call during a turn. Each tool is a plain
-Python function decorated so the agent framework can discover and invoke it.
+Agent tools are plain Python functions the LLM can call during a turn. The
+agent framework discovers them via `registry.py` and passes them to PydanticAI
+at initialization time.
 
 ## Files
 | File | Tool(s) | Purpose |
 |------|---------|---------|
-| `registry.py` | `tools` list | Master list of all active tools — import this to get all tools |
+| `registry.py` | `tools` list | Master list of all active tools |
 | `memory.py` | `search_memories` | Semantic search over past conversation turns |
-| `graph.py` | `search_knowledge_graph` | Read-only search over Neo4j knowledge graph |
-| `graph_write.py` | `graph_write` | Unified write surface for entities, beliefs, tasks, edges. Enforces no-isolated-nodes and runs the reachability sweep. |
+| `graph.py` | `search_knowledge_graph` | Read-only search over the Neo4j knowledge graph |
+| `graph_write.py` | `graph_write` | Unified write surface for entities, beliefs, tasks, edges |
 | `beliefs.py` | `get_belief_trail`, `evolve_belief_tool` | Belief read + supersession |
-| `tasks.py` | `list_tasks`, `update_task` | Task read + status update (writes new tasks via `graph_write`) |
+| `tasks.py` | `list_tasks`, `update_task` | Task read + status update |
 | `time_tools.py` | `get_current_time` | Current UTC time |
-| `common.py` | Shared helpers | Graph health checks, logging utilities |
+| `common.py` | shared helpers | Graph health check, logger |
+
+---
+
+## Called By
+| Caller | What it uses |
+|--------|-------------|
+| `src.core.agent` | `tools` list from `registry.py` — passed to the PydanticAI `Agent` at init |
+
+Tools themselves are **invoked by the LLM** during a turn; the agent framework
+calls them, not application code.
+
+---
+
+## Calls Into
+| Dependency | What is called |
+|------------|---------------|
+| `src.memory.manager` | `get_memory_manager()` — all tools that read/write memory call this |
+| `src.core.config` | `settings` — e.g. Google Search API key, Calendar credentials |
+| `src.agent_platform.tools.common` | `ensure_graph_online()`, `logger` |
+| Google Custom Search API | `search_memories` / `web_search` tools |
+| Google Calendar API | `list_events`, `create_event`, `delete_event` tools |
+
+---
 
 ## Active Tools (from `registry.py`)
 ```python
@@ -29,7 +53,9 @@ from src.agent_platform.tools.registry import tools
 # ]
 ```
 
-## Graph writes — all go through `graph_write`
+---
+
+## Graph Writes — all go through `graph_write`
 `store_knowledge`, `save_belief`, and `create_task` were retired in S0.10.
 Use `graph_write([...intents])` with one of four intent kinds:
 
@@ -40,16 +66,16 @@ Use `graph_write([...intents])` with one of four intent kinds:
 {"kind": "edge",   "source": "Mom", "target": "Birthday Cake", "rel_type": "WANTS"}
 ```
 
-The tool enforces an invariant: every node touched in a batch must end up
-with ≥1 edge. New entities without an edge in the same batch are rejected.
-Beliefs and tasks auto-anchor to the user root if no other anchor resolves.
+**Invariant enforced:** every node touched in a batch must end up with ≥1 edge.
+New entities without an edge in the same batch are rejected. Beliefs and tasks
+auto-anchor to the user root if no other anchor resolves.
 
-The LLM anchor-proposal hook (`_Resolver._propose_anchor`) is currently a
-stub — the deterministic resolver handles every case in practice. The
-contract for the future implementation is documented in the docstring of
-`_propose_anchor` in `graph_write.py`: it specifies the input shape, the
-required output (`EntityIntent` or `None`), the recursion-depth cap, and
-the failure modes the implementation must swallow rather than propagate.
+The LLM anchor-proposal hook (`_Resolver._propose_anchor`) is currently a stub.
+The deterministic resolver handles every case in practice. The contract for a
+future implementation is in the `_propose_anchor` docstring: input shape,
+required output (`EntityIntent | None`), recursion-depth cap, failure modes.
+
+---
 
 ## Adding a New Tool
 
@@ -59,21 +85,20 @@ the failure modes the implementation must swallow rather than propagate.
 4. Import it in `registry.py` and add it to the `tools` list
 
 ```python
-# Example tool signature
 def my_tool(param_a: str, param_b: int = 5) -> dict:
     """Short description for the LLM. Explain what it does and when to use it."""
-    ...
-```
-
-## Dependencies Available in Tools
-Tools run inside the agent turn and call `get_memory_manager()` directly (not via FastAPI `Depends()`):
-```python
-from src.memory.manager import get_memory_manager
-from src.core.config import settings
-
-def my_tool(param: str) -> str:
     memory = get_memory_manager()
     ...
 ```
 
-Tools should NOT import from `src.apps.*`.
+---
+
+## Coupling Notes
+- Tools call `get_memory_manager()` directly — **not** via FastAPI `Depends()`.
+  They run inside an agent turn, not inside a request handler.
+- Tools must **not** import from `src.apps.*`. They are infrastructure, not
+  feature code.
+- Adding a tool only requires editing `registry.py` — the agent picks up the
+  new list on next initialization (next server start).
+- `common.py::ensure_graph_online()` returns an error string if Neo4j is
+  unreachable; graph tools should return that string early rather than crashing.
