@@ -11,15 +11,15 @@
     // Layers without a col are "band" layers — rendered as full-width
     // bars at the top or bottom of the canvas (see node.band).
     const LAYER_CONFIG = {
-        entry:      { label: 'Entry Points',   color: '#70695f', col: 0 },
-        platform:   { label: 'Boot',           color: '#7E91BE', col: 1 },
-        bot:        { label: 'Boot',           color: '#8F859A', col: 1 },
-        app:        { label: 'App Layer',      color: '#7FA38D', col: 2 },
-        background: { label: 'Background',     color: '#C49B76', col: 2 },
-        gateway:    { label: 'Public Gateway', color: '#BEAA7E', col: 3 },
-        infra:      { label: 'Infrastructure', color: '#A37A87', col: 4 },
-        core:       { label: 'Core',           color: '#7E91BE', col: 5 },
-        storage:    { label: 'Storage',        color: '#6B8F7A' },
+        entry:      { label: 'Entry',      color: '#70695f', col: 0 },
+        platform:   { label: 'Platform',   color: '#7E91BE', col: 1 },
+        bot:        { label: 'Bot',        color: '#8F859A', col: 1 },
+        app:        { label: 'Apps',       color: '#7FA38D', col: 2 },
+        background: { label: 'Background', color: '#C49B76', col: 2 },
+        gateway:    { label: 'Gateway',    color: '#BEAA7E', col: 3 },
+        infra:      { label: 'Infra',      color: '#A37A87', col: 4 },
+        core:       { label: 'Core',       color: '#8B7AB8', col: 5 },
+        storage:    { label: 'Storage',    color: '#6B8F7A' },
     };
 
     // yFrac: vertical position within the LTR column  (fraction of drawable height)
@@ -40,7 +40,7 @@
             calledBy: [], callsInto: ['bot'],
         },
         {
-            id: 'platform', label: 'platform/', layer: 'platform',
+            id: 'platform', label: 'platform', layer: 'platform',
             yFrac: 0.32, xFrac: 0.30,
             desc: 'FastAPI app factory (create_platform_app), app registry, shell router, graph-ingest endpoint.',
             note: 'The only place that imports all five app get_*_app() factories. Starts/stops RuminationScheduler in lifespan.',
@@ -49,7 +49,7 @@
             callsInto: ['app_chat', 'app_explorer', 'app_credits', 'app_financial', 'app_routine', 'memory_read', 'rumination', 'core'],
         },
         {
-            id: 'bot', label: 'bot/', layer: 'bot',
+            id: 'bot', label: 'bot', layer: 'bot',
             yFrac: 0.68, xFrac: 0.70,
             desc: 'TelegramBot (handlers, session tracking) + ProactiveBot (outbound digests, reconciliation).',
             note: 'TelegramBot calls src.core.agent.Agent directly — pre-dates AgentService. Migrate to AgentService if refactoring.',
@@ -95,7 +95,7 @@
             calledBy: ['platform'], callsInto: [],
         },
         {
-            id: 'rumination', label: 'rumination/', layer: 'background',
+            id: 'rumination', label: 'rumination', layer: 'background',
             yFrac: 0.87, xFrac: 0.90,
             desc: 'Background scheduler started in FastAPI lifespan. Deep-pass belief synthesis and rabbit-hole ticks.',
             note: 'Disabled by settings.rumination_enabled=False. Manages ProactiveBot lifecycle inside the web server process.',
@@ -129,7 +129,7 @@
             callsInto: ['memory_write', 'core'],
         },
         {
-            id: 'ingestion', label: 'ingestion/', layer: 'infra',
+            id: 'ingestion', label: 'ingestion', layer: 'infra',
             yFrac: 0.76, xFrac: 0.78,
             desc: 'Bulk import pipeline: JSONL, plaintext, Telegram export formats → Chroma queue.',
             note: 'Calls memory.store() only (Chroma). After import, app_explorer calls run_extraction_pass() to populate Neo4j.',
@@ -137,7 +137,7 @@
             calledBy: ['app_explorer'], callsInto: ['memory_write'],
         },
         {
-            id: 'core', label: 'src/core', layer: 'core',
+            id: 'core', label: 'core', layer: 'core',
             yFrac: 0.50, xFrac: 0.50,
             desc: 'Agent, LLM router, rate limiter, config (settings), prompts — internal infrastructure.',
             note: 'Apps must not import from here directly (except settings). Only credits app uses llm_router intentionally.',
