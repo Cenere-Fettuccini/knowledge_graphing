@@ -298,6 +298,29 @@
     // EDGE PATHS
     // ══════════════════════════════════════════════════════════════════════════
 
+    // Must match the marker's viewBox width so the arrowhead lands exactly on
+    // the geometric target (target edge of the consumer / band).
+    const ARROW_LEN = 10;
+
+    // Shifts both the cubic's endpoint and its second control point backward
+    // by ARROW_LEN along the tangent at the endpoint. The bezier shape is
+    // preserved (just slid back along the tangent), so the curve still aims
+    // smoothly at the same vector — but it stops where the marker base sits.
+    function trimCurveTip(tx, ty, cp2x, cp2y) {
+        const vx = tx - cp2x;
+        const vy = ty - cp2y;
+        const len = Math.hypot(vx, vy);
+        if (len < 0.5) return { tx, ty, cp2x, cp2y };
+        const ux = vx / len;
+        const uy = vy / len;
+        return {
+            tx:   tx   - ux * ARROW_LEN,
+            ty:   ty   - uy * ARROW_LEN,
+            cp2x: cp2x - ux * ARROW_LEN,
+            cp2y: cp2y - uy * ARROW_LEN,
+        };
+    }
+
     function edgePath(sp, tp, srcNode, tgtNode, isLTR) {
         if (isLTR) {
             // LTR attachment depends on how many layers the edge crosses:
@@ -310,55 +333,65 @@
 
             if (diff === 1) {
                 // Adjacent forward — sideways into target's left edge.
-                const sx = sp.x + NODE_W / 2 + 1;
-                const sy = sp.y;
-                const tx = tp.x - NODE_W / 2 - 1;
-                const ty = tp.y;
-                const dx = tx - sx;
+                const sx  = sp.x + NODE_W / 2 + 1;
+                const sy  = sp.y;
+                const txO = tp.x - NODE_W / 2 - 1;
+                const tyO = tp.y;
+                const dx  = txO - sx;
                 const cp1x = sx + dx * 0.42;
-                const cp2x = tx - dx * 0.42;
-                return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
+                const c2xO = txO - dx * 0.42;
+                const { tx, ty, cp2x, cp2y } = trimCurveTip(txO, tyO, c2xO, tyO);
+                return `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
             }
 
             if (diff > 1) {
                 // Skip forward — extend right, then drop into target from above.
-                const sx = sp.x + NODE_W / 2 + 1;
-                const sy = sp.y;
-                const tx = tp.x;
-                const ty = tp.y - NODE_H / 2 - 1;
-                const dx = tx - sx;
-                const dy = ty - sy;
+                const sx  = sp.x + NODE_W / 2 + 1;
+                const sy  = sp.y;
+                const txO = tp.x;
+                const tyO = tp.y - NODE_H / 2 - 1;
+                const dx  = txO - sx;
+                const dy  = tyO - sy;
                 const cp1x = sx + Math.max(dx * 0.55, 28);
                 const cp1y = sy;
-                const cp2x = tx;
-                const cp2y = ty - Math.max(Math.abs(dy) * 0.45, 28);
+                const c2xO = txO;
+                const c2yO = tyO - Math.max(Math.abs(dy) * 0.45, 28);
+                const { tx, ty, cp2x, cp2y } = trimCurveTip(txO, tyO, c2xO, c2yO);
                 return `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
             }
 
             // Backward (or same column) — drop below both nodes and rise up
             // into the target from underneath.
-            const sx = sp.x;
-            const sy = sp.y + NODE_H / 2 + 1;   // source bottom
-            const tx = tp.x;
-            const ty = tp.y + NODE_H / 2 + 1;   // target bottom
-            const offset = Math.max(70, Math.abs(tx - sx) * 0.25 + 30);
-            return `M ${sx} ${sy} C ${sx} ${sy + offset}, ${tx} ${ty + offset}, ${tx} ${ty}`;
+            const sx  = sp.x;
+            const sy  = sp.y + NODE_H / 2 + 1;
+            const txO = tp.x;
+            const tyO = tp.y + NODE_H / 2 + 1;
+            const offset = Math.max(70, Math.abs(txO - sx) * 0.25 + 30);
+            const c2xO = txO;
+            const c2yO = tyO + offset;
+            const { tx, ty, cp2x, cp2y } = trimCurveTip(txO, tyO, c2xO, c2yO);
+            return `M ${sx} ${sy} C ${sx} ${sy + offset}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
         } else {
             // Bottom edge of source → top edge of target
-            const sx = sp.x;
-            const sy = sp.y + NODE_H / 2 + 1;
-            const tx = tp.x;
-            const ty = tp.y - NODE_H / 2 - 1;
-            const dy = ty - sy;
+            const sx  = sp.x;
+            const sy  = sp.y + NODE_H / 2 + 1;
+            const txO = tp.x;
+            const tyO = tp.y - NODE_H / 2 - 1;
+            const dy  = tyO - sy;
             if (dy > 8) {
                 const cp1y = sy + dy * 0.42;
-                const cp2y = ty - dy * 0.42;
-                return `M ${sx} ${sy} C ${sx} ${cp1y}, ${tx} ${cp2y}, ${tx} ${ty}`;
+                const c2xO = txO;
+                const c2yO = tyO - dy * 0.42;
+                const { tx, ty, cp2x, cp2y } = trimCurveTip(txO, tyO, c2xO, c2yO);
+                return `M ${sx} ${sy} C ${sx} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
             }
             // Backward / same-row: arc left or right
             const arcDir = sx < tp.x ? -1 : 1;
             const offset = 55 + Math.abs(dy) * 0.25;
-            return `M ${sx} ${sy} C ${sx + arcDir * offset} ${sy + 30}, ${tx + arcDir * offset} ${ty - 30}, ${tx} ${ty}`;
+            const c2xO = txO + arcDir * offset;
+            const c2yO = tyO - 30;
+            const { tx, ty, cp2x, cp2y } = trimCurveTip(txO, tyO, c2xO, c2yO);
+            return `M ${sx} ${sy} C ${sx + arcDir * offset} ${sy + 30}, ${cp2x} ${cp2y}, ${tx} ${ty}`;
         }
     }
 
@@ -421,16 +454,20 @@
         // explicit so the marker scales 1:1 with the line stroke and never
         // dwarfs it. Each marker is filled with its layer colour so the
         // arrowhead reads as a continuation of the line.
+        // Marker is anchored at its BASE (refX=0) and extends one marker-length
+        // forward along the path tangent. Combined with the path-trim helper
+        // below, this means the line stops exactly where the arrow base
+        // begins — no overlap, no curve passing through the triangle.
         const defs = _svg.append('defs');
         Object.entries(EDGE_KINDS).forEach(([kindId, cfg]) => {
             defs.append('marker')
                 .attr('id', `arr-${kindId}`)
-                .attr('viewBox', '0 -5 10 10')
-                .attr('refX', 10).attr('refY', 0)
-                .attr('markerUnits', 'strokeWidth')
-                .attr('markerWidth', 6).attr('markerHeight', 6)
+                .attr('viewBox', '0 -3 10 6')
+                .attr('refX', 0).attr('refY', 0)
+                .attr('markerUnits', 'userSpaceOnUse')
+                .attr('markerWidth', 10).attr('markerHeight', 6)
                 .attr('orient', 'auto')
-                .append('path').attr('d', 'M0,-5 L10,0 L0,5 Z').attr('fill', cfg.color);
+                .append('path').attr('d', 'M0,-3 L10,0 L0,3 Z').attr('fill', cfg.color);
         });
 
         // ── Zoom group ────────────────────────────────────────────────────────
@@ -500,16 +537,18 @@
             if (tgtNode.band === 'top') {
                 // Visually inverted: arrow comes DOWN from the top band to the
                 // consumer (data-flow direction). Vertical line at consumer's x.
+                // The line stops one ARROW_LEN before the target so the marker
+                // can complete the visual.
                 const x      = sp.x;
                 const yStart = topBarBotY + 1;
-                const yEnd   = sp.y - NODE_H / 2 - 1;
+                const yEnd   = sp.y - NODE_H / 2 - 1 - ARROW_LEN;
                 if (yEnd <= yStart) return;
                 pathD = `M ${x} ${yStart} L ${x} ${yEnd}`;
             } else if (tgtNode.band === 'bottom') {
                 // Arrow points DOWN from producer to the bottom band.
                 const x      = sp.x;
                 const yStart = sp.y + NODE_H / 2 + 1;
-                const yEnd   = botBarTopY - 1;
+                const yEnd   = botBarTopY - 1 - ARROW_LEN;
                 if (yEnd <= yStart) return;
                 pathD = `M ${x} ${yStart} L ${x} ${yEnd}`;
             } else if (srcNode.band) {
