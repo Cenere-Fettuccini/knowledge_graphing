@@ -165,22 +165,41 @@
         },
     ];
 
-    // ── Derived edges ──────────────────────────────────────────────────────────
+    // ── Edge kinds (colour-by-purpose) ─────────────────────────────────────────
+
+    const EDGE_KINDS = {
+        call:  { color: '#8AA3C9', label: 'Call'  },   // function/method invocation
+        read:  { color: '#7FB099', label: 'Read'  },   // anything → memory_read band
+        write: { color: '#D4A876', label: 'Write' },   // anything → memory_write band
+    };
+
+    function classifyEdge(srcNode, tgtNode) {
+        if (tgtNode.band === 'top')    return 'read';
+        if (tgtNode.band === 'bottom') return 'write';
+        return 'call';
+    }
+
+    // ── Lookup + derived edges ─────────────────────────────────────────────────
+
+    const NODE_BY_ID = {};
+    NODES.forEach(n => { NODE_BY_ID[n.id] = n; });
 
     const EDGES = [];
     const _edgeSet = new Set();
     NODES.forEach(node => {
         node.callsInto.forEach(targetId => {
             const key = `${node.id}→${targetId}`;
-            if (!_edgeSet.has(key)) {
-                _edgeSet.add(key);
-                EDGES.push({ source: node.id, target: targetId });
-            }
+            if (_edgeSet.has(key)) return;
+            const target = NODE_BY_ID[targetId];
+            if (!target) return;
+            _edgeSet.add(key);
+            EDGES.push({
+                source: node.id,
+                target: targetId,
+                kind:   classifyEdge(node, target),
+            });
         });
     });
-
-    const NODE_BY_ID = {};
-    NODES.forEach(n => { NODE_BY_ID[n.id] = n; });
 
     // ══════════════════════════════════════════════════════════════════════════
     // LAYOUT CONSTANTS
@@ -381,23 +400,22 @@
             .on('click', () => deselect());
 
         // ── Arrow markers ─────────────────────────────────────────────────────
+        // refX is at the tip so the arrowhead's point lands exactly on the
+        // line endpoint; the body extends back along the line. markerUnits is
+        // explicit so the marker scales 1:1 with the line stroke and never
+        // dwarfs it. Each marker is filled with its layer colour so the
+        // arrowhead reads as a continuation of the line.
         const defs = _svg.append('defs');
-        Object.entries(LAYER_CONFIG).forEach(([layerId, cfg]) => {
+        Object.entries(EDGE_KINDS).forEach(([kindId, cfg]) => {
             defs.append('marker')
-                .attr('id', `arr-${layerId}`)
-                .attr('viewBox', '0 -4 8 8')
-                .attr('refX', 7).attr('refY', 0)
-                .attr('markerWidth', 5).attr('markerHeight', 5)
+                .attr('id', `arr-${kindId}`)
+                .attr('viewBox', '0 -5 10 10')
+                .attr('refX', 10).attr('refY', 0)
+                .attr('markerUnits', 'strokeWidth')
+                .attr('markerWidth', 6).attr('markerHeight', 6)
                 .attr('orient', 'auto')
-                .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', cfg.color);
+                .append('path').attr('d', 'M0,-5 L10,0 L0,5 Z').attr('fill', cfg.color);
         });
-        defs.append('marker')
-            .attr('id', 'arr-dim')
-            .attr('viewBox', '0 -4 8 8')
-            .attr('refX', 7).attr('refY', 0)
-            .attr('markerWidth', 5).attr('markerHeight', 5)
-            .attr('orient', 'auto')
-            .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#3a3835');
 
         // ── Zoom group ────────────────────────────────────────────────────────
         _g = _svg.append('g').attr('class', 'arch-root');
@@ -462,7 +480,6 @@
             const tgtNode = NODE_BY_ID[edge.target];
 
             let pathD;
-            let strokeLayer;
 
             if (tgtNode.band === 'top') {
                 // Visually inverted: arrow comes DOWN from the top band to the
@@ -471,16 +488,14 @@
                 const yStart = topBarBotY + 1;
                 const yEnd   = sp.y - NODE_H / 2 - 1;
                 if (yEnd <= yStart) return;
-                pathD       = `M ${x} ${yStart} L ${x} ${yEnd}`;
-                strokeLayer = tgtNode.layer;          // storage colour
+                pathD = `M ${x} ${yStart} L ${x} ${yEnd}`;
             } else if (tgtNode.band === 'bottom') {
                 // Arrow points DOWN from producer to the bottom band.
                 const x      = sp.x;
                 const yStart = sp.y + NODE_H / 2 + 1;
                 const yEnd   = botBarTopY - 1;
                 if (yEnd <= yStart) return;
-                pathD       = `M ${x} ${yStart} L ${x} ${yEnd}`;
-                strokeLayer = srcNode.layer;
+                pathD = `M ${x} ${yStart} L ${x} ${yEnd}`;
             } else if (srcNode.band) {
                 // Source is a band — this only happens for the lazy
                 // memory_write → analyzers trigger. Skip the visible edge to
@@ -488,19 +503,21 @@
                 // shows in the detail panel.
                 return;
             } else {
-                pathD       = edgePath(sp, tp, srcNode, tgtNode, isLTR);
-                strokeLayer = srcNode.layer;
+                pathD = edgePath(sp, tp, srcNode, tgtNode, isLTR);
             }
 
-            const color = LAYER_CONFIG[strokeLayer].color;
+            const kind  = edge.kind;
+            const color = EDGE_KINDS[kind].color;
             edgeG.append('path')
-                .attr('class', `edge e-src-${edge.source} e-tgt-${edge.target}`)
+                .attr('class', `edge e-src-${edge.source} e-tgt-${edge.target} e-kind-${kind}`)
+                .attr('data-kind', kind)
                 .attr('d', pathD)
                 .attr('fill', 'none')
                 .attr('stroke', color)
-                .attr('stroke-width', 1.4)
-                .attr('stroke-opacity', 0.32)
-                .attr('marker-end', `url(#arr-${strokeLayer})`);
+                .attr('stroke-width', 1.6)
+                .attr('stroke-linecap', 'round')
+                .attr('opacity', 0.55)
+                .attr('marker-end', `url(#arr-${kind})`);
         });
 
         // ── Nodes ─────────────────────────────────────────────────────────────
@@ -616,25 +633,66 @@
     // INTERACTIONS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function connectedIds(nodeId) {
-        const ids = new Set([nodeId]);
+    // BFS traversal — `forward` walks callsInto, `!forward` walks calledBy.
+    // Returns the visited set, the edge keys touched, and the IDs reached at
+    // each step (so the detail panel can render numbered steps).
+    function bfs(rootId, forward) {
+        const visited   = new Set([rootId]);
+        const edgeKeys  = new Set();
+        const stepNodes = [];
+        let frontier   = [rootId];
+        while (frontier.length > 0) {
+            const stepIds = [];
+            const next    = [];
+            frontier.forEach(nodeId => {
+                EDGES.forEach(e => {
+                    const myEnd    = forward ? e.source : e.target;
+                    const otherEnd = forward ? e.target : e.source;
+                    if (myEnd !== nodeId) return;
+                    const key = `${e.source}→${e.target}`;
+                    if (visited.has(otherEnd)) { edgeKeys.add(key); return; }
+                    visited.add(otherEnd);
+                    edgeKeys.add(key);
+                    stepIds.push(otherEnd);
+                    next.push(otherEnd);
+                });
+            });
+            if (stepIds.length > 0) stepNodes.push(stepIds);
+            frontier = next;
+        }
+        return { visited, edgeKeys, stepNodes };
+    }
+
+    function flowFromNode(rootId) {
+        const fwd = bfs(rootId, true);
+        if (fwd.edgeKeys.size > 0) return { ...fwd, dir: 'forward' };
+        const bwd = bfs(rootId, false);
+        return { ...bwd, dir: 'backward' };
+    }
+
+    function neighbourhoodHighlight(nodeId) {
+        // Cheap, used on hover — only direct neighbours and their edges.
+        const visited  = new Set([nodeId]);
+        const edgeKeys = new Set();
         EDGES.forEach(e => {
-            if (e.source === nodeId) ids.add(e.target);
-            if (e.target === nodeId) ids.add(e.source);
+            if (e.source === nodeId) { visited.add(e.target); edgeKeys.add(`${e.source}→${e.target}`); }
+            if (e.target === nodeId) { visited.add(e.source); edgeKeys.add(`${e.source}→${e.target}`); }
         });
-        return ids;
+        return { visited, edgeKeys };
     }
 
     function hovering(nodeId, on) {
         if (_selectedId) return;
         if (!on) { resetVisuals(); return; }
-        applyDimming(nodeId, connectedIds(nodeId));
+        const h = neighbourhoodHighlight(nodeId);
+        applyDimming(nodeId, h.visited, h.edgeKeys);
     }
 
     function select(nodeId) {
         _selectedId = nodeId;
-        applyDimming(nodeId, connectedIds(nodeId));
-        renderDetail(nodeId);
+        const flow  = flowFromNode(nodeId);
+        applyDimming(nodeId, flow.visited, flow.edgeKeys);
+        renderDetail(nodeId, flow);
     }
 
     function deselect() {
@@ -643,29 +701,27 @@
         clearDetail();
     }
 
-    function applyDimming(selectedId, connected) {
+    function applyDimming(selectedId, activeNodes, activeEdgeKeys) {
         NODES.forEach(n => {
-            const isSel  = n.id === selectedId;
-            const isConn = connected.has(n.id);
+            const isSel    = n.id === selectedId;
+            const isActive = activeNodes.has(n.id);
             d3.select(`.nd-${n.id} .nd-bg`)
                 .attr('stroke-width',   isSel ? 2.4 : 1.4)
-                .attr('stroke-opacity', isConn ? 1.0 : 0.15)
+                .attr('stroke-opacity', isActive ? 1.0 : 0.15)
                 .attr('fill',           isSel ? '#2a2927' : '#21201d');
-            d3.select(`.nd-${n.id} .nd-label`).attr('opacity', isConn ? 1 : 0.2);
-            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', isConn ? 0.80 : 0.15);
+            d3.select(`.nd-${n.id} .nd-label`).attr('opacity', isActive ? 1 : 0.2);
+            d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', isActive ? 0.85 : 0.15);
         });
+        // opacity on <path> fades BOTH the stroke and its marker-end together,
+        // so the arrowhead stays visually tied to the line.
         d3.selectAll('.edge').each(function () {
-            const el   = d3.select(this);
-            const cls  = this.getAttribute('class') || '';
-            const src  = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
-            const tgt  = (cls.match(/e-tgt-([^\s]+)/) || [])[1] || '';
-            const active   = (src === selectedId || tgt === selectedId);
-            const srcNode  = NODE_BY_ID[src];
-            el.attr('stroke-opacity', active ? 0.85 : 0.05)
-              .attr('stroke-width',   active ? 2.2 : 1.4)
-              .attr('marker-end', active
-                  ? (srcNode ? `url(#arr-${srcNode.layer})` : 'url(#arr-dim)')
-                  : 'url(#arr-dim)');
+            const cls = this.getAttribute('class') || '';
+            const src = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
+            const tgt = (cls.match(/e-tgt-([^\s]+)/) || [])[1] || '';
+            const active = activeEdgeKeys.has(`${src}→${tgt}`);
+            d3.select(this)
+                .attr('opacity',      active ? 1.0 : 0.06)
+                .attr('stroke-width', active ? 2.0 : 1.4);
         });
     }
 
@@ -676,21 +732,16 @@
             d3.select(`.nd-${n.id} .nd-label`).attr('opacity', 1);
             d3.select(`.nd-${n.id} .nd-strip`).attr('opacity', 0.70);
         });
-        d3.selectAll('.edge').each(function () {
-            const cls     = this.getAttribute('class') || '';
-            const src     = (cls.match(/e-src-([^\s]+)/) || [])[1] || '';
-            const srcNode = NODE_BY_ID[src];
-            d3.select(this)
-                .attr('stroke-opacity', 0.28).attr('stroke-width', 1.4)
-                .attr('marker-end', srcNode ? `url(#arr-${srcNode.layer})` : 'url(#arr-dim)');
-        });
+        d3.selectAll('.edge')
+            .attr('opacity', 0.55)
+            .attr('stroke-width', 1.6);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // DETAIL PANEL
     // ══════════════════════════════════════════════════════════════════════════
 
-    function renderDetail(nodeId) {
+    function renderDetail(nodeId, flow) {
         const panel   = document.getElementById('archDetail');
         const content = document.getElementById('archDetailContent');
         if (!panel || !content) return;
@@ -709,6 +760,22 @@
                     onclick="window._archSelectNode('${n.id}')">${n.label}</button>`;
             }).join('');
         };
+
+        const flowSection = (flow && flow.stepNodes && flow.stepNodes.length > 0)
+            ? `<div class="arch-detail-section">
+                <div class="arch-detail-section-label">
+                    ${flow.dir === 'forward' ? 'Downstream flow' : 'Upstream flow'}
+                </div>
+                <div class="arch-flow">
+                    ${flow.stepNodes.map((ids, i) => `
+                        <div class="arch-flow-step">
+                            <span class="arch-flow-step-num">${i + 1}</span>
+                            <div class="arch-flow-step-nodes">${chips(ids)}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`
+            : '';
 
         content.innerHTML = `
             <div class="arch-detail-header">
@@ -735,6 +802,7 @@
                         : '<span class="arch-detail-empty-chips">No outbound dependencies</span>'}
                 </div>
             </div>
+            ${flowSection}
             <div class="arch-detail-section">
                 <div class="arch-detail-section-label">CLAUDE.md</div>
                 ${node.claudeMd
@@ -779,20 +847,36 @@
     function buildLegend() {
         const legend = document.getElementById('archLegend');
         if (!legend) return;
-        const seen  = new Set();
-        const items = [];
+
+        const layerSeen  = new Set();
+        const layerItems = [];
         Object.values(LAYER_CONFIG).forEach(cfg => {
-            if (!seen.has(cfg.label)) {
-                seen.add(cfg.label);
-                items.push({ label: cfg.label, color: cfg.color });
-            }
+            if (layerSeen.has(cfg.label)) return;
+            layerSeen.add(cfg.label);
+            layerItems.push({ label: cfg.label, color: cfg.color });
         });
-        legend.innerHTML = items.map(it =>
-            `<div class="arch-legend-item">
-                <div class="arch-legend-dot" style="background:${it.color};"></div>
-                <span>${it.label}</span>
-            </div>`
-        ).join('');
+
+        const kindItems = Object.values(EDGE_KINDS);
+
+        legend.innerHTML = `
+            <div class="arch-legend-group">
+                ${layerItems.map(it =>
+                    `<div class="arch-legend-item">
+                        <div class="arch-legend-dot" style="background:${it.color};"></div>
+                        <span>${it.label}</span>
+                    </div>`
+                ).join('')}
+            </div>
+            <div class="arch-legend-divider"></div>
+            <div class="arch-legend-group">
+                ${kindItems.map(it =>
+                    `<div class="arch-legend-item">
+                        <div class="arch-legend-line" style="background:${it.color};"></div>
+                        <span>${it.label}</span>
+                    </div>`
+                ).join('')}
+            </div>
+        `;
     }
 
     // ══════════════════════════════════════════════════════════════════════════

@@ -76,6 +76,64 @@
     flex-shrink: 0;
 }
 
+.arch-legend-line {
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+
+.arch-legend-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.arch-legend-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 6px 0;
+    width: 70%;
+}
+
+/* ── Flow steps in detail panel ──────────────────────────────────────────── */
+
+.arch-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.arch-flow-step {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.arch-flow-step-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--bg-app);
+    border: 1px solid var(--border-main);
+    color: var(--fg-dim);
+    font-size: 9px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.arch-flow-step-nodes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
 /* ── Detail Panel ────────────────────────────────────────────────────────── */
 
 .arch-detail {
