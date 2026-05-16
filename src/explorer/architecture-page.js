@@ -382,17 +382,6 @@
         const drawW = canvasW - PAD_LEFT - PAD_RIGHT;
         const { drawTop, drawBot, drawH } = middleZone(canvasH, isLTR);
 
-        // Horizontal separators bracketing the middle zone (memory bands sit
-        // outside these lines, top and bottom).
-        const sepTopY = PAD_TOP + BAND_H;
-        const sepBotY = canvasH - PAD_BOTTOM - BAND_H;
-        [sepTopY, sepBotY].forEach(y => {
-            _g.append('line')
-                .attr('x1', PAD_LEFT).attr('y1', y)
-                .attr('x2', canvasW - PAD_RIGHT).attr('y2', y)
-                .attr('stroke', '#3a3835').attr('stroke-width', 1).attr('stroke-dasharray', '5,5');
-        });
-
         // Per-layer band lines + labels — skip layers without a `col` (storage)
         const bandMeta = {};
         Object.values(LAYER_CONFIG).forEach(cfg => {
@@ -431,21 +420,59 @@
         });
 
         // ── Edges ─────────────────────────────────────────────────────────────
+        // Band geometry — the bars span the canvas width
+        const BAR_H        = 34;
+        const topBarBotY   = (PAD_TOP + BAND_H / 2) + BAR_H / 2;
+        const botBarTopY   = (canvasH - PAD_BOTTOM - BAND_H / 2) - BAR_H / 2;
+
         const edgeG = _g.append('g').attr('class', 'edge-layer');
         EDGES.forEach(edge => {
-            const sp = _positions[edge.source];
-            const tp = _positions[edge.target];
+            const sp      = _positions[edge.source];
+            const tp      = _positions[edge.target];
             if (!sp || !tp) return;
             const srcNode = NODE_BY_ID[edge.source];
-            const color   = LAYER_CONFIG[srcNode.layer].color;
+            const tgtNode = NODE_BY_ID[edge.target];
+
+            let pathD;
+            let strokeLayer;
+
+            if (tgtNode.band === 'top') {
+                // Visually inverted: arrow comes DOWN from the top band to the
+                // consumer (data-flow direction). Vertical line at consumer's x.
+                const x      = sp.x;
+                const yStart = topBarBotY + 1;
+                const yEnd   = sp.y - NODE_H / 2 - 1;
+                if (yEnd <= yStart) return;
+                pathD       = `M ${x} ${yStart} L ${x} ${yEnd}`;
+                strokeLayer = tgtNode.layer;          // storage colour
+            } else if (tgtNode.band === 'bottom') {
+                // Arrow points DOWN from producer to the bottom band.
+                const x      = sp.x;
+                const yStart = sp.y + NODE_H / 2 + 1;
+                const yEnd   = botBarTopY - 1;
+                if (yEnd <= yStart) return;
+                pathD       = `M ${x} ${yStart} L ${x} ${yEnd}`;
+                strokeLayer = srcNode.layer;
+            } else if (srcNode.band) {
+                // Source is a band — this only happens for the lazy
+                // memory_write → analyzers trigger. Skip the visible edge to
+                // avoid a clutter-inducing upward arrow; the relationship still
+                // shows in the detail panel.
+                return;
+            } else {
+                pathD       = edgePath(sp, tp, isLTR);
+                strokeLayer = srcNode.layer;
+            }
+
+            const color = LAYER_CONFIG[strokeLayer].color;
             edgeG.append('path')
                 .attr('class', `edge e-src-${edge.source} e-tgt-${edge.target}`)
-                .attr('d', edgePath(sp, tp, isLTR))
+                .attr('d', pathD)
                 .attr('fill', 'none')
                 .attr('stroke', color)
                 .attr('stroke-width', 1.4)
-                .attr('stroke-opacity', 0.28)
-                .attr('marker-end', `url(#arr-${srcNode.layer})`);
+                .attr('stroke-opacity', 0.32)
+                .attr('marker-end', `url(#arr-${strokeLayer})`);
         });
 
         // ── Nodes ─────────────────────────────────────────────────────────────
@@ -454,6 +481,45 @@
             const p     = _positions[node.id];
             const color = LAYER_CONFIG[node.layer].color;
 
+            // ── Band node: full-width horizontal bar ──────────────────────────
+            if (node.band) {
+                const barW = canvasW - PAD_LEFT - PAD_RIGHT;
+                const barX = PAD_LEFT;
+                const barY = p.y - BAR_H / 2;
+
+                const g = nodeG.append('g')
+                    .attr('class', `node nd-${node.id}`)
+                    .attr('cursor', 'pointer')
+                    .on('click',      (ev) => { ev.stopPropagation(); select(node.id); })
+                    .on('mouseenter', (ev) => { hovering(node.id, true); showTooltip(ev, node.desc); })
+                    .on('mousemove',  (ev) => moveTooltip(ev))
+                    .on('mouseleave', ()   => { hovering(node.id, false); hideTooltip(); });
+
+                g.append('rect').attr('class', 'nd-bg')
+                    .attr('x', barX).attr('y', barY)
+                    .attr('width', barW).attr('height', BAR_H).attr('rx', NODE_RX)
+                    .attr('fill', '#21201d').attr('stroke', color)
+                    .attr('stroke-width', 1.4).attr('stroke-opacity', 0.7);
+
+                // Color strip on the edge that "faces" the middle zone — the
+                // bottom of the top bar, the top of the bottom bar.
+                const stripY = (node.band === 'top') ? barY + BAR_H - 4 : barY + 1;
+                g.append('rect').attr('class', 'nd-strip')
+                    .attr('x', barX + 1).attr('y', stripY)
+                    .attr('width', barW - 2).attr('height', 3)
+                    .attr('rx', NODE_RX - 1).attr('fill', color).attr('opacity', 0.80);
+
+                g.append('text').attr('class', 'nd-label')
+                    .attr('x', barX + barW / 2).attr('y', p.y + 2)
+                    .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
+                    .attr('font-size', '11').attr('font-family', 'Inter, sans-serif')
+                    .attr('fill', '#DFDCD6').attr('letter-spacing', '0.04em')
+                    .attr('pointer-events', 'none')
+                    .text(node.label);
+                return;
+            }
+
+            // ── Regular node ──────────────────────────────────────────────────
             const g = nodeG.append('g')
                 .attr('class', `node nd-${node.id}`)
                 .attr('transform', `translate(${p.x - NODE_W / 2}, ${p.y - NODE_H / 2})`)
@@ -468,7 +534,6 @@
                 .attr('fill', '#21201d').attr('stroke', color)
                 .attr('stroke-width', 1.4).attr('stroke-opacity', 0.65);
 
-            // Top strip for LTR, left strip for TTB
             if (isLTR) {
                 g.append('rect').attr('class', 'nd-strip')
                     .attr('x', 1).attr('y', 1)
