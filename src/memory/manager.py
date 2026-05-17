@@ -805,6 +805,17 @@ class MemoryManager:
             self._health_cache_time = 0
             self._spill_batch_ops(batch.ops)
             batch.spilled = True
+            return
+        from datetime import datetime, timezone
+        from src.agent_platform.analyzers import orphan_reattachment as _orphan
+        now = datetime.now(timezone.utc).isoformat()
+        orphans = _reachability.detect_orphans(self.neo4j.driver)
+        if orphans:
+            logger.info(
+                "_flush_batch: %d orphan(s) detected after commit — running reattachment",
+                len(orphans),
+            )
+            _orphan.reattach_orphans(self, orphans, now)
 
     def _spill_batch_ops(self, ops: list[tuple[str, dict]]) -> None:
         for op_type, kwargs in ops:
@@ -1144,12 +1155,32 @@ class MemoryManager:
 
     # ── Reachability sweep (root-anchored cleanup) ───────────────────────────
 
+    def reattach_orphaned_nodes(self) -> dict:
+        """Detect and semantically reattach nodes unreachable from the user root.
+
+        Runs automatically after every successful ``batch_graph_writes`` commit.
+        Call manually to run a one-off sweep.
+
+        Returns::
+
+            {
+                "reattached": [{"id", "name", "target", "rel_type", "reasoning"}, ...],
+                "fallback":   [{"id", "name"}, ...],
+            }
+        """
+        from datetime import datetime, timezone
+        from src.agent_platform.analyzers import orphan_reattachment as _orphan
+        now = datetime.now(timezone.utc).isoformat()
+        orphans = _reachability.detect_orphans(self.neo4j.driver)
+        if not orphans:
+            return {"reattached": [], "fallback": []}
+        return _orphan.reattach_orphans(self, orphans, now)
+
     def quarantine_unreachable_nodes(self) -> int:
         """Label nodes unreachable from the user root with ``:Quarantine``.
 
-        Called after each ``graph_write`` batch to catch islands left behind
-        by merges, edge deletions, or partial writes. Returns the count
-        newly quarantined this run.
+        Not called automatically — use for manual/scheduled quarantine passes.
+        Returns the count newly quarantined.
         """
         from datetime import datetime, timezone
         return _reachability.quarantine_unreachable(
