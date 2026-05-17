@@ -783,12 +783,22 @@
 
     // ── Graph controls (zoom reinterpreted as FOV) ────────────────────────────
 
+    // Apply a zoom step. Mirrors what the scroll-wheel handler does so the
+    // buttons and keyboard shortcuts can't be overridden mid-click by the
+    // node-focus / recenter animation loop.
+    function applyZoomStep(delta) {
+        isAnimating = false;
+        const next = Math.max(180, Math.min(800, fov + delta));
+        fov = next;
+        targetFov = next;
+    }
+
     function bindGraphControls() {
         document.getElementById('zoomInBtn')?.addEventListener('click', () => {
-            fov = Math.min(800, fov + 40);
+            applyZoomStep(40);
         });
         document.getElementById('zoomOutBtn')?.addEventListener('click', () => {
-            fov = Math.max(180, fov - 40);
+            applyZoomStep(-40);
         });
         document.getElementById('navBackBtn')?.addEventListener('click', () => {
             window.GraphManager.back();
@@ -809,6 +819,29 @@
                     window.GraphManager?.setLimit?.(next);
                 }
             });
+        }
+
+        // Keyboard shortcuts: "+" / "=" to zoom in, "-" / "_" to zoom out.
+        // Skipped when the user is typing in an input/textarea/contenteditable
+        // so the search box etc. stay unaffected. Bound on the document so
+        // they work as long as the explorer page is in focus.
+        if (!window.__explorerZoomKeysBound) {
+            document.addEventListener('keydown', (e) => {
+                // Only when the explorer's graph canvas is on-screen.
+                const canvas = document.getElementById('graphCanvas');
+                if (!canvas || canvas.offsetParent === null) return;
+                const t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                if (e.key === '+' || e.key === '=') {
+                    e.preventDefault();
+                    applyZoomStep(40);
+                } else if (e.key === '-' || e.key === '_') {
+                    e.preventDefault();
+                    applyZoomStep(-40);
+                }
+            });
+            window.__explorerZoomKeysBound = true;
         }
     }
 
