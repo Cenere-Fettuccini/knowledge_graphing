@@ -2,7 +2,7 @@
 
 Drives the count-triggered ingestion path (S0.6b). LM Studio + Gemma 4 is
 the production target; any OpenAI-compatible local server will work as
-long as it honours ``response_format={"type":"json_object"}``.
+long as it honours ``response_format={"type":"json_schema"}``.
 
 Design notes:
 

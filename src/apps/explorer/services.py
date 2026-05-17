@@ -58,8 +58,10 @@ def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:
 
 
 def get_bootstrap_status(memory: MemoryManager) -> dict:
+    if not memory.is_graph_online():
+        return {"initialized": None, "user": None, "neo4j_offline": True}
     user = memory.get_user_root()
-    return {"initialized": user is not None, "user": user}
+    return {"initialized": user is not None, "user": user, "neo4j_offline": False}
 
 
 def bootstrap_user(name: str, memory: MemoryManager) -> dict:
@@ -67,6 +69,26 @@ def bootstrap_user(name: str, memory: MemoryManager) -> dict:
         raise ValueError("name must be a non-empty string")
     user = memory.bootstrap_user_root(name.strip())
     return {"user": user}
+
+
+def reset_graph(memory: MemoryManager) -> dict:
+    """Wipe all Neo4j nodes, reseed the Kevin root, and re-queue all Chroma rows for analysis."""
+    root = memory.bootstrap_user_root("Kevin")
+    requeued = memory.mark_all_unanalyzed(include_ephemeral=False)
+    return {"user": root, "requeued": requeued}
+
+
+async def drain_after_reset(memory: MemoryManager) -> None:
+    """Run extraction passes in a loop until the queue is empty (post-reset drain)."""
+    from src.agent_platform.analyzers.graph_ingest_trigger import run_extraction_pass
+    _BATCH_CAP = 50
+    for _ in range(_BATCH_CAP):
+        remaining = memory.count_unanalyzed()
+        if remaining <= 0:
+            break
+        result = await run_extraction_pass(memory, batch_size=20)
+        if result.get("skipped") or not result.get("processed_messages"):
+            break
 
 
 def get_analyzer_status(memory: MemoryManager) -> dict:

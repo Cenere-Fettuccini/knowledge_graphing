@@ -2,7 +2,8 @@
 
 After every successful Neo4j batch commit, ``reattach_orphans()`` is called
 with the list of nodes that ``detect_orphans()`` found unreachable from the
-user root.  For each orphan it:
+user root. Orphans that cannot be placed stay orphaned and are retried on the
+next pass — no fallback ``ORPHANED_LINK`` edge is ever written.  For each orphan it:
 
   1. **RAG** — searches ChromaDB for conversation turns that mention the node,
      providing the LLM with the original context in which the node was created.
@@ -14,8 +15,8 @@ user root.  For each orphan it:
      into the graph.
   4. **Write** — if the LLM returns a high-confidence proposal that resolves to
      a known node ID, ``memory.upsert_relationship()`` is called.
-  5. **Fallback** — any orphan the LLM cannot place gets an ``ORPHANED_LINK``
-     edge to the user root so the graph is never left with true islands.
+  5. **Retry** — any orphan the LLM cannot place stays orphaned and will be
+     picked up again on the next post-commit sweep.
 
 The whole pass runs synchronously (blocking Gemini calls); it is a post-commit
 step and latency here does not affect the write that just completed.
@@ -163,14 +164,14 @@ def reattach_orphans(
     """Attempt to semantically reattach each orphaned node.
 
     For each orphan: RAG search → schema context → Gemini Flash proposal →
-    ``upsert_relationship`` on success. Unresolved orphans fall back to an
-    ``ORPHANED_LINK`` edge to the user root.
+    ``upsert_relationship`` on success. Unresolved orphans are left in place
+    and retried on the next post-commit sweep.
 
     Returns::
 
         {
             "reattached": [{"id", "name", "target", "rel_type", "reasoning"}, ...],
-            "fallback":   [{"id", "name", "reason"}, ...],
+            "unresolved": [{"id", "name"}, ...],
         }
     """
     if not orphans:
@@ -193,7 +194,7 @@ def reattach_orphans(
 
     schema_entities = schema.get("entities") or []
     reattached = []
-    fallback_ids = []
+    unresolved = []
 
     for orphan in capped:
         orphan_id = orphan.get("id")
@@ -221,10 +222,10 @@ def reattach_orphans(
 
         if not proposal:
             logger.info(
-                "orphan_reattachment: no proposal for %s (%s) — falling back to root",
+                "orphan_reattachment: no proposal for %s (%s) — will retry next sweep",
                 orphan_id, orphan_name,
             )
-            fallback_ids.append(orphan_id)
+            unresolved.append({"id": orphan_id, "name": orphan_name})
             continue
 
         target_name = proposal.get("target_name")
@@ -236,20 +237,20 @@ def reattach_orphans(
         if not target_name or confidence < _CONFIDENCE_FLOOR or not rel_type:
             logger.info(
                 "orphan_reattachment: low-confidence or null proposal for %s (%s) "
-                "[confidence=%.2f, target=%r] — falling back to root",
+                "[confidence=%.2f, target=%r] — will retry next sweep",
                 orphan_id, orphan_name, confidence, target_name,
             )
-            fallback_ids.append(orphan_id)
+            unresolved.append({"id": orphan_id, "name": orphan_name})
             continue
 
         target_id = _resolve_target_id(target_name, schema_entities)
         if not target_id:
             logger.info(
                 "orphan_reattachment: proposed target %r not found in schema for %s — "
-                "falling back to root",
+                "will retry next sweep",
                 target_name, orphan_id,
             )
-            fallback_ids.append(orphan_id)
+            unresolved.append({"id": orphan_id, "name": orphan_name})
             continue
 
         # Write the proposed edge.
@@ -286,19 +287,13 @@ def reattach_orphans(
                 "orphan_reattachment: write failed for %s -> %s: %s",
                 orphan_id, target_id, e,
             )
-            fallback_ids.append(orphan_id)
+            unresolved.append({"id": orphan_id, "name": orphan_name})
 
-    # Fallback: anchor any unresolved orphans to root.
-    fallback_results = []
-    if fallback_ids:
-        from src.memory.stores import reachability as _reachability
-        _reachability.anchor_to_root(memory.neo4j.driver, fallback_ids, now_iso)
-        fallback_results = [
-            {"id": oid, "name": next(
-                (o.get("name") or "(unnamed)" for o in capped if o.get("id") == oid),
-                "(unknown)",
-            )}
-            for oid in fallback_ids
-        ]
+    if unresolved:
+        logger.info(
+            "orphan_reattachment: %d node(s) unresolved — will retry on next sweep: %s",
+            len(unresolved),
+            [u["id"] for u in unresolved],
+        )
 
-    return {"reattached": reattached, "fallback": fallback_results}
+    return {"reattached": reattached, "unresolved": unresolved}

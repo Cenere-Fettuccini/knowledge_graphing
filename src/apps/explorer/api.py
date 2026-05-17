@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
 from src.agent_platform.public.agent_service import AgentService, get_agent_service
 from src.apps.explorer import services
@@ -24,6 +24,19 @@ async def bootstrap_user(
         raise HTTPException(status_code=400, detail="`name` is required and must be a non-empty string.")
     try:
         return services.bootstrap_user(name, memory)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/graph/reset")
+async def reset_graph(
+    background_tasks: BackgroundTasks,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    try:
+        result = services.reset_graph(memory)
+        background_tasks.add_task(services.drain_after_reset, memory)
+        return result
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

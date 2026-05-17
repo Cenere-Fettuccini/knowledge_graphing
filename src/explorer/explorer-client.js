@@ -130,5 +130,9 @@
             if (model) body.model = model;
             return await http.post('/api/explorer/analyze/run', body);
         },
+
+        async resetGraph() {
+            return await http.post('/api/explorer/graph/reset', {});
+        },
     };
 })();

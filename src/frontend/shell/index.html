@@ -162,6 +162,12 @@
                             <ul class="filter-list" id="taxonomyList">
                                 <li><span class="dim">Loading classes...</span></li>
                             </ul>
+                            <div style="margin-top: 16px; border-top: 1px solid var(--border, #333); padding-top: 12px;">
+                                <button id="resetGraphBtn" class="btn btn-ghost" style="width: 100%; color: var(--danger, #e05c5c);" title="Wipe all graph nodes and re-queue all conversations for analysis">
+                                    Nuke &amp; Re-analyse
+                                </button>
+                                <p id="resetGraphStatus" class="dim" style="font-size: 11px; margin: 6px 0 0; text-align: center;"></p>
+                            </div>
                         </div>
                     </aside>
 
@@ -621,7 +627,7 @@
      6. graph.js      — Explorer 3D graph canvas
      ═══════════════════════════════════════════════════════════════ -->
     <script src="/shell-assets/http.js"></script>
-    <script src="/shell-assets/explorer-client.js"></script>
+    <script src="/shell-assets/explorer-client.js?v=2"></script>
     <script src="/shell-assets/chat-client.js"></script>
     <script src="/shell-assets/credits-client.js"></script>
     <script src="/shell-assets/color-manager.js"></script>
@@ -635,6 +641,24 @@
     <script src="/shell-assets/graph.js"></script>
     <script src="/shell-assets/timeline.js"></script>
     <script src="/shell-assets/architecture-page.js"></script>
+
+    <!-- Reset-graph confirmation modal -->
+    <div class="bootstrap-modal" id="resetGraphModal" hidden>
+        <div class="bootstrap-modal__backdrop"></div>
+        <div class="bootstrap-modal__card" role="dialog" aria-modal="true" aria-labelledby="resetGraphTitle">
+            <h2 id="resetGraphTitle">Nuke &amp; Re-analyse?</h2>
+            <p class="dim">
+                This will <strong>wipe every node and edge</strong> in the knowledge graph and
+                re-queue all conversations for analysis. The raw chat history is untouched.
+                This cannot be undone.
+            </p>
+            <div class="bootstrap-modal__error" id="resetGraphError" hidden></div>
+            <div class="bootstrap-modal__actions">
+                <button class="btn" id="resetGraphConfirmBtn" style="background: var(--danger, #e05c5c);">Yes, nuke it</button>
+                <button class="btn btn-ghost" id="resetGraphCancelBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
 
     <!-- First-run bootstrap modal — shown when no :User root exists yet -->
     <div class="bootstrap-modal" id="bootstrapModal" hidden>

@@ -55,12 +55,67 @@
             window.ExplorerPageController?.activate?.(shellContext);
             return;
         }
+        if (status && status.neo4j_offline) {
+            // Neo4j is down — don't prompt for bootstrap, just activate with degraded state
+            window.ExplorerPageController?.activate?.(shellContext);
+            return;
+        }
         showBootstrapModal({
             onSubmit: async (name) => {
                 await client.bootstrap(name);
                 window.ExplorerPageController?.activate?.(shellContext);
-                window.GraphManager?.reload?.();
+                window.GraphManager?.reload?.({ full: true });
             },
+        });
+    }
+
+    function wireResetButton() {
+        const btn = document.getElementById('resetGraphBtn');
+        const statusEl = document.getElementById('resetGraphStatus');
+        const modal = document.getElementById('resetGraphModal');
+        const confirmBtn = document.getElementById('resetGraphConfirmBtn');
+        const cancelBtn = document.getElementById('resetGraphCancelBtn');
+        const errorEl = document.getElementById('resetGraphError');
+        if (!btn || !modal) return;
+
+        btn.addEventListener('click', () => {
+            if (errorEl) errorEl.hidden = true;
+            modal.hidden = false;
+        });
+
+        cancelBtn?.addEventListener('click', () => {
+            modal.hidden = true;
+        });
+
+        modal.querySelector('.bootstrap-modal__backdrop')?.addEventListener('click', () => {
+            modal.hidden = true;
+        });
+
+        confirmBtn?.addEventListener('click', async () => {
+            const client = getExplorerClient();
+            if (!client) return;
+
+            confirmBtn.disabled = true;
+            cancelBtn.disabled = true;
+            confirmBtn.textContent = 'Resetting…';
+            if (errorEl) errorEl.hidden = true;
+
+            try {
+                const result = await client.resetGraph();
+                modal.hidden = true;
+                if (statusEl) statusEl.textContent = `Done — ${result.requeued ?? 0} conversation(s) queued.`;
+                window.GraphManager?.reload?.({ full: true });
+            } catch (err) {
+                console.error('resetGraph failed', err);
+                if (errorEl) {
+                    errorEl.textContent = 'Reset failed — is Neo4j running?';
+                    errorEl.hidden = false;
+                }
+            } finally {
+                confirmBtn.disabled = false;
+                cancelBtn.disabled = false;
+                confirmBtn.textContent = 'Yes, nuke it';
+            }
         });
     }
 
@@ -74,6 +129,7 @@
             shellContext.setSearchPlaceholder('Search memories, beliefs, tasks...');
             shellContext.setSearchValue(state.searchQuery);
             shellContext.setTopStats('System Ready', true);
+            wireResetButton();
             ensureBootstrapped(shellContext);
         },
         unmount() {

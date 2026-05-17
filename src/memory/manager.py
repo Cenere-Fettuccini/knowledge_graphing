@@ -809,6 +809,7 @@ class MemoryManager:
         from datetime import datetime, timezone
         from src.agent_platform.analyzers import orphan_reattachment as _orphan
         now = datetime.now(timezone.utc).isoformat()
+        _reachability.prune_orphaned_links(self.neo4j.driver)
         orphans = _reachability.detect_orphans(self.neo4j.driver)
         if orphans:
             logger.info(

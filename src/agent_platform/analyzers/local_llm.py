@@ -72,7 +72,14 @@ class LMStudioClient:
             "temperature": temperature,
         }
         if json_mode:
-            payload["response_format"] = {"type": "json_object"}
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "strict": False,
+                    "schema": {"type": "object"},
+                },
+            }
         try:
             resp = httpx.post(
                 f"{self._base_url}/chat/completions",
