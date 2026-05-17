@@ -44,15 +44,41 @@ class MemoryProtocol(Protocol):
 
     # ── Knowledge graph (Neo4j) ───────────────────────────────────────────────
 
-    def graph_overview(self, limit: int = 100) -> dict: ...
+    def graph_overview(
+        self,
+        limit: int = 100,
+        *,
+        era_id: str | None = None,
+        active_self_only: bool = False,
+    ) -> dict: ...
 
     def graph_node_detail(self, node_id: str) -> dict: ...
 
     def graph_node_provenance(self, node_id: str) -> dict: ...
 
-    def graph_active_tasks(self) -> list: ...
+    def graph_active_tasks(
+        self,
+        *,
+        include_completed: bool = False,
+        since: str | None = None,
+    ) -> list: ...
 
-    def graph_belief_trail(self, belief_id: str) -> dict: ...
+    def graph_belief_trail(
+        self,
+        belief_id: str,
+        *,
+        chain_depth: int | None = None,
+    ) -> dict: ...
+
+    def graph_schema_snapshot(self) -> dict: ...
+
+    def graph_neighborhood(
+        self,
+        node_id: str,
+        *,
+        depth: int = 2,
+        limit: int = 50,
+    ) -> dict: ...
 
     # ── Canonicalization (entity dedup) ──────────────────────────────────────
 
@@ -116,8 +142,6 @@ class MemoryProtocol(Protocol):
 
     # ── Analyzer graph writes (Neo4j) ────────────────────────────────────────
 
-    def graph_schema_snapshot(self) -> dict: ...
-
     def upsert_node(
         self,
         *,
@@ -161,6 +185,9 @@ class MemoryProtocol(Protocol):
         *,
         about_entity_id: str | None = None,
         source_text: str | None = None,
+        source_session_id: str | None = None,
+        extraction_method: str | None = None,
+        derived_from_belief_id: str | None = None,
     ) -> str: ...
 
     def is_graph_online(self) -> bool: ...
@@ -174,3 +201,13 @@ class MemoryProtocol(Protocol):
     def search_nodes(self, query: str, limit: int = 10) -> list: ...
 
     def update_task(self, title_fragment: str, new_status: str = "", notes: str = "") -> str: ...
+
+    # ── Reachability sweep ────────────────────────────────────────────────────
+
+    def reattach_orphaned_nodes(self) -> dict: ...
+
+    def quarantine_unreachable_nodes(self) -> int: ...
+
+    def unquarantine_node(self, node_id: str) -> bool: ...
+
+    def purge_quarantined(self, older_than_iso: str) -> int: ...

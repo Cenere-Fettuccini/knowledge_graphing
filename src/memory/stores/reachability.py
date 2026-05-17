@@ -4,14 +4,16 @@ A node is "live" if it's reachable from the user root via any sequence of
 relationships (direction-agnostic). Anything else is an island left behind
 by a merge, a stale edge deletion, or an analyzer bug.
 
-The sweep doesn't delete — it adds a ``:Quarantine`` label and a
-``quarantined_at`` timestamp. Read paths filter quarantined nodes out by
-default; a separate manual or scheduled step decides whether to reattach
-or purge.
+**Hot path** (called after every successful batch commit):
+  1. ``detect_orphans()``   — find unreachable nodes, return their props
+  2. Orphan reattachment analyzer runs RAG + Gemini Flash to propose a
+     meaningful edge for each orphan and writes it via MemoryManager
+  3. ``anchor_to_root()``   — last-resort fallback; any orphan the LLM
+     couldn't connect gets an ``ORPHANED_LINK`` to the user root so the
+     graph is never left with true islands
 
-Called from ``graph_write`` after each successful batch commit. Cheap on
-a single-user graph (thousands of nodes); at >10k nodes, switch to
-``apoc.path.subgraphNodes`` scoped to the touched subgraph.
+**Manual / scheduled helpers** (not on the hot path):
+  ``quarantine_unreachable()``, ``unquarantine()``, ``purge_quarantined()``
 """
 
 from __future__ import annotations
@@ -20,6 +22,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+_DETECT_ORPHANS_CYPHER = """
+MATCH (root:Person:User {is_root: true})
+WITH root
+MATCH (n)
+WHERE n <> root
+  AND NOT n:Quarantine
+  AND NOT (root)-[*]-(n)
+RETURN n.id AS id, n.name AS name, labels(n) AS labels,
+       n.description AS description, n.content AS content
+"""
+
+_ANCHOR_TO_ROOT_CYPHER = """
+MATCH (root:Person:User {is_root: true})
+WITH root
+MATCH (n)
+WHERE n.id IN $node_ids
+MERGE (root)-[r:ORPHANED_LINK]->(n)
+ON CREATE SET r.created_at = $now
+RETURN count(r) AS anchored
+"""
 
 _QUARANTINE_UNREACHABLE_CYPHER = """
 MATCH (root:Person:User {is_root: true})
@@ -33,23 +56,80 @@ RETURN count(n) AS quarantined
 """
 
 
+def _root_exists(session) -> bool:
+    check = session.run(
+        "MATCH (r:Person:User {is_root: true}) RETURN count(r) AS c"
+    ).single()
+    return bool(check and check["c"] > 0)
+
+
+def detect_orphans(driver) -> list[dict]:
+    """Return unreachable nodes as dicts without writing anything.
+
+    Each dict: ``{"id", "name", "labels", "description", "content"}``.
+    Returns ``[]`` if the root doesn't exist yet.
+    """
+    if driver is None:
+        return []
+    try:
+        with driver.session() as session:
+            if not _root_exists(session):
+                return []
+            rows = session.run(_DETECT_ORPHANS_CYPHER)
+            return [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "labels": list(r["labels"] or []),
+                    "description": r["description"],
+                    "content": r["content"],
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        logger.error("detect_orphans failed: %s", e)
+        return []
+
+
+def anchor_to_root(driver, node_ids: list[str], now_iso: str) -> int:
+    """Create ORPHANED_LINK from root to each node in node_ids.
+
+    Last-resort fallback for orphans the LLM reattachment pass couldn't
+    resolve. Returns the number of edges created/merged.
+    """
+    if driver is None or not node_ids:
+        return 0
+    try:
+        with driver.session() as session:
+            if not _root_exists(session):
+                return 0
+            result = session.run(
+                _ANCHOR_TO_ROOT_CYPHER, node_ids=node_ids, now=now_iso
+            ).single()
+            count = int(result["anchored"]) if result else 0
+            if count:
+                logger.info(
+                    "reachability: fallback ORPHANED_LINK created for %d node(s): %s",
+                    count,
+                    node_ids,
+                )
+            return count
+    except Exception as e:
+        logger.error("anchor_to_root failed: %s", e)
+        return 0
+
+
 def quarantine_unreachable(driver, now_iso: str) -> int:
     """Label nodes unreachable from the user root with ``:Quarantine``.
 
-    Returns the count newly quarantined this run. Returns 0 if the root
-    hasn't been bootstrapped yet — without a root, "reachable from root"
-    is undefined and we'd quarantine the entire graph, which is wrong.
+    Not on the hot write path — use for manual / scheduled passes.
+    Returns the count newly quarantined.
     """
     if driver is None:
         return 0
     try:
         with driver.session() as session:
-            # Bail out if there's no root — quarantining everything is worse
-            # than doing nothing.
-            check = session.run(
-                "MATCH (r:Person:User {is_root: true}) RETURN count(r) AS c"
-            ).single()
-            if not check or check["c"] == 0:
+            if not _root_exists(session):
                 return 0
             result = session.run(_QUARANTINE_UNREACHABLE_CYPHER, now=now_iso).single()
             count = int(result["quarantined"]) if result else 0

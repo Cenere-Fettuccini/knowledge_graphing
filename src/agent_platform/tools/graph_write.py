@@ -19,10 +19,92 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Union
 
+import json
+
 from pydantic import BaseModel, Field, ValidationError
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
+from src.core.config import settings
 from src.memory.manager import GraphWriteBatch, MemoryManager, get_memory_manager
+
+_ANCHOR_CLOUD_MODEL = "gemini-2.5-flash"
+
+_ANCHOR_SYSTEM_PROMPT = """\
+You classify a named entity so it can be added to a personal knowledge graph.
+
+An entity name appears in a relationship but has no matching node yet. Given
+the name and the surrounding batch context (what other nodes and edges are
+being written at the same time), infer what kind of entity it is and write
+a one-sentence description.
+
+Return JSON only:
+{
+  "label": "<PascalCase label — reuse from Existing labels when one fits>",
+  "description": "<one sentence describing what this entity likely is>"
+}
+
+Rules:
+- label must be singular PascalCase (Person, Project, Place, Event, Tool, …).
+- Prefer a label from "Existing labels" over inventing a new one.
+- description is inferred from the name and batch context; keep it concise.
+- If the name is clearly a person, use label "Person".
+"""
+
+
+def _llm_propose_entity(
+    missing_name: str,
+    existing_labels: list[str],
+    batch_context: str,
+) -> dict | None:
+    """Call Gemini Flash to infer label + description for an unknown entity name.
+
+    Returns ``{"label": str, "description": str}`` or ``None`` on failure.
+    Runs synchronously — called from the resolver which is already sync.
+    """
+    try:
+        from google import genai
+    except ImportError:
+        logger.warning("_propose_anchor: google.genai not installed")
+        return None
+
+    api_key = (settings.google_api_keys or "").split(",")[0].strip()
+    if not api_key:
+        logger.warning("_propose_anchor: no GOOGLE_API_KEY configured")
+        return None
+
+    labels_str = ", ".join(existing_labels) if existing_labels else "(none yet)"
+    user_prompt = (
+        f'Entity name: "{missing_name}"\n\n'
+        f"Existing labels: {labels_str}\n\n"
+        f"Batch context (other nodes/edges being written now):\n{batch_context or '(none)'}"
+    )
+
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=_ANCHOR_CLOUD_MODEL,
+            contents=user_prompt,
+            config={
+                "system_instruction": _ANCHOR_SYSTEM_PROMPT,
+                "response_mime_type": "application/json",
+                "temperature": 0.1,
+            },
+        )
+        raw = (getattr(response, "text", "") or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return None
+        if not parsed.get("label"):
+            return None
+        return parsed
+    except Exception as e:
+        logger.warning("_propose_anchor: Gemini call failed: %s", e)
+        return None
 
 
 class EntityIntent(BaseModel):
@@ -243,14 +325,17 @@ def _topo_sort(intents: list[BaseModel]) -> list[BaseModel]:
 class _Resolver:
     """Stateful name → node_id resolution across a single graph_write batch.
 
-    The resolver is the seam where the LLM-driven anchor proposal will plug
-    in (S0.3b — currently a stub). For now it does deterministic resolution
-    against the existing graph plus same-batch intents, and falls back to
-    ``RELATED_TO`` on the user root for edges that can't be fully resolved.
-    Every fallback is recorded so we can see where the resolver gives up.
+    Resolution order for any missing name:
+      1. ``name_to_id`` cache — populated by same-batch entity upserts.
+      2. ``memory.find_entity()`` — existing Neo4j node exact-name lookup.
+      3. ``_propose_anchor()`` — Gemini Flash infers label + description for
+         the unknown name and stages a new node; depth-capped at 3.
+      4. Fall back to root with ``RELATED_TO`` / ``ABOUT`` if all else fails.
+
+    Every fallback is recorded in ``self.fallbacks`` for observability.
     """
 
-    MAX_PROPOSAL_DEPTH = 3  # reserved for the LLM proposal step (S0.3b)
+    MAX_PROPOSAL_DEPTH = 3
 
     def __init__(self, memory: MemoryManager) -> None:
         self.memory = memory
@@ -258,6 +343,7 @@ class _Resolver:
         self.fallbacks: list[dict] = []
         self._root_id: str | None = None
         self._proposal_depth: int = 0
+        self._schema: dict | None = None  # fetched once, cached for the batch
 
     def root(self) -> str | None:
         if self._root_id is not None:
@@ -266,7 +352,18 @@ class _Resolver:
         self._root_id = r["id"] if r else None
         return self._root_id
 
+    def _get_schema(self) -> dict:
+        """Fetch the graph schema once and cache it for the lifetime of this batch."""
+        if self._schema is None:
+            try:
+                self._schema = self.memory.graph_schema_snapshot()
+            except Exception as e:
+                logger.warning("_Resolver: schema fetch failed: %s", e)
+                self._schema = {"labels": [], "relationship_types": [], "entities": []}
+        return self._schema
+
     def resolve_entity_name(self, name: str) -> str | None:
+        """Resolve a name to a node ID using cache then Neo4j. No proposals."""
         if not name:
             return None
         if name in self.name_to_id:
@@ -275,6 +372,29 @@ class _Resolver:
         if existing:
             self.name_to_id[name] = existing
             return existing
+        return None
+
+    def resolve_or_propose(
+        self, name: str, batch: GraphWriteBatch, batch_context: str = ""
+    ) -> str | None:
+        """Resolve name → ID, proposing a new node via LLM if not found.
+
+        Falls through to ``_propose_anchor`` when the deterministic lookup
+        fails, staging a fresh node into ``batch`` and registering its ID in
+        ``name_to_id`` so downstream edges can reference it immediately.
+        Returns ``None`` only when both the lookup and the LLM proposal fail.
+        """
+        existing = self.resolve_entity_name(name)
+        if existing:
+            return existing
+        proposed = self._propose_anchor(name, batch_context)
+        if proposed:
+            node_id = self.upsert_entity(proposed, batch)
+            logger.info(
+                "_Resolver: proposed new entity %r as %s (%s)",
+                name, proposed.label, node_id,
+            )
+            return node_id
         return None
 
     def upsert_entity(self, intent: EntityIntent, batch: GraphWriteBatch) -> str:
@@ -308,13 +428,16 @@ class _Resolver:
                 "source_text": intent.source_text or None,
             },
         )
-        anchor = (
-            self.resolve_entity_name(intent.about_entity) if intent.about_entity else None
-        )
+        if intent.about_entity:
+            anchor = self.resolve_or_propose(
+                intent.about_entity, batch,
+                batch_context=f'belief: "{intent.content}"',
+            )
+        else:
+            anchor = None
         if anchor is None:
             # Belief without a resolvable subject is "a belief about myself" —
-            # anchor to root so it can't float. Tracked as a fallback so we can
-            # see how often this happens.
+            # anchor to root so it can't float.
             anchor = self.root()
             if intent.about_entity:
                 self._record_fallback("belief", intent.about_entity, "anchor_to_root")
@@ -346,7 +469,10 @@ class _Resolver:
         else:
             self._record_fallback("task", "<user_root>", "root_missing")
         if intent.for_person:
-            person_id = self.resolve_entity_name(intent.for_person)
+            person_id = self.resolve_or_propose(
+                intent.for_person, batch,
+                batch_context=f'task: "{intent.title}"',
+            )
             if person_id:
                 batch.upsert_relationship(
                     source_id=node_id, target_id=person_id, rel_type="FOR_PERSON"
@@ -354,7 +480,10 @@ class _Resolver:
             else:
                 self._record_fallback("task.for_person", intent.for_person, "no_anchor")
         if intent.about_entity:
-            about_id = self.resolve_entity_name(intent.about_entity)
+            about_id = self.resolve_or_propose(
+                intent.about_entity, batch,
+                batch_context=f'task: "{intent.title}"',
+            )
             if about_id:
                 batch.upsert_relationship(
                     source_id=node_id, target_id=about_id, rel_type="ABOUT_ITEM"
@@ -364,9 +493,11 @@ class _Resolver:
         return node_id
 
     def create_edge(self, intent: EdgeIntent, batch: GraphWriteBatch) -> dict:
-        src = self.resolve_entity_name(intent.source)
-        tgt = self.resolve_entity_name(intent.target)
         rel_type = (intent.rel_type or "RELATED_TO").upper().replace(" ", "_")
+        batch_context = f'edge: "{intent.source}" -{rel_type}-> "{intent.target}"'
+
+        src = self.resolve_or_propose(intent.source, batch, batch_context)
+        tgt = self.resolve_or_propose(intent.target, batch, batch_context)
 
         if src and tgt:
             batch.upsert_relationship(
@@ -374,7 +505,7 @@ class _Resolver:
             )
             return {"source": intent.source, "target": intent.target, "rel_type": rel_type}
 
-        # One or both endpoints missing. Fall back to root for the resolved end.
+        # One or both endpoints couldn't be resolved or proposed — last resort: root.
         root = self.root()
         if src and root:
             batch.upsert_relationship(source_id=src, target_id=root, rel_type="RELATED_TO")
@@ -404,71 +535,48 @@ class _Resolver:
         self.fallbacks.append(entry)
         logger.warning("graph_write fallback: %s", entry)
 
-    # ── LLM anchor proposal (S0.3b — stub) ──────────────────────────────────
+    # ── LLM anchor proposal ──────────────────────────────────────────────────
 
-    def _propose_anchor(self, missing_name: str) -> EntityIntent | None:
-        """Ask an LLM to propose an EntityIntent for a missing anchor name.
+    def _propose_anchor(
+        self, missing_name: str, batch_context: str = ""
+    ) -> EntityIntent | None:
+        """Ask Gemini Flash to propose an EntityIntent for an unknown name.
 
-        Currently a no-op so the deterministic resolver handles every case
-        (missing edge endpoint → fall back to RELATED_TO root; missing
-        belief subject → ABOUT root; missing task person/about → log and
-        skip the qualifier). Enable when traffic shows the deterministic
-        fallbacks are too coarse.
+        Returns an ``EntityIntent`` whose ``name`` equals ``missing_name``
+        exactly, or ``None`` when the LLM can't determine anything useful.
+        Depth-capped at ``MAX_PROPOSAL_DEPTH`` to prevent runaway recursion.
 
-        Contract for the future implementation (CT5)
-        ============================================
-
-        **Inputs the hook receives.**
-        - ``missing_name``: the entity name from an intent that the
-          deterministic pass couldn't resolve. Already trimmed; non-empty.
-        - Implicit state on ``self``: ``self.name_to_id`` (everything
-          resolved so far), ``self.fallbacks`` (everything already given
-          up on), ``self.root()`` (the user root id), and
-          ``self._proposal_depth`` (current recursion count).
-
-        **What the LLM call should produce.**
-        - Either ``None`` (the LLM also can't pin this down — fall back
-          to root), or a single ``EntityIntent`` for the missing name.
-        - The returned intent's ``name`` MUST equal ``missing_name``
-          exactly (case-preserving). If the LLM wants to suggest a
-          different name, that's a graph_write retry concern, not an
-          anchor resolution.
-        - The intent's ``label`` should be reused from
-          ``memory.graph_schema_snapshot()['labels']`` when possible.
-
-        **What the resolver does with the result.**
-        - On a non-None result, the proposed intent is staged into
-          ``batch.ops`` and ``self.name_to_id[missing_name]`` is
-          populated immediately so subsequent edge lookups succeed.
-        - ``self._proposal_depth`` is incremented *before* the LLM call
-          and decremented after. Resolution within the proposal itself
-          (if the LLM proposes an entity that references another missing
-          name) must short-circuit when ``_proposal_depth >=
-          MAX_PROPOSAL_DEPTH`` (currently 3).
-        - The fresh node still has to satisfy the isolation guard —
-          the caller is responsible for either emitting an edge
-          referencing it or letting the guard reject the batch.
-
-        **Loop / recursion detection.**
-        - Depth cap (``MAX_PROPOSAL_DEPTH``) is the only protection; the
-          resolver does not deduplicate same-name proposals within a
-          single batch. If the LLM keeps proposing the same orphan name,
-          the depth cap will fire on the 3rd round.
-
-        **Failure modes the implementation must handle.**
-        - LLM call raises → caller logs as a fallback and returns None.
-          Never re-raises into graph_write (would lose the batch).
-        - Empty / malformed proposal → treat as None.
-        - Proposed name mismatches ``missing_name`` → reject, log, return
-          None (don't pollute name_to_id with a different name).
+        The returned intent is NOT staged here — callers pass it to
+        ``upsert_entity()`` so the normal node-op + name_to_id wiring fires.
+        The isolation guard is satisfied because the caller's edge intent will
+        reference the same node.
         """
         if self._proposal_depth >= self.MAX_PROPOSAL_DEPTH:
+            logger.warning(
+                "_propose_anchor: depth cap reached for %r — falling back to root",
+                missing_name,
+            )
             return None
-        # When wiring this up:
-        #   self._proposal_depth += 1
-        #   try:    return _llm_propose_intent(missing_name, schema=...)
-        #   finally: self._proposal_depth -= 1
-        return None
+
+        self._proposal_depth += 1
+        try:
+            schema = self._get_schema()
+            existing_labels = schema.get("labels") or []
+            result = _llm_propose_entity(missing_name, existing_labels, batch_context)
+            if not result:
+                return None
+            label = (result.get("label") or "Entity").strip()
+            description = (result.get("description") or "").strip()
+            return EntityIntent(
+                name=missing_name,
+                label=label,
+                description=description,
+            )
+        except Exception as e:
+            logger.warning("_propose_anchor(%r) failed: %s", missing_name, e)
+            return None
+        finally:
+            self._proposal_depth -= 1
 
 
 def _parse_intents(raw: list[dict]) -> tuple[list[BaseModel], list[dict]]:
