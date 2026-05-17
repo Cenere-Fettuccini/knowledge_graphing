@@ -12,7 +12,11 @@
     padding: 12px;
     gap: 12px;
     grid-template-columns: 240px 1fr 1fr 300px;
-    grid-template-rows: 140px 1fr 180px;
+    /* Status row sizes to its content (System Health + Model Headroom +
+       Knowledge Analyzer) up to ~45% of viewport height, with a floor of
+       200px so the section never collapses past the health rows. The
+       sidebar row claims whatever's left. */
+    grid-template-rows: minmax(200px, min(45vh, max-content)) 1fr 180px;
     grid-template-areas:
         "status  graph graph graph"
         "sidebar graph graph graph"
@@ -55,7 +59,13 @@
 }
 
 /* ── Grid Area Assignments ──────────────────────────────────────────────── */
-.ex-status     { grid-area: status; }
+.ex-status     {
+    grid-area: status;
+    /* Scroll within the panel if the row isn't tall enough — keeps the
+       analyzer card reachable on small viewports / dense health lists. */
+    overflow-y: auto;
+    min-height: 0;
+}
 .ex-sidebar    { grid-area: sidebar; overflow-y: auto; }
 .ex-graph      { grid-area: graph; position: relative; }
 .ex-upload     { grid-area: upload; }
@@ -547,7 +557,9 @@ h3 {
 @media (max-width: 1024px) {
     .explorer-grid {
         grid-template-columns: 240px 1fr;
-        grid-template-rows: 140px 1fr 1fr 150px 150px;
+        /* Same content-aware status row as the base layout — the analyzer
+           card needs to be reachable here too. */
+        grid-template-rows: minmax(200px, min(45vh, max-content)) 1fr 1fr 150px 150px;
         grid-template-areas:
             "status  graph"
             "sidebar graph"
