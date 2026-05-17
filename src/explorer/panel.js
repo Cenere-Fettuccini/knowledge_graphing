@@ -632,24 +632,37 @@ const AnalyzerManager = {
         this.llmBadge = document.getElementById('analyzerLLMBadge');
         this.modelSelect = document.getElementById('analyzerModelSelect');
         this.runBtn = document.getElementById('analyzerRunBtn');
+        this.processAllBtn = document.getElementById('analyzerProcessAllBtn');
         this.resultBox = document.getElementById('analyzerResult');
         this._initialized = true;
 
         if (this.runBtn) {
             this.runBtn.addEventListener('click', () => this.run());
         }
+        if (this.processAllBtn) {
+            this.processAllBtn.addEventListener('click', () => this.processAll());
+        }
     },
 
     async start() {
         this.init();
+        this._pollFastMs = 4000;
+        this._pollSlowMs = 30000;
+        this._currentInterval = null;
         await this.refresh();
-        clearInterval(this._timerId);
-        this._timerId = setInterval(() => this.refresh(), 30000);
     },
 
     stop() {
         clearInterval(this._timerId);
         this._timerId = null;
+        this._currentInterval = null;
+    },
+
+    _setPollInterval(ms) {
+        if (this._currentInterval === ms) return;
+        this._currentInterval = ms;
+        clearInterval(this._timerId);
+        this._timerId = setInterval(() => this.refresh(), ms);
     },
 
     async refresh() {
@@ -687,8 +700,53 @@ const AnalyzerManager = {
             }
         }
 
+        const pending = status.unanalyzed_count ?? 0;
+        const running = !!status.process_all_running;
         if (this.runBtn) {
-            this.runBtn.disabled = (status.unanalyzed_count ?? 0) === 0;
+            this.runBtn.disabled = pending === 0 || running;
+        }
+        if (this.processAllBtn) {
+            this.processAllBtn.disabled = pending === 0 || running;
+            this.processAllBtn.textContent = running
+                ? `Processing… (${pending} left)`
+                : 'Process all pending';
+        }
+
+        // Poll fast while a drain is running so the count updates live; idle
+        // back to the slow cadence when there's nothing to watch.
+        this._setPollInterval(running ? this._pollFastMs : this._pollSlowMs);
+    },
+
+    async processAll() {
+        const client = getExplorerClient();
+        if (!client || !this.processAllBtn) return;
+        this.processAllBtn.disabled = true;
+        this.processAllBtn.textContent = 'Starting…';
+        if (this.resultBox) {
+            this.resultBox.textContent = '';
+            this.resultBox.style.color = '';
+        }
+        try {
+            const result = await client.processAllQueue();
+            if (result && result.started === false) {
+                if (this.resultBox) {
+                    this.resultBox.textContent = 'Already running — refresh to watch progress.';
+                }
+            } else if (this.resultBox) {
+                const depth = result?.queue_depth ?? '?';
+                this.resultBox.textContent = `Draining ${depth} row(s) in the background. Throttled — check back in a moment.`;
+            }
+        } catch (e) {
+            console.error('processAllQueue failed', e);
+            if (this.resultBox) {
+                this.resultBox.textContent = 'Could not start drain — check the console.';
+                this.resultBox.style.color = 'var(--c-red, #A37A87)';
+            }
+        } finally {
+            // Refresh now and switch to the fast polling cadence; the next
+            // refresh() will reflect the running state.
+            await this.refresh();
+            window.GraphManager?.reload?.();
         }
     },
 

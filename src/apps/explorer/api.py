@@ -113,6 +113,27 @@ async def run_analyzer(
     return await services.run_analyzer(memory, batch_size=batch_size, model=model)
 
 
+@router.post("/analyze/process-all")
+async def process_all_queue(
+    background_tasks: BackgroundTasks,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    """Drain the entire unanalyzed queue in the background.
+
+    Returns immediately with the snapshot at trigger time. Single-flight —
+    a second call while a drain is running returns ``started: false``.
+    """
+    if services.process_all_running():
+        return {
+            "started": False,
+            "reason": "already running",
+            "queue_depth": memory.count_unanalyzed(),
+        }
+    queue_depth = memory.count_unanalyzed()
+    background_tasks.add_task(services.process_all_queue, memory)
+    return {"started": True, "queue_depth": queue_depth}
+
+
 @router.get("/analyze/failed")
 async def list_analyzer_failures(
     limit: int = Query(50, ge=1, le=500),

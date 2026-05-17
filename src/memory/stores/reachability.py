@@ -60,6 +60,32 @@ def _root_exists(session) -> bool:
     return bool(check and check["c"] > 0)
 
 
+_IS_REACHABLE_CYPHER = """
+MATCH (root:Person:User {is_root: true})
+MATCH (n {id: $node_id})
+RETURN n = root OR exists((root)-[*]-(n)) AS reachable
+"""
+
+
+def is_reachable_from_root(driver, node_id: str) -> bool:
+    """True if ``node_id`` is the root or has any path back to the root.
+
+    Returns False if the node doesn't exist, the root is missing, or on
+    any driver error — callers should treat False as "don't reuse this node".
+    """
+    if driver is None or not node_id:
+        return False
+    try:
+        with driver.session() as session:
+            if not _root_exists(session):
+                return False
+            row = session.run(_IS_REACHABLE_CYPHER, node_id=node_id).single()
+            return bool(row and row["reachable"])
+    except Exception as e:
+        logger.debug("is_reachable_from_root(%s) failed: %s", node_id, e)
+        return False
+
+
 def detect_orphans(driver) -> list[dict]:
     """Return unreachable nodes as dicts without writing anything.
 

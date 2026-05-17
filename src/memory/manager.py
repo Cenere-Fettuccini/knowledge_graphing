@@ -1192,6 +1192,10 @@ class MemoryManager:
         """Lift ``:Quarantine`` from a single node (manual reattach support)."""
         return _reachability.unquarantine(self.neo4j.driver, node_id)
 
+    def is_node_reachable_from_root(self, node_id: str) -> bool:
+        """True if the given node has a path back to the user root."""
+        return _reachability.is_reachable_from_root(self.neo4j.driver, node_id)
+
     def purge_quarantined(self, older_than_iso: str) -> int:
         """Permanently delete quarantined nodes older than the cutoff."""
         return _reachability.purge_quarantined(self.neo4j.driver, older_than_iso)

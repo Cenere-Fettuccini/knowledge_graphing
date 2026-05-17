@@ -85,24 +85,34 @@ _DRAIN_ROW_CAP = 200            # max rows processed per reset click
 _DRAIN_BATCH_SIZE = 5          # rows per LM Studio call
 _DRAIN_INTERBATCH_SLEEP = 30.0   # seconds between batches — lets LM Studio breathe
 
+# Single-flight lock for user-initiated drains so a second "Process all"
+# click can't start a parallel drain on the same queue.
+_drain_lock = asyncio.Lock()
 
-async def drain_after_reset(memory: MemoryManager) -> None:
-    """Process a bounded slice of the queue after a reset.
 
-    Capped at ``_DRAIN_ROW_CAP`` rows total (not batches) with a small sleep
-    between batches so the local LLM and host don't get pinned by a 1000-call
-    burst. Anything beyond the cap drains gradually via the count-based
-    trigger on subsequent chat turns.
+async def _drain_queue(
+    memory: MemoryManager,
+    *,
+    row_cap: int | None,
+    label: str,
+) -> int:
+    """Pull batches from the unanalyzed queue until empty or ``row_cap`` hit.
+
+    ``row_cap=None`` means unlimited — keep going until the queue is empty.
+    Always uses the throttle constants above so the local LLM does not get
+    pinned. Returns the number of rows processed.
     """
     from src.agent_platform.analyzers.graph_ingest_trigger import run_extraction_pass
 
     log = logging.getLogger(__name__)
     processed_total = 0
-    while processed_total < _DRAIN_ROW_CAP:
+    while row_cap is None or processed_total < row_cap:
         if memory.count_unanalyzed() <= 0:
             break
-        remaining_cap = _DRAIN_ROW_CAP - processed_total
-        batch_size = min(_DRAIN_BATCH_SIZE, remaining_cap)
+        if row_cap is None:
+            batch_size = _DRAIN_BATCH_SIZE
+        else:
+            batch_size = min(_DRAIN_BATCH_SIZE, row_cap - processed_total)
         result = await run_extraction_pass(memory, batch_size=batch_size)
         if result.get("skipped"):
             break
@@ -110,14 +120,45 @@ async def drain_after_reset(memory: MemoryManager) -> None:
         if not processed:
             break
         processed_total += processed
-        if processed_total < _DRAIN_ROW_CAP and memory.count_unanalyzed() > 0:
-            await asyncio.sleep(_DRAIN_INTERBATCH_SLEEP)
+        more_to_do = memory.count_unanalyzed() > 0
+        if not more_to_do:
+            break
+        if row_cap is not None and processed_total >= row_cap:
+            break
+        await asyncio.sleep(_DRAIN_INTERBATCH_SLEEP)
 
     log.info(
-        "drain_after_reset: processed %d row(s); remaining=%d",
-        processed_total,
-        memory.count_unanalyzed(),
+        "%s: processed %d row(s); remaining=%d",
+        label, processed_total, memory.count_unanalyzed(),
     )
+    return processed_total
+
+
+async def drain_after_reset(memory: MemoryManager) -> None:
+    """Process a bounded slice of the queue after a reset.
+
+    Capped at ``_DRAIN_ROW_CAP`` rows total (not batches). Anything beyond the
+    cap drains gradually via the count-based trigger on subsequent chat turns,
+    or via the user-triggered "Process all" button.
+    """
+    await _drain_queue(memory, row_cap=_DRAIN_ROW_CAP, label="drain_after_reset")
+
+
+async def process_all_queue(memory: MemoryManager) -> dict:
+    """Drain the entire unanalyzed queue. Triggered from the explorer dashboard.
+
+    Single-flight: a second call while one is already running returns
+    ``{started: False, reason: "already running"}`` immediately.
+    """
+    if _drain_lock.locked():
+        return {"started": False, "reason": "already running"}
+    async with _drain_lock:
+        processed = await _drain_queue(memory, row_cap=None, label="process_all_queue")
+    return {"started": True, "processed": processed, "remaining": memory.count_unanalyzed()}
+
+
+def process_all_running() -> bool:
+    return _drain_lock.locked()
 
 
 def get_analyzer_status(memory: MemoryManager) -> dict:
@@ -138,6 +179,7 @@ def get_analyzer_status(memory: MemoryManager) -> dict:
         "failed_count": memory.count_failed(),
         "local_llm_available": local_available,
         "default_model": client.default_model,
+        "process_all_running": process_all_running(),
     }
 
 

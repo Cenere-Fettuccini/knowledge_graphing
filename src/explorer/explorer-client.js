@@ -131,6 +131,10 @@
             return await http.post('/api/explorer/analyze/run', body);
         },
 
+        async processAllQueue() {
+            return await http.post('/api/explorer/analyze/process-all', {});
+        },
+
         async resetGraph() {
             return await http.post('/api/explorer/graph/reset', {});
         },
