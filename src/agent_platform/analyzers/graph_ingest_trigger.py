@@ -146,6 +146,42 @@ async def run_extraction_pass(
     nodes = result.get("nodes_written", [])
     edges = result.get("edges_written", [])
     quarantined = int(result.get("quarantined") or 0)
+
+    # Focused edge-repair pass: if this batch left any nodes isolated, hand
+    # the same conversation rows back to the model with a narrow prompt and
+    # ask only for the missing edges. This beats the post-commit semantic
+    # RAG sweep because the context is the exact turns that created the
+    # node — no co-occurrence false positives.
+    isolated = result.get("isolated") or []
+    if isolated:
+        try:
+            edge_intents = await graph_extraction.repair_isolated_nodes(
+                rows, isolated, schema, nodes_written=nodes
+            )
+        except Exception:
+            logger.exception("graph_ingest %s: repair_isolated_nodes crashed", run_id)
+            edge_intents = []
+        if edge_intents:
+            repair_result = graph_write(edge_intents)
+            if repair_result.get("ok"):
+                repaired_edges = repair_result.get("edges_written", [])
+                edges = [*edges, *repaired_edges]
+                logger.info(
+                    "graph_ingest %s: repair pass attached %d/%d isolated node(s)",
+                    run_id, len(repaired_edges), len(isolated),
+                )
+            else:
+                logger.info(
+                    "graph_ingest %s: repair pass produced %d edges but graph_write rejected (%s)",
+                    run_id, len(edge_intents), repair_result.get("error"),
+                )
+        else:
+            logger.info(
+                "graph_ingest %s: %d node(s) still isolated after repair — "
+                "deferred to next pass",
+                run_id, len(isolated),
+            )
+
     logger.info(
         "graph_ingest %s: wrote %d nodes / %d edges; marking %d rows analyzed",
         run_id, len(nodes), len(edges), len(row_ids),

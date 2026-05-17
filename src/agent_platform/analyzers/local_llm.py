@@ -64,12 +64,21 @@ class LMStudioClient:
         model: str | None = None,
         temperature: float = 0.2,
         json_mode: bool = True,
+        max_tokens: int = 4096,
     ) -> str:
-        """POST a chat completion. Returns the raw text content of the first choice."""
+        """POST a chat completion. Returns the raw text content of the first choice.
+
+        ``max_tokens`` defaults high (4096) because reasoning-capable models on
+        LM Studio split the budget between hidden ``reasoning_content`` and the
+        visible ``content``. A low cap truncates the JSON mid-token and the
+        caller sees a parse failure. Callers can override per-call when they
+        know the response is small.
+        """
         payload: dict[str, Any] = {
             "model": model or self._default_model,
             "messages": messages,
             "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         if json_mode:
             payload["response_format"] = {

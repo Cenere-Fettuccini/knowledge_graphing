@@ -24,10 +24,7 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 
 from src.agent_platform.tools.common import ensure_graph_online, logger
-from src.core.config import settings
 from src.memory.manager import GraphWriteBatch, MemoryManager, get_memory_manager
-
-_ANCHOR_CLOUD_MODEL = "gemini-2.5-flash"
 
 _ANCHOR_SYSTEM_PROMPT = """\
 You classify a named entity so it can be added to a personal knowledge graph.
@@ -56,21 +53,15 @@ def _llm_propose_entity(
     existing_labels: list[str],
     batch_context: str,
 ) -> dict | None:
-    """Call Gemini Flash to infer label + description for an unknown entity name.
+    """Ask LM Studio to infer a label + description for an unknown entity name.
 
     Returns ``{"label": str, "description": str}`` or ``None`` on failure.
     Runs synchronously — called from the resolver which is already sync.
     """
-    try:
-        from google import genai
-    except ImportError:
-        logger.warning("_propose_anchor: google.genai not installed")
-        return None
-
-    api_key = (settings.google_api_keys or "").split(",")[0].strip()
-    if not api_key:
-        logger.warning("_propose_anchor: no GOOGLE_API_KEY configured")
-        return None
+    from src.agent_platform.analyzers.local_llm import (
+        LMStudioClient,
+        LocalLLMUnavailable,
+    )
 
     labels_str = ", ".join(existing_labels) if existing_labels else "(none yet)"
     user_prompt = (
@@ -80,31 +71,33 @@ def _llm_propose_entity(
     )
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_ANCHOR_CLOUD_MODEL,
-            contents=user_prompt,
-            config={
-                "system_instruction": _ANCHOR_SYSTEM_PROMPT,
-                "response_mime_type": "application/json",
-                "temperature": 0.1,
-            },
+        client = LMStudioClient()
+        raw = client.chat_completion(
+            messages=[
+                {"role": "system", "content": _ANCHOR_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            json_mode=True,
         )
-        raw = (getattr(response, "text", "") or "").strip()
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            return None
-        if not parsed.get("label"):
-            return None
-        return parsed
-    except Exception as e:
-        logger.warning("_propose_anchor: Gemini call failed: %s", e)
+    except LocalLLMUnavailable as e:
+        logger.warning("_propose_anchor: LM Studio unavailable: %s", e)
         return None
+
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("_propose_anchor: non-JSON from LM Studio (%s): %r", e, raw[:200])
+        return None
+    if not isinstance(parsed, dict) or not parsed.get("label"):
+        return None
+    return parsed
 
 
 class EntityIntent(BaseModel):
@@ -229,16 +222,16 @@ def graph_write(intents: list[dict]) -> dict:
                     edge_meta = resolver.create_edge(intent, batch)
                     edges_written.append(edge_meta)
 
-            # Isolation guard (S0.4): reject any batch that would leave a
-            # newly-created node with zero edges. Cleared ops will skip
-            # _flush_batch entirely so Neo4j is left unchanged.
+            # Isolated nodes are allowed to land. The post-commit
+            # reattach_orphans sweep (fired from MemoryManager._flush_batch)
+            # will try to connect them on this and subsequent passes.
             isolated = _find_isolated_nodes(batch.ops, nodes_written)
             if isolated:
-                logger.warning(
-                    "graph_write rejecting batch — %d isolated node(s): %s",
+                logger.info(
+                    "graph_write: %d node(s) committed without an edge — "
+                    "deferred to orphan reattachment: %s",
                     len(isolated), [i["name"] for i in isolated],
                 )
-                batch.ops.clear()
     except Exception as e:
         logger.exception("graph_write batch failed")
         return {
@@ -249,22 +242,12 @@ def graph_write(intents: list[dict]) -> dict:
             "quarantined": 0,
         }
 
-    if isolated:
-        return {
-            "ok": False,
-            "error": "isolated nodes rejected",
-            "isolated": isolated,
-            "nodes_written": [],
-            "edges_written": [],
-            "fallbacks": resolver.fallbacks,
-            "quarantined": 0,
-        }
-
     quarantined = memory.quarantine_unreachable_nodes()
     return {
         "ok": True,
         "nodes_written": nodes_written,
         "edges_written": edges_written,
+        "isolated": isolated,
         "fallbacks": resolver.fallbacks,
         "quarantined": quarantined,
     }
@@ -363,16 +346,28 @@ class _Resolver:
         return self._schema
 
     def resolve_entity_name(self, name: str) -> str | None:
-        """Resolve a name to a node ID using cache then Neo4j. No proposals."""
+        """Resolve a name to a node ID using cache then Neo4j. No proposals.
+
+        Orphan-aware: if an existing same-named node is unreachable from the
+        user root, it's skipped so we don't grow the orphan island. The caller
+        (resolve_or_propose) will then create a fresh node and the orphan
+        reattachment sweep handles the stranded one separately.
+        """
         if not name:
             return None
         if name in self.name_to_id:
             return self.name_to_id[name]
         existing = self.memory.find_entity(name)
-        if existing:
-            self.name_to_id[name] = existing
-            return existing
-        return None
+        if not existing:
+            return None
+        if not self.memory.is_node_reachable_from_root(existing):
+            logger.info(
+                "_Resolver: skipping orphan node %s for name %r — will create fresh",
+                existing, name,
+            )
+            return None
+        self.name_to_id[name] = existing
+        return existing
 
     def resolve_or_propose(
         self, name: str, batch: GraphWriteBatch, batch_context: str = ""
@@ -463,11 +458,9 @@ class _Resolver:
                 "created_at": now,
             },
         )
-        root = self.root()
-        if root:
-            batch.upsert_relationship(source_id=root, target_id=node_id, rel_type="OWNS_TASK")
-        else:
-            self._record_fallback("task", "<user_root>", "root_missing")
+        # Tasks are NOT owned by the user root. They must connect to the
+        # entity they relate to (for_person or about_entity). If neither is
+        # provided, the isolation guard will reject the batch.
         if intent.for_person:
             person_id = self.resolve_or_propose(
                 intent.for_person, batch,

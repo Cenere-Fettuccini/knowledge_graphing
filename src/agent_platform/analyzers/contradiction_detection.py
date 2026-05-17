@@ -24,8 +24,6 @@ import math
 import uuid
 from typing import TYPE_CHECKING
 
-from src.core.config import settings
-
 if TYPE_CHECKING:
     from src.memory.manager import MemoryManager
 
@@ -33,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 _SIMILARITY_FLOOR = 0.6   # below this, don't even ask the LLM
 _TOP_K_NEIGHBOURS = 5     # how many candidates to verify per new belief
-_CLOUD_MODEL = "gemini-2.5-flash"
 
 _SYSTEM_PROMPT = """\
 You are checking whether two beliefs CONTRADICT each other.
@@ -59,42 +56,43 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _ask_contradiction(text_a: str, text_b: str) -> dict | None:
-    """Single Gemini call. Returns the parsed JSON or None on failure."""
+    """Single LM Studio call. Returns the parsed JSON or None on failure."""
+    from src.agent_platform.analyzers.local_llm import (
+        LMStudioClient,
+        LocalLLMUnavailable,
+    )
+
+    prompt = (
+        f"Belief A: {text_a}\nBelief B: {text_b}\n\n"
+        "Do these contradict?"
+    )
     try:
-        from google import genai
-    except ImportError:
+        client = LMStudioClient()
+        raw = client.chat_completion(
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            json_mode=True,
+        )
+    except LocalLLMUnavailable as e:
+        logger.debug("contradiction check unavailable: %s", e)
         return None
-    api_key = (settings.google_api_keys or "").split(",")[0].strip()
-    if not api_key:
-        return None
+
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
     try:
-        client = genai.Client(api_key=api_key)
-        prompt = (
-            f"Belief A: {text_a}\nBelief B: {text_b}\n\n"
-            "Do these contradict?"
-        )
-        response = client.models.generate_content(
-            model=_CLOUD_MODEL,
-            contents=prompt,
-            config={
-                "system_instruction": _SYSTEM_PROMPT,
-                "response_mime_type": "application/json",
-                "temperature": 0.0,
-            },
-        )
-        raw = (getattr(response, "text", "") or "").strip()
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
         parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            return None
-        return parsed
-    except Exception as e:
-        logger.debug("contradiction check failed: %s", e)
+    except json.JSONDecodeError:
         return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
 
 
 def _detect_sync(memory: "MemoryManager", *, since: str | None = None) -> dict:

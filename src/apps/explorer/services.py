@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from src.agent_platform.analyzers import graph_ingest_trigger
 from src.agent_platform.analyzers.canonicalize import (
     DEFAULT_BELIEF_THRESHOLD,
@@ -78,17 +81,43 @@ def reset_graph(memory: MemoryManager) -> dict:
     return {"user": root, "requeued": requeued}
 
 
+_DRAIN_ROW_CAP = 200            # max rows processed per reset click
+_DRAIN_BATCH_SIZE = 5          # rows per LM Studio call
+_DRAIN_INTERBATCH_SLEEP = 30.0   # seconds between batches — lets LM Studio breathe
+
+
 async def drain_after_reset(memory: MemoryManager) -> None:
-    """Run extraction passes in a loop until the queue is empty (post-reset drain)."""
+    """Process a bounded slice of the queue after a reset.
+
+    Capped at ``_DRAIN_ROW_CAP`` rows total (not batches) with a small sleep
+    between batches so the local LLM and host don't get pinned by a 1000-call
+    burst. Anything beyond the cap drains gradually via the count-based
+    trigger on subsequent chat turns.
+    """
     from src.agent_platform.analyzers.graph_ingest_trigger import run_extraction_pass
-    _BATCH_CAP = 50
-    for _ in range(_BATCH_CAP):
-        remaining = memory.count_unanalyzed()
-        if remaining <= 0:
+
+    log = logging.getLogger(__name__)
+    processed_total = 0
+    while processed_total < _DRAIN_ROW_CAP:
+        if memory.count_unanalyzed() <= 0:
             break
-        result = await run_extraction_pass(memory, batch_size=20)
-        if result.get("skipped") or not result.get("processed_messages"):
+        remaining_cap = _DRAIN_ROW_CAP - processed_total
+        batch_size = min(_DRAIN_BATCH_SIZE, remaining_cap)
+        result = await run_extraction_pass(memory, batch_size=batch_size)
+        if result.get("skipped"):
             break
+        processed = result.get("processed_messages") or 0
+        if not processed:
+            break
+        processed_total += processed
+        if processed_total < _DRAIN_ROW_CAP and memory.count_unanalyzed() > 0:
+            await asyncio.sleep(_DRAIN_INTERBATCH_SLEEP)
+
+    log.info(
+        "drain_after_reset: processed %d row(s); remaining=%d",
+        processed_total,
+        memory.count_unanalyzed(),
+    )
 
 
 def get_analyzer_status(memory: MemoryManager) -> dict:
