@@ -93,11 +93,6 @@ async def get_analyzer_status(memory: MemoryManager = Depends(get_memory_manager
     return services.get_analyzer_status(memory)
 
 
-@router.get("/analyze/models")
-async def list_analyzer_models(memory: MemoryManager = Depends(get_memory_manager)):
-    return services.list_analyzer_models(memory)
-
-
 @router.post("/analyze/run")
 async def run_analyzer(
     payload: dict | None = Body(default=None),
@@ -105,12 +100,9 @@ async def run_analyzer(
 ):
     payload = payload or {}
     batch_size = payload.get("batch_size", 20)
-    model = payload.get("model")
     if not isinstance(batch_size, int) or batch_size <= 0 or batch_size > 200:
         raise HTTPException(status_code=400, detail="batch_size must be an integer in 1..200")
-    if model is not None and not isinstance(model, str):
-        raise HTTPException(status_code=400, detail="model must be a string if provided")
-    return await services.run_analyzer(memory, batch_size=batch_size, model=model)
+    return await services.run_analyzer(memory, batch_size=batch_size)
 
 
 @router.post("/analyze/process-all")

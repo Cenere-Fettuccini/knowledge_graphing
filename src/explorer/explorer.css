@@ -12,10 +12,10 @@
     padding: 12px;
     gap: 12px;
     grid-template-columns: 240px 1fr 1fr 300px;
-    /* Status row sizes to its content (System Health + Model Headroom +
-       Knowledge Analyzer) up to ~45% of viewport height, with a floor of
-       200px so the section never collapses past the health rows. The
-       sidebar row claims whatever's left. */
+    /* Status row sizes to its content (System Health + Knowledge Analyzer)
+       up to ~45% of viewport height, with a floor of 200px so the section
+       never collapses past the health rows. The sidebar row claims
+       whatever's left. */
     grid-template-rows: minmax(200px, min(45vh, max-content)) 1fr 180px;
     grid-template-areas:
         "status  graph graph graph"
@@ -460,26 +460,6 @@ h3 {
     font-size: 13px;
     font-weight: 500;
 }
-.analyzer-card__label {
-    display: block;
-    font-size: 10px;
-    color: var(--fg-dim);
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.analyzer-card__select {
-    width: 100%;
-    padding: 5px 8px;
-    background: transparent;
-    color: var(--fg-primary);
-    border: 1px solid var(--border-main);
-    border-radius: var(--radius-sm, 4px);
-    font: inherit;
-    font-size: 12px;
-    margin-bottom: 8px;
-}
-.analyzer-card__select:focus { outline: none; border-color: var(--border-focus, var(--fg-primary)); }
 .analyzer-card__run {
     width: 100%;
     padding: 6px 12px;
@@ -545,13 +525,8 @@ h3 {
 .expanded-module .module-close-btn { opacity: 1; pointer-events: auto; }
 .expanded-module { box-shadow: var(--shadow-xl); cursor: default !important; }
 
-/* ── Quota Bars ─────────────────────────────────────────────────────────── */
+/* Divider used between sections inside the status panel. */
 .status-divider { height: 1px; background: var(--border-subtle); margin: 12px 0; }
-.quota-item { margin-bottom: 10px; }
-.quota-label { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; }
-.progress-bg { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
-.progress-bar { height: 100%; background: var(--color-belief); transition: width 0.3s; }
-.light-theme .progress-bg { background: rgba(0,0,0,0.05); }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 1024px) {

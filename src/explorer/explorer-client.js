@@ -116,18 +116,8 @@
             }
         },
 
-        async listAnalyzerModels() {
-            try {
-                return await http.get('/api/explorer/analyze/models');
-            } catch (error) {
-                console.error('ExplorerClient.listAnalyzerModels failed', error);
-                return [];
-            }
-        },
-
-        async runAnalyzer({ batchSize = 20, model = null } = {}) {
+        async runAnalyzer({ batchSize = 20 } = {}) {
             const body = { batch_size: batchSize };
-            if (model) body.model = model;
             return await http.post('/api/explorer/analyze/run', body);
         },
 

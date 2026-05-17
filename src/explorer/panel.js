@@ -546,22 +546,6 @@ const StatusManager = {
         }
         this._prevNeo4j = data.neo4j;
 
-        // Render Quota Bars
-        const quotaList = document.getElementById('quotaList');
-        if (quotaList && data.quota) {
-            quotaList.innerHTML = data.quota.map(q => `
-                <div class="quota-item">
-                    <div class="quota-label">
-                        <span>${q.model}</span>
-                        <span class="dim">${q.headroom}%</span>
-                    </div>
-                    <div class="progress-bg">
-                        <div class="progress-bar" style="width: ${q.headroom}%"></div>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
         setTimeout(() => {
             svg.style.transition = 'none';
             svg.style.transform = 'rotate(0deg)';
@@ -630,7 +614,6 @@ const AnalyzerManager = {
         this.card = document.getElementById('analyzerCard');
         this.queueCount = document.getElementById('analyzerQueueCount');
         this.llmBadge = document.getElementById('analyzerLLMBadge');
-        this.modelSelect = document.getElementById('analyzerModelSelect');
         this.runBtn = document.getElementById('analyzerRunBtn');
         this.processAllBtn = document.getElementById('analyzerProcessAllBtn');
         this.resultBox = document.getElementById('analyzerResult');
@@ -669,10 +652,7 @@ const AnalyzerManager = {
         const client = getExplorerClient();
         if (!client || !this.card) return;
 
-        const [status, models] = await Promise.all([
-            client.getAnalyzerStatus(),
-            client.listAnalyzerModels(),
-        ]);
+        const status = await client.getAnalyzerStatus();
 
         if (this.queueCount) this.queueCount.textContent = status.unanalyzed_count ?? 0;
 
@@ -683,21 +663,6 @@ const AnalyzerManager = {
             this.llmBadge.title = online
                 ? `Local LLM ready · default: ${status.default_model || '—'}`
                 : 'LM Studio is not reachable. Start it to enable bulk analysis.';
-        }
-
-        // Refresh the model picker without clobbering the user's current selection.
-        if (this.modelSelect) {
-            const previous = this.modelSelect.value;
-            const options = ['<option value="">Default</option>'];
-            (models || []).forEach((m) => {
-                const id = m && m.id ? String(m.id) : '';
-                if (!id) return;
-                options.push(`<option value="${id}">${id}</option>`);
-            });
-            this.modelSelect.innerHTML = options.join('');
-            if (previous && Array.from(this.modelSelect.options).some((o) => o.value === previous)) {
-                this.modelSelect.value = previous;
-            }
         }
 
         const pending = status.unanalyzed_count ?? 0;
@@ -758,8 +723,7 @@ const AnalyzerManager = {
         if (this.resultBox) this.resultBox.textContent = '';
 
         try {
-            const model = this.modelSelect && this.modelSelect.value ? this.modelSelect.value : null;
-            const result = await client.runAnalyzer({ batchSize: 20, model });
+            const result = await client.runAnalyzer({ batchSize: 20 });
             this._renderResult(result);
             window.GraphManager?.reload?.();
         } catch (e) {

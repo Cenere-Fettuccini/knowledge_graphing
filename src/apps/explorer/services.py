@@ -10,10 +10,7 @@ from src.agent_platform.analyzers.canonicalize import (
     BeliefCanonicalizer,
     EntityCanonicalizer,
 )
-from src.agent_platform.analyzers.local_llm import (
-    LMStudioClient,
-    LocalLLMUnavailable,
-)
+from src.agent_platform.analyzers.local_llm import LMStudioClient
 from src.agent_platform.public.agent_service import AgentService
 from src.ingestion.bulk_importer import BulkImporter
 from src.memory.manager import MemoryManager
@@ -183,27 +180,17 @@ def get_analyzer_status(memory: MemoryManager) -> dict:
     }
 
 
-def list_analyzer_models(memory: MemoryManager) -> list[dict]:
-    """LM Studio's ``/v1/models`` pass-through for the UI's picker."""
-    try:
-        return LMStudioClient().list_models()
-    except LocalLLMUnavailable:
-        return []
-
-
 async def run_analyzer(
     memory: MemoryManager,
     *,
     batch_size: int = 20,
-    model: str | None = None,
 ) -> dict:
     """Manual one-shot drain — routes through the same pipeline as the
     count-trigger so the manual path can't drift from the auto one.
 
-    ``model`` is accepted for backwards compatibility with the legacy
-    KnowledgeAnalyzer signature but currently unused — the extraction
-    pass uses ``settings.lm_studio_model``. Wire model-override here
-    if the explorer's model-picker needs to work again.
+    The extraction pass uses ``settings.lm_studio_model``. Model selection
+    is no longer surfaced in the UI since all LLM traffic goes through
+    LM Studio.
     """
     return await graph_ingest_trigger.run_extraction_pass(
         memory, batch_size=batch_size
