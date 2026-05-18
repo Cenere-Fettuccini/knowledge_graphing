@@ -5,10 +5,10 @@ import json
 import logging
 import random
 
-from google import genai
-from google.genai.types import GenerateContentConfig
-
-from src.core.config import settings
+from src.agent_platform.analyzers.local_llm import (
+    LMStudioClient,
+    LocalLLMUnavailable,
+)
 from src.memory.manager import MemoryManager, get_memory_manager
 
 logger = logging.getLogger(__name__)
@@ -63,23 +63,32 @@ Return ONLY the raw JSON object. Do not use markdown code blocks.
 class DeepSynthesisEngine:
     def __init__(self, memory: MemoryManager = None):
         self.memory = memory or get_memory_manager()
-        api_key = settings.api_keys[0] if settings.api_keys else ""
-        self.client = genai.Client(api_key=api_key)
-        self.model_name = "gemini-2.5-flash"
+        self.client = LMStudioClient()
 
     async def _generate_json(self, system_prompt: str, user_prompt: str, *, temperature: float) -> dict:
-        response = await self.client.aio.models.generate_content(
-            model=self.model_name,
-            contents=user_prompt,
-            config=GenerateContentConfig(
-                system_instruction=system_prompt,
+        try:
+            raw = await asyncio.to_thread(
+                self.client.chat_completion,
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 temperature=temperature,
-                max_output_tokens=2048,
-                response_mime_type="application/json",
-            ),
-        )
-        raw_json = (response.text or "").strip()
-        return json.loads(raw_json)
+                json_mode=True,
+            )
+        except LocalLLMUnavailable as e:
+            logger.warning("deep_pass: LM Studio unavailable: %s", e)
+            return {}
+        raw_json = (raw or "").strip()
+        if raw_json.startswith("```"):
+            raw_json = raw_json.split("```", 2)[1]
+            if raw_json.startswith("json"):
+                raw_json = raw_json[4:]
+            raw_json = raw_json.strip()
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
 
     async def run_batch(self):
         """Run a single batch of deep synthesis over un-analyzed beliefs."""
@@ -165,14 +174,15 @@ class DeepSynthesisEngine:
             "Return only the concept."
         )
         try:
-            tangent_response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=tangent_prompt,
-                config=GenerateContentConfig(temperature=0.8, max_output_tokens=64),
+            tangent = await asyncio.to_thread(
+                self.client.chat_completion,
+                [{"role": "user", "content": tangent_prompt}],
+                temperature=0.8,
+                json_mode=False,
             )
-            tangent = (tangent_response.text or "").strip()
+            tangent = (tangent or "").strip()
             logger.info("Tangent concept generated: %s", tangent)
-        except Exception as e:
+        except LocalLLMUnavailable as e:
             logger.error("Failed to generate tangent: %s", e)
             return 0
 

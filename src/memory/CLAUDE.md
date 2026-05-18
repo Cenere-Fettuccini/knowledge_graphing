@@ -46,6 +46,43 @@ from app or tool code.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `boot` · `request` · `background`
+
+**State**: `lazy singleton`
+- `MemoryManager` is created on the first `get_memory_manager()` call. Holds the Chroma client, the Neo4j driver pool, and a 60 s health-status cache. Lives for process lifetime; connection pools are not closed on shutdown — they rely on process exit.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.platform.app_factory` | FastAPI lifespan startup | `get_memory_manager()` warm-up | `lazy` |
+| `src.apps.chat.api` / `.services` | HTTP `Depends()` | session CRUD, `store()`, `get_history()`, graph reads | `sync` / `async` |
+| `src.apps.explorer.api` / `.services` | HTTP `Depends()` | graph reads, analyzer-queue counts, era CRUD | `sync` / `async` |
+| `src.agent_platform.public.agent_service` | First agent run | `get_memory_manager()` passed to `Agent` | `lazy` |
+| `src.agent_platform.tools.*` | LLM tool call during a turn | `get_memory_manager()` then read/write methods | `sync` |
+| `src.agent_platform.analyzers.*` | Triggered or scheduled analyzer pass | `list_unanalyzed()`, `mark_analyzed()`, `upsert_*()` | `sync` |
+| `src.bot.proactive` | Reconciliation / digest tick | `get_memory_manager()` | `lazy` |
+| `src.rumination.engine` | Background tick | `get_memory_manager()` passed to `DeepPass` | `scheduled` |
+| `src.ingestion.bulk_importer` | Bulk import endpoint | `memory.store()` per chunk | `sync` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.memory.stores.chroma_store` | every `store()` / `search()` / `list_unanalyzed()` | embeddings, metadata, queries | `sync` |
+| `src.memory.stores.neo4j_store` | every `graph_*()` / `upsert_*()` / `bootstrap_user_root()` | Cypher | `sync` |
+| `src.memory.spillover` | Chroma write fails | failed write record on disk | `sync` |
+| `src.agent_platform.analyzers.graph_ingest_trigger` | end of `store()` for non-ephemeral rows | `maybe_trigger(self)` — fire-and-forget event | `event` (lazy import) |
+
+**Diagnostic notes**
+- The lazy import of `graph_ingest_trigger` inside `store()` is the **only** place `memory` calls into `analyzers`. This back-edge is what creates the fan-in on LM Studio: every `store()` independently fires the trigger.
+- `MemoryManager.status()` is cached for 60 s — callers needing fresh data must call `invalidate_health_cache()` first.
+- `memory.neo4j` and `memory.chroma` are *internal* — apps and tools must use the public methods on `MemoryManager`.
+
+---
+
 ## Storage Architecture
 - **ChromaDB** is the source of truth for raw conversation history. Every
   `store()` call lands here with `analyzed: False`. The analyzer pipeline

@@ -1,9 +1,8 @@
-"""Cloud-LLM belief extraction (S3.4).
+"""Belief extraction pass.
 
 The local pass (``graph_extraction``) handles structural facts — entities,
-tasks, edges — which the 4B model is reliable on. Beliefs need richer
-subjective reasoning, so they're routed here, where Gemini Flash does
-the extraction.
+tasks, edges. Beliefs run through this separate pass against LM Studio so
+all LLM traffic stays local.
 
 Triggered manually via ``POST /api/explorer/analyze/beliefs/extract``.
 A future ticket will auto-trigger it once a configurable number of
@@ -28,15 +27,16 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
+from src.agent_platform.analyzers.local_llm import (
+    LMStudioClient,
+    LocalLLMUnavailable,
+)
 from src.agent_platform.tools.graph_write import graph_write
-from src.core.config import settings
 
 if TYPE_CHECKING:
     from src.memory.manager import MemoryManager
 
 logger = logging.getLogger(__name__)
-
-_CLOUD_MODEL = "gemini-2.5-flash"
 
 _SYSTEM_PROMPT = """\
 You extract durable BELIEFS from conversation transcripts and return JSON.
@@ -116,33 +116,20 @@ def _parse_response(raw: str) -> list[dict]:
             if isinstance(i, dict) and i.get("kind") == "belief"]
 
 
-def _call_gemini_sync(system_prompt: str, user_prompt: str) -> str:
-    """Issue the Gemini Flash call. Sync; wrap in to_thread when awaiting."""
+def _call_lm_studio_sync(system_prompt: str, user_prompt: str) -> str:
+    """Issue the LM Studio call. Sync; wrap in to_thread when awaiting."""
     try:
-        from google import genai
-    except ImportError as e:
-        logger.error("google.genai not installed; can't run belief extraction: %s", e)
-        return ""
-
-    api_key = (settings.google_api_keys or "").split(",")[0].strip()
-    if not api_key:
-        logger.error("cloud_belief_extraction: no GOOGLE_API_KEY configured")
-        return ""
-
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_CLOUD_MODEL,
-            contents=user_prompt,
-            config={
-                "system_instruction": system_prompt,
-                "response_mime_type": "application/json",
-                "temperature": 0.2,
-            },
+        client = LMStudioClient()
+        return client.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            json_mode=True,
         )
-        return getattr(response, "text", "") or ""
-    except Exception as e:
-        logger.warning("cloud_belief_extraction: Gemini call failed: %s", e)
+    except LocalLLMUnavailable as e:
+        logger.warning("belief_extraction: LM Studio unavailable: %s", e)
         return ""
 
 
@@ -151,7 +138,7 @@ async def extract_beliefs(rows: list[dict], schema: dict) -> list[dict]:
     if not rows:
         return []
     user_prompt = _build_user_prompt(rows, schema)
-    raw = await asyncio.to_thread(_call_gemini_sync, _SYSTEM_PROMPT, user_prompt)
+    raw = await asyncio.to_thread(_call_lm_studio_sync, _SYSTEM_PROMPT, user_prompt)
     return _parse_response(raw)
 
 

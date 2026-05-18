@@ -41,13 +41,15 @@ class LLMRouter:
         self._load_registry()
 
     def _load_registry(self):
-        """Populate models based on available API keys.
-        Loads dynamic models from limits_override.json, or falls back to defaults.
+        """Populate models. All LLM traffic is routed to LM Studio — Google
+        cloud models are intentionally not registered so the chat agent,
+        anchor proposals, and belief extraction all run locally.
         """
-        key_configs = settings.google_key_configs
-        overrides = load_limits()
+        # Cloud (Google) registration is disabled: all code goes through LM Studio.
+        key_configs: list[dict] = []
+        overrides: dict = {}
         registered_google_specs: set[tuple[str, str]] = set()
-        
+
         if not overrides:
             # Fallback defaults if no limits have been imported
             for key_config in key_configs:
@@ -112,11 +114,12 @@ class LLMRouter:
                     if spec:
                         self.models.append(spec)
 
-        # Local fallback — always available, no limits
+        # LM Studio (local) is now the sole provider — high capabilities so it
+        # is always selected by get_best_model.
         self.models.append(ModelSpec(
             model_id="local-slm",
             provider="local",
-            capabilities={"QA": 0.4, "EXTRACTION": 0.3, "SUMMARIZATION": 0.5, "CODE": 0.2, "REASONING": 0.2},
+            capabilities={"QA": 1.0, "EXTRACTION": 1.0, "SUMMARIZATION": 1.0, "CODE": 1.0, "REASONING": 1.0},
             rpm_limit=9999, rpd_limit=9999, tpm_limit=9_999_999,
         ))
 

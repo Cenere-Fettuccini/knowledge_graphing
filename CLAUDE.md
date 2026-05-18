@@ -67,6 +67,38 @@ def my_tool(param: str) -> str:
 - Other apps (`src.apps.*`)
 - `memory.neo4j.*` or `memory.chroma.*` — always use the public methods on `MemoryManager`
 
+## Data Flow & Lifecycle
+
+Every in-repo `CLAUDE.md` file has a `## Data Flow & Lifecycle` section with
+the same shape:
+
+- **Phases** — one or more of `boot`, `request`, `background`, `shutdown`, `ad-hoc`.
+- **State** — one of `stateless`, `lazy singleton`, `lifespan-scoped`, `module-level`, `per-call`.
+- **Inbound** / **Outbound** tables — each row is `From/To · Trigger · Payload · Mode`,
+  where `Mode` ∈ `sync · async · lazy · scheduled · event`.
+- **Diagnostic notes** — known chokepoints, where state crosses async boundaries,
+  fan-in / fan-out hazards.
+
+The **`/flows` page** in the web UI renders these connections as per-action
+sequence diagrams (chat turn, nuke & reanalyse, run analyzer, etc.) annotated
+with sync / async / fire-and-forget / lock-held / chokepoint / external I/O.
+Use it to trace a single data path end-to-end.
+
+Process-wide invariants worth remembering when reading the per-module sections:
+- **Lazy singletons**: `MemoryManager` and `AgentService` are created on first
+  call and live for process lifetime. Connection pools are not explicitly
+  closed on shutdown — they rely on process exit.
+- **Lazy back-edge**: `MemoryManager.store()` fires
+  `graph_ingest_trigger.maybe_trigger` as a fire-and-forget event. This is the
+  only place `memory` calls into `analyzers`.
+- **LM Studio is a process-wide chokepoint**. Six entry points
+  (`run_extraction_pass` × 4 + `refinement_extraction` + `deep_pass`) can each
+  drive concurrent `chat_completion` calls. No global semaphore guards it
+  today.
+- **Locks are module-scoped**: `graph_ingest_trigger._lock` and
+  `services._drain_lock` each guard one caller pattern — neither serialises
+  against the others.
+
 ## Project Structure
 ```
 src/

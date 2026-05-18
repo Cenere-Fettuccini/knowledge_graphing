@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
 from src.agent_platform.public.agent_service import AgentService, get_agent_service
 from src.apps.explorer import services
@@ -24,6 +24,19 @@ async def bootstrap_user(
         raise HTTPException(status_code=400, detail="`name` is required and must be a non-empty string.")
     try:
         return services.bootstrap_user(name, memory)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/graph/reset")
+async def reset_graph(
+    background_tasks: BackgroundTasks,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    try:
+        result = services.reset_graph(memory)
+        background_tasks.add_task(services.drain_after_reset, memory)
+        return result
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -80,11 +93,6 @@ async def get_analyzer_status(memory: MemoryManager = Depends(get_memory_manager
     return services.get_analyzer_status(memory)
 
 
-@router.get("/analyze/models")
-async def list_analyzer_models(memory: MemoryManager = Depends(get_memory_manager)):
-    return services.list_analyzer_models(memory)
-
-
 @router.post("/analyze/run")
 async def run_analyzer(
     payload: dict | None = Body(default=None),
@@ -92,12 +100,30 @@ async def run_analyzer(
 ):
     payload = payload or {}
     batch_size = payload.get("batch_size", 20)
-    model = payload.get("model")
     if not isinstance(batch_size, int) or batch_size <= 0 or batch_size > 200:
         raise HTTPException(status_code=400, detail="batch_size must be an integer in 1..200")
-    if model is not None and not isinstance(model, str):
-        raise HTTPException(status_code=400, detail="model must be a string if provided")
-    return await services.run_analyzer(memory, batch_size=batch_size, model=model)
+    return await services.run_analyzer(memory, batch_size=batch_size)
+
+
+@router.post("/analyze/process-all")
+async def process_all_queue(
+    background_tasks: BackgroundTasks,
+    memory: MemoryManager = Depends(get_memory_manager),
+):
+    """Drain the entire unanalyzed queue in the background.
+
+    Returns immediately with the snapshot at trigger time. Single-flight —
+    a second call while a drain is running returns ``started: false``.
+    """
+    if services.process_all_running():
+        return {
+            "started": False,
+            "reason": "already running",
+            "queue_depth": memory.count_unanalyzed(),
+        }
+    queue_depth = memory.count_unanalyzed()
+    background_tasks.add_task(services.process_all_queue, memory)
+    return {"started": True, "queue_depth": queue_depth}
 
 
 @router.get("/analyze/failed")

@@ -50,6 +50,44 @@ logging setup. **Apps must not import from `src.core.*` directly** (except
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `boot` · `request`
+
+**State**: `lazy singleton` (per submodule)
+- `settings` — module-level instance of `Settings`, populated from `.env` at import time. Read-only after startup.
+- `llm_router` — module-level singleton constructed at import. Holds `InternalRateLimiter` state in-process.
+- `Agent` — instantiated per `AgentService` (and once for `TelegramBot`); not a global.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| every module | import time | `from src.core.config import settings` | `sync` |
+| `src.platform.app_factory` | startup | `setup_logging()` | `sync` |
+| `src.agent_platform.public.agent_service` | first agent run | `Agent(memory)` ctor | `lazy` |
+| `src.bot.telegram_bot` | bot startup | `Agent(memory)` ctor (legacy direct path) | `lazy` |
+| `src.apps.credits.services` | admin endpoint | `llm_router.models`, `limiter._get_state(...)` | `sync` |
+| `src.agent_platform.public.agent_service.aquota_status` | quota endpoint | `llm_router.limiter.get_headroom(...)` | `sync` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| Gemini HTTP | each agent turn / tool follow-up | `router.get_best_model` → `pydantic_ai.Agent.run` | `async` |
+| `src.memory.manager` | `Agent.aprocess_message` | `MemoryManager.store()`, `get_history()`, `search()` | `sync` |
+| `src.core.context.ContextManager` | each turn | history + RAG assembly | `sync` |
+| `src.agent_platform.tools.registry` | `Agent.__init__` | imports `tools` list | `sync` (import time) |
+| `src.core.limiter` | per LLM call | RPM/RPD/TPM bookkeeping | `sync` |
+| `src.core.limits_store` | `reload_limits()` | JSON read/write `limits_override.json` | `sync` |
+
+**Diagnostic notes**
+- `InternalRateLimiter` state is **in-process only**. If you run multiple processes (e.g. the bot + the web server), each has its own counters — actual API usage may exceed limits.
+- `Agent` initialization imports `tools` list once; adding a tool requires restarting the process for it to register with PydanticAI.
+- `settings` mutations after startup are *not* propagated — limits get reloaded via `llm_router.reload_limits()` but nothing else does.
+
+---
+
 ## Public Surface
 
 ### `settings` (`src.core.config`)

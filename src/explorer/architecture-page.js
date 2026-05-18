@@ -934,6 +934,10 @@
         `;
     }
 
+    // (Data-flow / lifecycle visualisation lives in /flows, served by
+    // flows-page.js. Earlier mermaid prototypes were removed from this page
+    // so /arch stays focused on the component coupling map.)
+
     // ══════════════════════════════════════════════════════════════════════════
     // TOOLBAR
     // ══════════════════════════════════════════════════════════════════════════

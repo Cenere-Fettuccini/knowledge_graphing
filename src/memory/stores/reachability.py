@@ -8,9 +8,8 @@ by a merge, a stale edge deletion, or an analyzer bug.
   1. ``detect_orphans()``   — find unreachable nodes, return their props
   2. Orphan reattachment analyzer runs RAG + Gemini Flash to propose a
      meaningful edge for each orphan and writes it via MemoryManager
-  3. ``anchor_to_root()``   — last-resort fallback; any orphan the LLM
-     couldn't connect gets an ``ORPHANED_LINK`` to the user root so the
-     graph is never left with true islands
+  3. ``prune_orphaned_links()`` — remove any stale ``ORPHANED_LINK`` edges
+     from nodes that now have a real path to root
 
 **Manual / scheduled helpers** (not on the hot path):
   ``quarantine_unreachable()``, ``unquarantine()``, ``purge_quarantined()``
@@ -34,14 +33,12 @@ RETURN n.id AS id, n.name AS name, labels(n) AS labels,
        n.description AS description, n.content AS content
 """
 
-_ANCHOR_TO_ROOT_CYPHER = """
-MATCH (root:Person:User {is_root: true})
-WITH root
-MATCH (n)
-WHERE n.id IN $node_ids
-MERGE (root)-[r:ORPHANED_LINK]->(n)
-ON CREATE SET r.created_at = $now
-RETURN count(r) AS anchored
+
+_PRUNE_ORPHANED_LINKS_CYPHER = """
+MATCH (root:Person:User {is_root: true})-[r:ORPHANED_LINK]->(n)
+WHERE (root)-[*2..]-(n)
+DELETE r
+RETURN count(r) AS pruned
 """
 
 _QUARANTINE_UNREACHABLE_CYPHER = """
@@ -61,6 +58,32 @@ def _root_exists(session) -> bool:
         "MATCH (r:Person:User {is_root: true}) RETURN count(r) AS c"
     ).single()
     return bool(check and check["c"] > 0)
+
+
+_IS_REACHABLE_CYPHER = """
+MATCH (root:Person:User {is_root: true})
+MATCH (n {id: $node_id})
+RETURN n = root OR exists((root)-[*]-(n)) AS reachable
+"""
+
+
+def is_reachable_from_root(driver, node_id: str) -> bool:
+    """True if ``node_id`` is the root or has any path back to the root.
+
+    Returns False if the node doesn't exist, the root is missing, or on
+    any driver error — callers should treat False as "don't reuse this node".
+    """
+    if driver is None or not node_id:
+        return False
+    try:
+        with driver.session() as session:
+            if not _root_exists(session):
+                return False
+            row = session.run(_IS_REACHABLE_CYPHER, node_id=node_id).single()
+            return bool(row and row["reachable"])
+    except Exception as e:
+        logger.debug("is_reachable_from_root(%s) failed: %s", node_id, e)
+        return False
 
 
 def detect_orphans(driver) -> list[dict]:
@@ -91,31 +114,27 @@ def detect_orphans(driver) -> list[dict]:
         return []
 
 
-def anchor_to_root(driver, node_ids: list[str], now_iso: str) -> int:
-    """Create ORPHANED_LINK from root to each node in node_ids.
 
-    Last-resort fallback for orphans the LLM reattachment pass couldn't
-    resolve. Returns the number of edges created/merged.
+def prune_orphaned_links(driver) -> int:
+    """Delete ORPHANED_LINK edges from nodes that now have a real path to root.
+
+    Called post-commit so stale fallback edges don't accumulate once the node
+    has been properly connected by extraction or reattachment.
+    Returns the number of edges deleted.
     """
-    if driver is None or not node_ids:
+    if driver is None:
         return 0
     try:
         with driver.session() as session:
             if not _root_exists(session):
                 return 0
-            result = session.run(
-                _ANCHOR_TO_ROOT_CYPHER, node_ids=node_ids, now=now_iso
-            ).single()
-            count = int(result["anchored"]) if result else 0
+            result = session.run(_PRUNE_ORPHANED_LINKS_CYPHER).single()
+            count = int(result["pruned"]) if result else 0
             if count:
-                logger.info(
-                    "reachability: fallback ORPHANED_LINK created for %d node(s): %s",
-                    count,
-                    node_ids,
-                )
+                logger.info("reachability: pruned %d stale ORPHANED_LINK edge(s)", count)
             return count
     except Exception as e:
-        logger.error("anchor_to_root failed: %s", e)
+        logger.error("prune_orphaned_links failed: %s", e)
         return 0
 
 

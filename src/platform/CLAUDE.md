@@ -36,6 +36,41 @@ the shell/graph-ingest routers.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `boot` · `shutdown` · `request`
+
+**State**: `lifespan-scoped`
+- `AppRegistry` instance built inside `create_platform_app()`. Holds the five `AppDefinition`s for the lifetime of the FastAPI app.
+- `RuminationScheduler` started in the lifespan startup hook, stopped in shutdown.
+- No state in `graph_ingest.py` — it's just a router factory.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src/main.py` | process start | `create_platform_app()` | `sync` |
+| uvicorn | FastAPI lifespan enter | startup hook fires | `async` |
+| uvicorn | FastAPI lifespan exit | shutdown hook fires | `async` |
+| external HTTP client | POST `/graph/ingest` with `X-Ingest-Secret` | batch of intents | `async` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.apps.*` | startup | `get_<app>_app()` × 5 → mount routers | `sync` |
+| `src.memory.manager` | startup | `get_memory_manager()` warm-up | `lazy` |
+| `src.rumination.engine` | startup / shutdown | `RuminationScheduler(...).start()` / `.stop()` | `async` |
+| `src.agent_platform.analyzers.graph_ingest_trigger` | POST `/graph/ingest` | `run_extraction_pass(memory, batch_size)` | `async` (no lock) |
+| `src.core.logging_config` | startup | `setup_logging()` | `sync` |
+
+**Diagnostic notes**
+- `app_factory.py` is the *only* place that imports all five `get_<app>_app()` factories. Adding an app means editing this file.
+- `graph_ingest.py` is one of three lock-free entry points into `run_extraction_pass` (along with manual `/analyze/run` and `drain_after_reset`).
+- The lifespan does not explicitly close memory pools — relies on process exit.
+
+---
+
 ## Public API
 
 ### `app_factory.py`

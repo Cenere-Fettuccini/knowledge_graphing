@@ -116,19 +116,17 @@
             }
         },
 
-        async listAnalyzerModels() {
-            try {
-                return await http.get('/api/explorer/analyze/models');
-            } catch (error) {
-                console.error('ExplorerClient.listAnalyzerModels failed', error);
-                return [];
-            }
+        async runAnalyzer({ batchSize = 20 } = {}) {
+            const body = { batch_size: batchSize };
+            return await http.post('/api/explorer/analyze/run', body);
         },
 
-        async runAnalyzer({ batchSize = 20, model = null } = {}) {
-            const body = { batch_size: batchSize };
-            if (model) body.model = model;
-            return await http.post('/api/explorer/analyze/run', body);
+        async processAllQueue() {
+            return await http.post('/api/explorer/analyze/process-all', {});
+        },
+
+        async resetGraph() {
+            return await http.post('/api/explorer/graph/reset', {});
         },
     };
 })();

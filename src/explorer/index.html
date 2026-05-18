@@ -19,6 +19,7 @@
     <link rel="stylesheet" href="chat.css" />
     <link rel="stylesheet" href="credits.css" />
     <link rel="stylesheet" href="architecture.css" />
+    <link rel="stylesheet" href="flows.css" />
 
     <!-- External libs -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -143,6 +144,12 @@
                             <ul class="filter-list" id="taxonomyList">
                                 <li><span class="dim">Loading classes...</span></li>
                             </ul>
+                            <div style="margin-top: 16px; border-top: 1px solid var(--border, #333); padding-top: 12px;">
+                                <button id="resetGraphBtn" class="btn btn-ghost" style="width: 100%; color: var(--danger, #e05c5c);" title="Wipe all graph nodes and re-queue all conversations for analysis">
+                                    Nuke &amp; Re-analyse
+                                </button>
+                                <p id="resetGraphStatus" class="dim" style="font-size: 11px; margin: 6px 0 0; text-align: center;"></p>
+                            </div>
                         </div>
                     </aside>
 
@@ -556,6 +563,43 @@
                 </div>
             </div>
 
+            <!-- ── FLOWS PAGE ─────────────────────────────────────────────── -->
+            <div class="page-view" id="page-flows">
+                <div class="flows-layout">
+                    <aside class="flows-rail">
+                        <div class="flows-rail-title">Scenarios</div>
+                        <ul class="flows-rail-list" id="flowsList" role="listbox"></ul>
+                        <div class="flows-rail-footer">
+                            Each scenario traces a single user action through the
+                            codebase to find chokepoints and concurrency hazards.
+                        </div>
+                    </aside>
+                    <div class="flows-main" id="flowsMain">
+                        <header class="flows-header">
+                            <div class="flows-header-eyebrow" id="flowsCategory">—</div>
+                            <h2 class="flows-header-title" id="flowsTitle">Select a scenario</h2>
+                            <div class="flows-header-blurb" id="flowsBlurb">
+                                Pick a user action from the left to see the
+                                function-level data flow, annotated with
+                                concurrency semantics.
+                            </div>
+                        </header>
+                        <div class="flows-legend" id="flowsLegend">
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-sync"></span>sync / awaited</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-async"></span>fire-and-forget</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-lock"></span>lock / semaphore held</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-choke"></span>chokepoint / fan-in</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-io"></span>external I/O</span>
+                        </div>
+                        <div class="flows-canvas" id="flowsCanvas"></div>
+                        <section class="flows-notes" id="flowsNotes" hidden>
+                            <h3 class="flows-notes-title">Diagnostic notes</h3>
+                            <ul class="flows-notes-list" id="flowsNotesList"></ul>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
         </div><!-- /page-container -->
 
     </div><!-- /app-shell -->
@@ -600,6 +644,25 @@
     <script src="graph.js"></script>
     <script src="timeline.js"></script>
     <script src="architecture-page.js"></script>
+    <script src="flows-page.js"></script>
+
+    <!-- Reset-graph confirmation modal -->
+    <div class="bootstrap-modal" id="resetGraphModal" hidden>
+        <div class="bootstrap-modal__backdrop"></div>
+        <div class="bootstrap-modal__card" role="dialog" aria-modal="true" aria-labelledby="resetGraphTitle">
+            <h2 id="resetGraphTitle">Nuke &amp; Re-analyse?</h2>
+            <p class="dim">
+                This will <strong>wipe every node and edge</strong> in the knowledge graph and
+                re-queue all conversations for analysis. The raw chat history is untouched.
+                This cannot be undone.
+            </p>
+            <div class="bootstrap-modal__error" id="resetGraphError" hidden></div>
+            <div class="bootstrap-modal__actions">
+                <button class="btn" id="resetGraphConfirmBtn" style="background: var(--danger, #e05c5c);">Yes, nuke it</button>
+                <button class="btn btn-ghost" id="resetGraphCancelBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
 
 </body>
 

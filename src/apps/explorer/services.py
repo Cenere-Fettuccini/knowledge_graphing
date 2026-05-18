@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from src.agent_platform.analyzers import graph_ingest_trigger
 from src.agent_platform.analyzers.canonicalize import (
     DEFAULT_BELIEF_THRESHOLD,
@@ -7,10 +10,7 @@ from src.agent_platform.analyzers.canonicalize import (
     BeliefCanonicalizer,
     EntityCanonicalizer,
 )
-from src.agent_platform.analyzers.local_llm import (
-    LMStudioClient,
-    LocalLLMUnavailable,
-)
+from src.agent_platform.analyzers.local_llm import LMStudioClient
 from src.agent_platform.public.agent_service import AgentService
 from src.ingestion.bulk_importer import BulkImporter
 from src.memory.manager import MemoryManager
@@ -58,8 +58,10 @@ def get_belief_trail(belief_id: str, memory: MemoryManager) -> dict:
 
 
 def get_bootstrap_status(memory: MemoryManager) -> dict:
+    if not memory.is_graph_online():
+        return {"initialized": None, "user": None, "neo4j_offline": True}
     user = memory.get_user_root()
-    return {"initialized": user is not None, "user": user}
+    return {"initialized": user is not None, "user": user, "neo4j_offline": False}
 
 
 def bootstrap_user(name: str, memory: MemoryManager) -> dict:
@@ -67,6 +69,93 @@ def bootstrap_user(name: str, memory: MemoryManager) -> dict:
         raise ValueError("name must be a non-empty string")
     user = memory.bootstrap_user_root(name.strip())
     return {"user": user}
+
+
+def reset_graph(memory: MemoryManager) -> dict:
+    """Wipe all Neo4j nodes, reseed the Kevin root, and re-queue all Chroma rows for analysis."""
+    root = memory.bootstrap_user_root("Kevin")
+    requeued = memory.mark_all_unanalyzed(include_ephemeral=False)
+    return {"user": root, "requeued": requeued}
+
+
+_DRAIN_ROW_CAP = 200            # max rows processed per reset click
+_DRAIN_BATCH_SIZE = 5          # rows per LM Studio call
+_DRAIN_INTERBATCH_SLEEP = 30.0   # seconds between batches — lets LM Studio breathe
+
+# Single-flight lock for user-initiated drains so a second "Process all"
+# click can't start a parallel drain on the same queue.
+_drain_lock = asyncio.Lock()
+
+
+async def _drain_queue(
+    memory: MemoryManager,
+    *,
+    row_cap: int | None,
+    label: str,
+) -> int:
+    """Pull batches from the unanalyzed queue until empty or ``row_cap`` hit.
+
+    ``row_cap=None`` means unlimited — keep going until the queue is empty.
+    Always uses the throttle constants above so the local LLM does not get
+    pinned. Returns the number of rows processed.
+    """
+    from src.agent_platform.analyzers.graph_ingest_trigger import run_extraction_pass
+
+    log = logging.getLogger(__name__)
+    processed_total = 0
+    while row_cap is None or processed_total < row_cap:
+        if memory.count_unanalyzed() <= 0:
+            break
+        if row_cap is None:
+            batch_size = _DRAIN_BATCH_SIZE
+        else:
+            batch_size = min(_DRAIN_BATCH_SIZE, row_cap - processed_total)
+        result = await run_extraction_pass(memory, batch_size=batch_size)
+        if result.get("skipped"):
+            break
+        processed = result.get("processed_messages") or 0
+        if not processed:
+            break
+        processed_total += processed
+        more_to_do = memory.count_unanalyzed() > 0
+        if not more_to_do:
+            break
+        if row_cap is not None and processed_total >= row_cap:
+            break
+        await asyncio.sleep(_DRAIN_INTERBATCH_SLEEP)
+
+    log.info(
+        "%s: processed %d row(s); remaining=%d",
+        label, processed_total, memory.count_unanalyzed(),
+    )
+    return processed_total
+
+
+async def drain_after_reset(memory: MemoryManager) -> None:
+    """Process a bounded slice of the queue after a reset.
+
+    Capped at ``_DRAIN_ROW_CAP`` rows total (not batches). Anything beyond the
+    cap drains gradually via the count-based trigger on subsequent chat turns,
+    or via the user-triggered "Process all" button.
+    """
+    await _drain_queue(memory, row_cap=_DRAIN_ROW_CAP, label="drain_after_reset")
+
+
+async def process_all_queue(memory: MemoryManager) -> dict:
+    """Drain the entire unanalyzed queue. Triggered from the explorer dashboard.
+
+    Single-flight: a second call while one is already running returns
+    ``{started: False, reason: "already running"}`` immediately.
+    """
+    if _drain_lock.locked():
+        return {"started": False, "reason": "already running"}
+    async with _drain_lock:
+        processed = await _drain_queue(memory, row_cap=None, label="process_all_queue")
+    return {"started": True, "processed": processed, "remaining": memory.count_unanalyzed()}
+
+
+def process_all_running() -> bool:
+    return _drain_lock.locked()
 
 
 def get_analyzer_status(memory: MemoryManager) -> dict:
@@ -87,30 +176,21 @@ def get_analyzer_status(memory: MemoryManager) -> dict:
         "failed_count": memory.count_failed(),
         "local_llm_available": local_available,
         "default_model": client.default_model,
+        "process_all_running": process_all_running(),
     }
-
-
-def list_analyzer_models(memory: MemoryManager) -> list[dict]:
-    """LM Studio's ``/v1/models`` pass-through for the UI's picker."""
-    try:
-        return LMStudioClient().list_models()
-    except LocalLLMUnavailable:
-        return []
 
 
 async def run_analyzer(
     memory: MemoryManager,
     *,
     batch_size: int = 20,
-    model: str | None = None,
 ) -> dict:
     """Manual one-shot drain — routes through the same pipeline as the
     count-trigger so the manual path can't drift from the auto one.
 
-    ``model`` is accepted for backwards compatibility with the legacy
-    KnowledgeAnalyzer signature but currently unused — the extraction
-    pass uses ``settings.lm_studio_model``. Wire model-override here
-    if the explorer's model-picker needs to work again.
+    The extraction pass uses ``settings.lm_studio_model``. Model selection
+    is no longer surfaced in the UI since all LLM traffic goes through
+    LM Studio.
     """
     return await graph_ingest_trigger.run_extraction_pass(
         memory, batch_size=batch_size

@@ -31,6 +31,36 @@ prompt assembly, memory retrieval, model routing, tool execution.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request`
+
+**State**: `lazy singleton`
+- `AgentService` instance built on first `get_agent_service()` call. Wraps a single `Agent` instance and the shared `MemoryManager`. Lives for process lifetime.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.apps.chat.api` / `.services` | HTTP `Depends()` | `AgentRunRequest` via `service.arun` | `async` |
+| `src.apps.explorer.api` / `.services` | HTTP `Depends()` | `astatus()`, `aquota_status()` | `async` |
+| `src.bot.proactive` | digest / reconciliation | `get_agent_service()` then `arun` | `lazy` |
+| `src.rumination.engine` | scheduled tick | passes service to `DeepPass.analyze` | `scheduled` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.core.agent.Agent` | every `arun` / `status` call | delegates wholesale | `sync` / `async` |
+| `src.memory.manager` | service init | `get_memory_manager()` passed to `Agent` ctor | `lazy` |
+| `src.core.router.llm_router` | `aquota_status` only | reads `models`, calls `limiter.get_headroom` | `sync` |
+
+**Diagnostic notes**
+- The gateway adds no concurrency control of its own — `Agent` is single-instance but its public methods are reentrant via PydanticAI internals.
+- `aquota_status()` is the *only* method that touches `llm_router` directly; everything else goes through `Agent`.
+
+---
+
 ## Contracts (`contracts.py`)
 
 ```python

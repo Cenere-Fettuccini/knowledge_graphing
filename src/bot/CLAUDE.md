@@ -34,6 +34,43 @@ web platform.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `boot` · `request` · `background`
+
+**State**: `process-scoped`
+- `TelegramBot` — instance built in `run_bot.py`, holds its own `Agent`, `SessionStore` (JSON on disk), and the `telegram.Application`.
+- `ProactiveBot` — instantiated inside `RuminationScheduler`; lives for the scheduler's lifetime in the web-server process.
+- `SessionStore` — JSON file on disk, read/written synchronously.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `run_bot.py` | process start | `TelegramBot().run()` (polling) | `sync` |
+| Telegram HTTPS | long-poll `getUpdates` returns | message update | `async` (handler) |
+| `src.rumination.engine` | scheduler init | constructs `ProactiveBot(memory, service)` | `sync` |
+| `src.rumination.deep_pass` | digest ready | `ProactiveBot.send_belief_digest(chat_id)` | `async` |
+| Telegram reply | reconciliation thread | `ProactiveBot.handle_refinement_reply(chat_id, text)` | `async` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.core.agent.Agent` | each Telegram message | `aprocess_message(user, text, session)` (legacy direct path, not via `AgentService`) | `async` |
+| `src.memory.manager` | digest / reconciliation | `get_memory_manager()` then reads / writes | `lazy` / `sync` |
+| `src.agent_platform.public.agent_service` | `ProactiveBot` only | `get_agent_service().arun(...)` | `lazy` / `async` |
+| `src.agent_platform.analyzers.refinement_extraction` | CT8 reconciliation reply | `parse_reconciliation_reply(memory, text)` → LM Studio | `async` |
+| Telegram HTTPS | every reply / digest | `sendMessage` | `async` |
+| local JSON `session_store.json` | session updates | sync read/write | `sync` |
+
+**Diagnostic notes**
+- `TelegramBot` is the **one** non-app caller of `core.agent.Agent` directly. Migrating it to `AgentService.arun()` would align it with the web path.
+- `SessionStore` writes are synchronous inside the async handler — fine at single-user volume, would become a chokepoint at scale.
+- `handle_refinement_reply` is the bot's only LM Studio dependency. It shares the global chokepoint with the extraction pipeline.
+
+---
+
 ## Key Classes
 
 ### `TelegramBot` (`telegram_bot.py`)

@@ -4,7 +4,8 @@ from src.agent_platform.tools.common import ensure_graph_online, logger
 from src.memory.manager import get_memory_manager
 
 # create_task was retired in S0.10 — use graph_write with a TaskIntent.
-# The resolver auto-anchors new tasks to the user root via OWNS_TASK.
+# Tasks must connect to the entity they relate to (for_person or about_entity);
+# they are NOT owned by the user root.
 
 
 def list_tasks(status_filter: str = "", include_completed: bool = False):

@@ -809,6 +809,7 @@ class MemoryManager:
         from datetime import datetime, timezone
         from src.agent_platform.analyzers import orphan_reattachment as _orphan
         now = datetime.now(timezone.utc).isoformat()
+        _reachability.prune_orphaned_links(self.neo4j.driver)
         orphans = _reachability.detect_orphans(self.neo4j.driver)
         if orphans:
             logger.info(
@@ -1190,6 +1191,10 @@ class MemoryManager:
     def unquarantine_node(self, node_id: str) -> bool:
         """Lift ``:Quarantine`` from a single node (manual reattach support)."""
         return _reachability.unquarantine(self.neo4j.driver, node_id)
+
+    def is_node_reachable_from_root(self, node_id: str) -> bool:
+        """True if the given node has a path back to the user root."""
+        return _reachability.is_reachable_from_root(self.neo4j.driver, node_id)
 
     def purge_quarantined(self, older_than_iso: str) -> int:
         """Permanently delete quarantined nodes older than the cutoff."""

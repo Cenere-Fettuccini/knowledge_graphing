@@ -304,3 +304,72 @@
 .arch-tooltip.is-visible {
     opacity: 1;
 }
+
+/* ── View-mode segmented control ─────────────────────────────────────────── */
+
+.arch-viewmode {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    display: flex;
+    gap: 2px;
+    z-index: 11;
+    background: var(--bg-module);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    box-shadow: var(--shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.25));
+}
+
+.arch-viewmode-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    font: 500 11px/1 var(--font);
+    padding: 6px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    transition: background 0.12s, color 0.12s;
+}
+
+.arch-viewmode-btn:hover {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.arch-viewmode-btn.is-active {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Mermaid pane ────────────────────────────────────────────────────────── */
+
+.arch-mermaid-pane {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    padding: 64px 24px 24px 24px;   /* leave room for the segmented control */
+    background: var(--bg-app);
+}
+
+.arch-mermaid-pane[hidden] {
+    display: none;
+}
+
+.arch-mermaid-pane .mermaid {
+    background: transparent;
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 12px;
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    text-align: center;
+}
+
+.arch-mermaid-pane .mermaid svg {
+    max-width: 100% !important;
+    height: auto !important;
+    display: inline-block;
+}

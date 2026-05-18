@@ -29,11 +29,7 @@ import asyncio
 import json
 import logging
 
-from src.core.config import settings
-
 logger = logging.getLogger(__name__)
-
-_CLOUD_MODEL = "gemini-2.5-flash"
 
 _SYSTEM_PROMPT = """\
 You interpret a user's single-shot reconciliation of two beliefs they hold that the system flagged as contradictory.
@@ -109,32 +105,24 @@ def _parse_response(raw: str, fallback_text: str) -> dict:
     return {"summary": summary.strip(), "evidence": evidence, "resolved": resolved}
 
 
-def _call_gemini_sync(system_prompt: str, user_prompt: str) -> str:
-    try:
-        from google import genai
-    except ImportError as e:
-        logger.error("google.genai not installed; can't run refinement extraction: %s", e)
-        return ""
-
-    api_key = (settings.google_api_keys or "").split(",")[0].strip()
-    if not api_key:
-        logger.error("refinement_extraction: no GOOGLE_API_KEY configured")
-        return ""
+def _call_lm_studio_sync(system_prompt: str, user_prompt: str) -> str:
+    from src.agent_platform.analyzers.local_llm import (
+        LMStudioClient,
+        LocalLLMUnavailable,
+    )
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_CLOUD_MODEL,
-            contents=user_prompt,
-            config={
-                "system_instruction": system_prompt,
-                "response_mime_type": "application/json",
-                "temperature": 0.1,
-            },
+        client = LMStudioClient()
+        return client.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            json_mode=True,
         )
-        return getattr(response, "text", "") or ""
-    except Exception as e:
-        logger.warning("refinement_extraction: Gemini call failed: %s", e)
+    except LocalLLMUnavailable as e:
+        logger.warning("refinement_extraction: LM Studio unavailable: %s", e)
         return ""
 
 
@@ -151,7 +139,7 @@ async def parse_reconciliation_reply(
     if not user_reply.strip():
         return {"summary": "", "evidence": [], "resolved": False}
     user_prompt = _build_user_prompt(belief_a_text, belief_b_text, user_reply)
-    raw = await asyncio.to_thread(_call_gemini_sync, _SYSTEM_PROMPT, user_prompt)
+    raw = await asyncio.to_thread(_call_lm_studio_sync, _SYSTEM_PROMPT, user_prompt)
     return _parse_response(raw, fallback_text=user_reply)
 
 

@@ -238,6 +238,144 @@
         }
     }
 
+    // ── Incremental merge ─────────────────────────────────────────────────────
+    // Preserves positions/animation state of nodes that survive between reloads.
+    // Only newly-arrived nodes get fresh placement + a short relaxation pass.
+
+    function mergeGraphData(newNodes, newEdges) {
+        const oldById = new Map(graphData.nodes.map(n => [n.id, n]));
+        const newIds = new Set(newNodes.map(n => n.id));
+
+        // Carry-over existing position/animation state; mark genuinely new nodes.
+        const merged = newNodes.map((n, i) => {
+            const prev = oldById.get(n.id);
+            if (prev) {
+                // If it was previously fading out and reappeared, revive it.
+                prev._dying = false;
+                return Object.assign(prev, n, { _idx: i, _isNew: false });
+            }
+            return { ...n, _idx: i, _isNew: true, _dying: false,
+                     x3d: 0, y3d: 0, z3d: 0,
+                     vx: 0, vy: 0, vz: 0,
+                     animScale: 0, edgeProgress: 0 };
+        });
+
+        // Keep nodes that vanished so they can fade out; they hold no incoming
+        // edges in the rebuilt edge list, so they just shrink and drop off.
+        graphData.nodes.forEach(prev => {
+            if (newIds.has(prev.id)) return;
+            if (prev.animScale <= 0.02) return; // already invisible — drop permanently
+            prev._dying = true;
+            prev._idx = merged.length;
+            merged.push(prev);
+        });
+
+        const newNodeList = merged.filter(n => n._isNew);
+
+        // Seed new-node positions near a connected, already-placed anchor if possible.
+        const idxByID = new Map(merged.map((n, i) => [n.id, i]));
+        newNodeList.forEach(n => {
+            let anchor = null;
+            for (const e of newEdges) {
+                const s = e.source ?? e.from;
+                const t = e.target ?? e.to;
+                if (s === n.id) {
+                    const a = merged[idxByID.get(t)];
+                    if (a && !a._isNew) { anchor = a; break; }
+                } else if (t === n.id) {
+                    const a = merged[idxByID.get(s)];
+                    if (a && !a._isNew) { anchor = a; break; }
+                }
+            }
+            const j = Math.abs((n.id || '').split('').reduce((s, c) => ((s << 5) - s) + c.charCodeAt(0), 0)) || 1;
+            const r = () => { const x = Math.sin(j * 9301 + 49297) * 10000; return x - Math.floor(x); };
+            const jitter = 40;
+            if (anchor) {
+                n.x3d = anchor.x3d + (r() - 0.5) * jitter;
+                n.y3d = anchor.y3d + (r() - 0.5) * jitter;
+                n.z3d = anchor.z3d + (r() - 0.5) * jitter;
+            } else {
+                n.x3d = (r() - 0.5) * 150;
+                n.y3d = (r() - 0.5) * 150;
+                n.z3d = (r() - 0.5) * 150;
+            }
+            n.baseR = n.baseR || (2.8 + r() * 2.2);
+            n.depth = 1;
+            n.parentId = anchor ? anchor._idx : 0;
+        });
+
+        // Rebuild edge index list. Keep source/target ids on each edge so we can
+        // re-resolve si/ti after node GC.
+        const edges = newEdges.reduce((acc, e) => {
+            const sid = e.source ?? e.from;
+            const tid = e.target ?? e.to;
+            const si = idxByID.get(sid);
+            const ti = idxByID.get(tid);
+            if (si !== undefined && ti !== undefined) acc.push({ si, ti, sid, tid, type: e.type });
+            return acc;
+        }, []);
+
+        graphData.nodes = merged;
+        graphData.edges = edges;
+
+        // Short relaxation pass — only if we added something — to nudge new nodes
+        // into space without disturbing established layout much.
+        if (newNodeList.length > 0) {
+            relaxNewNodes(merged, edges, newNodeList);
+        }
+
+        // Removed nodes naturally drop out (no exit animation for now). Clear
+        // selection/hover if they pointed at one of them.
+        if (activeNodeId && !newIds.has(activeNodeId)) activeNodeId = null;
+        if (hoveredId && !newIds.has(hoveredId)) hoveredId = null;
+    }
+
+    // Light force step that only moves _isNew nodes; established nodes stay put.
+    function relaxNewNodes(nodes, edges, newNodes) {
+        const iterations = 40;
+        const repulse = 6000;
+        const link = 0.05;
+        let damping = 0.85;
+        for (let iter = 0; iter < iterations; iter++) {
+            for (const n of newNodes) { n.vx = 0; n.vy = 0; n.vz = 0; }
+            for (const n of newNodes) {
+                for (const m of nodes) {
+                    if (m === n) continue;
+                    let dx = n.x3d - m.x3d, dy = n.y3d - m.y3d, dz = n.z3d - m.z3d;
+                    let d2 = dx*dx + dy*dy + dz*dz;
+                    if (d2 === 0) { dx = 0.1; dy = 0.1; dz = 0.1; d2 = 0.03; }
+                    if (d2 < 40000) {
+                        const f = repulse / d2;
+                        n.vx += dx * f; n.vy += dy * f; n.vz += dz * f;
+                    }
+                }
+            }
+            edges.forEach(e => {
+                const a = nodes[e.si], b = nodes[e.ti];
+                if (!a || !b) return;
+                if (a._isNew) {
+                    a.vx += (b.x3d - a.x3d) * link;
+                    a.vy += (b.y3d - a.y3d) * link;
+                    a.vz += (b.z3d - a.z3d) * link;
+                }
+                if (b._isNew) {
+                    b.vx += (a.x3d - b.x3d) * link;
+                    b.vy += (a.y3d - b.y3d) * link;
+                    b.vz += (a.z3d - b.z3d) * link;
+                }
+            });
+            for (const n of newNodes) {
+                n.vx *= damping; n.vy *= damping; n.vz *= damping;
+                n.x3d += n.vx;   n.y3d += n.vy;   n.z3d += n.vz;
+            }
+            damping *= 0.98;
+        }
+        // Set parent-target for pop-in animation
+        newNodes.forEach(n => {
+            n.targetX = n.x3d; n.targetY = n.y3d; n.targetZ = n.z3d;
+        });
+    }
+
     // ── Taxonomy sidebar ───────────────────────────────────────────────────────
 
     function buildTaxonomy(nodes, edges) {
@@ -497,9 +635,15 @@
         if (ts - lastTs < 14) return;   // ~70fps cap
         lastTs = ts;
         
-        // Node branching animation (branch growth -> node pop)
+        // Node branching animation (branch growth -> node pop), plus fade-out
+        // for nodes that disappeared from the latest reload (n._dying).
         if (graphData.nodes.length > 0) {
             graphData.nodes.forEach(n => {
+                if (n._dying) {
+                    n.animScale = Math.max(0, n.animScale - 0.12);
+                    n.edgeProgress = Math.max(0, n.edgeProgress - 0.12);
+                    return;
+                }
                 if (n.parentId !== undefined && n.parentId !== n._idx) {
                     const p = graphData.nodes[n.parentId];
                     // If parent is fully popped, start growing the edge to this node
@@ -517,6 +661,36 @@
                     n.edgeProgress = 1.0;
                 }
             });
+
+            // Garbage-collect nodes that finished fading. Re-resolve edge si/ti
+            // via the persisted sid/tid since array indices shift after filter.
+            const deadIds = new Set();
+            graphData.nodes.forEach(n => {
+                if (n._dying && n.animScale <= 0) deadIds.add(n.id);
+            });
+            if (deadIds.size > 0) {
+                graphData.nodes = graphData.nodes.filter(n => !deadIds.has(n.id));
+                const reindex = new Map();
+                graphData.nodes.forEach((n, i) => {
+                    n._idx = i;
+                    reindex.set(n.id, i);
+                });
+                graphData.edges = graphData.edges.reduce((acc, e) => {
+                    const si = reindex.get(e.sid);
+                    const ti = reindex.get(e.tid);
+                    if (si !== undefined && ti !== undefined) {
+                        e.si = si; e.ti = ti;
+                        acc.push(e);
+                    }
+                    return acc;
+                }, []);
+                // parentId references can become stale too — clear those that died.
+                graphData.nodes.forEach(n => {
+                    if (n.parentId !== undefined && !graphData.nodes[n.parentId]) {
+                        n.parentId = n._idx;
+                    }
+                });
+            }
         }
         
         if (isAnimating && targetMatrix) {
@@ -609,12 +783,22 @@
 
     // ── Graph controls (zoom reinterpreted as FOV) ────────────────────────────
 
+    // Apply a zoom step. Mirrors what the scroll-wheel handler does so the
+    // buttons and keyboard shortcuts can't be overridden mid-click by the
+    // node-focus / recenter animation loop.
+    function applyZoomStep(delta) {
+        isAnimating = false;
+        const next = Math.max(180, Math.min(800, fov + delta));
+        fov = next;
+        targetFov = next;
+    }
+
     function bindGraphControls() {
         document.getElementById('zoomInBtn')?.addEventListener('click', () => {
-            fov = Math.min(800, fov + 40);
+            applyZoomStep(40);
         });
         document.getElementById('zoomOutBtn')?.addEventListener('click', () => {
-            fov = Math.max(180, fov - 40);
+            applyZoomStep(-40);
         });
         document.getElementById('navBackBtn')?.addEventListener('click', () => {
             window.GraphManager.back();
@@ -635,6 +819,29 @@
                     window.GraphManager?.setLimit?.(next);
                 }
             });
+        }
+
+        // Keyboard shortcuts: "+" / "=" to zoom in, "-" / "_" to zoom out.
+        // Skipped when the user is typing in an input/textarea/contenteditable
+        // so the search box etc. stay unaffected. Bound on the document so
+        // they work as long as the explorer page is in focus.
+        if (!window.__explorerZoomKeysBound) {
+            document.addEventListener('keydown', (e) => {
+                // Only when the explorer's graph canvas is on-screen.
+                const canvas = document.getElementById('graphCanvas');
+                if (!canvas || canvas.offsetParent === null) return;
+                const t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                if (e.key === '+' || e.key === '=') {
+                    e.preventDefault();
+                    applyZoomStep(40);
+                } else if (e.key === '-' || e.key === '_') {
+                    e.preventDefault();
+                    applyZoomStep(-40);
+                }
+            });
+            window.__explorerZoomKeysBound = true;
         }
     }
 
@@ -703,7 +910,12 @@
         }
 
         // ── Data Loading ────────────────────────────────────────────────────────
-        async function reload() {
+        // Two modes:
+        //   - full: throw away current layout, run the whole force pass (initial
+        //     load, focal-nav change, era-filter change, limit change).
+        //   - incremental: keep positions of surviving nodes, only place + relax
+        //     genuinely new ones. Used for the periodic poll.
+        async function reload({ full = false } = {}) {
             let data = { nodes: [], edges: [], stats: null };
             const client = getExplorerClient();
             const focal = topFocal();
@@ -718,16 +930,26 @@
                 console.warn('[graph3d] API unavailable, using empty graph.', e);
             }
 
-            graphData.nodes = (data.nodes || []).map((n, i) => ({ ...n, _idx: i }));
-            const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
-            graphData.edges = (data.edges || []).reduce((acc, e) => {
-                const si = idxByID.get(e.source ?? e.from);
-                const ti = idxByID.get(e.target ?? e.to);
-                if (si !== undefined && ti !== undefined) acc.push({ si, ti, type: e.type });
-                return acc;
-            }, []);
+            const incoming = data.nodes || [];
+            const incomingEdges = data.edges || [];
+            const isFirstLoad = graphData.nodes.length === 0;
 
-            placeNodes(graphData.nodes, graphData.edges);
+            if (full || isFirstLoad) {
+                graphData.nodes = incoming.map((n, i) => ({ ...n, _idx: i }));
+                const idxByID = new Map(graphData.nodes.map((n, i) => [n.id, i]));
+                graphData.edges = incomingEdges.reduce((acc, e) => {
+                    const sid = e.source ?? e.from;
+                    const tid = e.target ?? e.to;
+                    const si = idxByID.get(sid);
+                    const ti = idxByID.get(tid);
+                    if (si !== undefined && ti !== undefined) acc.push({ si, ti, sid, tid, type: e.type });
+                    return acc;
+                }, []);
+                placeNodes(graphData.nodes, graphData.edges);
+            } else {
+                mergeGraphData(incoming, incomingEdges);
+            }
+
             buildTaxonomy(graphData.nodes, graphData.edges);
             draw();
             renderBreadcrumb();
@@ -750,34 +972,34 @@
                 const next = parseInt(n, 10);
                 if (!Number.isFinite(next) || next <= 0 || next === currentLimit) return;
                 currentLimit = next;
-                reload();
+                reload({ full: true });
             },
             // ── Focal-node navigation (S4.5) ───────────────────────────────
             drillInto(nodeId) {
                 if (!nodeId) return;
                 navStack.push(nodeId);
-                reload();
+                reload({ full: true });
             },
             back() {
                 if (!navStack.length) return;
                 navStack.pop();
-                reload();
+                reload({ full: true });
             },
             resetNav() {
                 navStack.length = 0;
-                reload();
+                reload({ full: true });
             },
             setDepth(d) {
                 const next = parseInt(d, 10);
                 if (!Number.isFinite(next) || next < 1 || next > 4) return;
                 currentDepth = next;
-                if (navStack.length) reload();
+                if (navStack.length) reload({ full: true });
             },
             // ── Era filter (S4.6) ──────────────────────────────────────────
             setEraFilter(filter) {
                 // filter: null | {eraId: str} | {activeSelfOnly: true}
                 currentEraFilter = filter;
-                if (!navStack.length) reload();
+                if (!navStack.length) reload({ full: true });
             },
             getEraFilter() { return currentEraFilter; },
             activate() {
@@ -786,7 +1008,7 @@
                     requestAnimationFrame(tick);
                 }
                 if (reloadTimer === null) {
-                    reloadTimer = setInterval(reload, RELOAD_INTERVAL_MS);
+                    reloadTimer = setInterval(() => reload(), RELOAD_INTERVAL_MS);
                 }
             },
             deactivate() {
