@@ -613,9 +613,7 @@
                             <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-choke"></span>chokepoint / fan-in</span>
                             <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-io"></span>external I/O</span>
                         </div>
-                        <div class="flows-diagram" id="flowsDiagram">
-                            <pre class="mermaid" id="flowsMermaidSrc"></pre>
-                        </div>
+                        <div class="flows-canvas" id="flowsCanvas"></div>
                         <section class="flows-notes" id="flowsNotes" hidden>
                             <h3 class="flows-notes-title">Diagnostic notes</h3>
                             <ul class="flows-notes-list" id="flowsNotesList"></ul>
@@ -672,7 +670,6 @@
     <script src="/shell-assets/panel.js"></script>
     <script src="/shell-assets/graph.js"></script>
     <script src="/shell-assets/timeline.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="/shell-assets/architecture-page.js"></script>
     <script src="/shell-assets/flows-page.js"></script>
 

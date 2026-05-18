@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Flows Page — Per-Scenario Data Flow Diagrams
+   Flows Page — Per-Scenario d3 Data Flow Map
    ═══════════════════════════════════════════════════════════════════════ */
 
 .flows-layout {
@@ -12,8 +12,8 @@
 /* ── Left rail (scenario list) ──────────────────────────────────────────── */
 
 .flows-rail {
-    width: 260px;
-    flex: 0 0 260px;
+    width: 240px;
+    flex: 0 0 240px;
     border-right: 1px solid var(--border-subtle);
     background: var(--bg-module);
     display: flex;
@@ -38,7 +38,7 @@
 }
 
 .flows-rail-group {
-    padding: 14px 18px 4px 18px;
+    padding: 12px 18px 4px 18px;
     font: 600 9px/1 var(--font);
     letter-spacing: 0.10em;
     text-transform: uppercase;
@@ -47,12 +47,13 @@
 }
 
 .flows-rail-item {
-    padding: 9px 18px;
+    padding: 8px 18px;
     font: 500 12px/1.3 var(--font);
     color: var(--fg);
     cursor: pointer;
     border-left: 2px solid transparent;
-    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    transition: background 0.18s ease, border-color 0.18s ease,
+                color 0.18s ease, opacity 0.18s ease;
 }
 
 .flows-rail-item:hover {
@@ -65,6 +66,66 @@
     color: var(--fg);
 }
 
+/* Darken every non-selected scenario whenever a selection is active or a
+   node-focus is in effect. The active / related items keep full intensity
+   so they pop against the dimmed background. */
+.flows-rail-list:has(.flows-rail-item.is-active)
+    .flows-rail-item:not(.is-active),
+.flows-rail-list:has(.flows-rail-item.is-related)
+    .flows-rail-item:not(.is-related):not(.is-active) {
+    opacity: 0.38;
+    color: var(--fg-dim);
+}
+
+.flows-rail-list:has(.flows-rail-item.is-active)
+    .flows-rail-item:not(.is-active):hover,
+.flows-rail-list:has(.flows-rail-item.is-related)
+    .flows-rail-item:not(.is-related):not(.is-active):hover {
+    opacity: 0.72;
+    color: var(--fg);
+}
+
+.flows-rail-list:has(.flows-rail-item.is-active)
+    .flows-rail-item:not(.is-active) .flows-rail-item-sub,
+.flows-rail-list:has(.flows-rail-item.is-related)
+    .flows-rail-item:not(.is-related):not(.is-active) .flows-rail-item-sub {
+    color: var(--fg-dim);
+    opacity: 0.65;
+}
+
+/* Node-focus mode: scenarios that touch the focused node get a dot marker. */
+.flows-rail-item.is-related {
+    border-left-color: rgba(190, 170, 126, 0.55);
+}
+.flows-rail-item.is-related::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #BEAA7E;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+/* Scenario links inside the notes panel (used in node-focus mode). */
+.flows-scenario-link {
+    color: #BEAA7E;
+    cursor: pointer;
+    font-weight: 500;
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(190, 170, 126, 0.35);
+    transition: color 0.12s, border-color 0.12s;
+}
+.flows-scenario-link:hover {
+    color: #E8D4A3;
+    border-bottom-color: rgba(232, 212, 163, 0.8);
+}
+.flows-scenario-link-sub {
+    color: var(--fg-dim);
+    font-size: 11px;
+}
+
 .flows-rail-item-sub {
     display: block;
     margin-top: 3px;
@@ -74,121 +135,165 @@
 }
 
 .flows-rail-footer {
-    padding: 14px 18px;
+    padding: 12px 18px;
     border-top: 1px solid var(--border-subtle);
     font-size: 10px;
     line-height: 1.5;
     color: var(--fg-dim);
 }
 
-/* ── Main pane ──────────────────────────────────────────────────────────── */
+/* ── Main pane (single screen, no vertical scroll on canvas) ────────────── */
 
 .flows-main {
     flex: 1;
     min-width: 0;
-    overflow: auto;
-    padding: 28px 32px 40px 32px;
+    overflow: hidden;
+    padding: 16px 20px 14px 20px;
+    display: grid;
+    /* Fixed-height rows for the header and notes so the canvas (1fr) is the
+       only row that absorbs viewport changes. Otherwise differing scenario
+       blurb / notes length jitters the diagram height. */
+    grid-template-rows: 96px 34px 1fr 130px;
+    gap: 10px;
+}
+
+/* ── Fixed-height header block (eyebrow + title + blurb) ───────────────── */
+
+.flows-header {
+    height: 96px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    justify-content: flex-start;
+    overflow: hidden;
 }
 
 .flows-header-eyebrow {
-    font: 600 10px/1 var(--font);
+    height: 14px;
+    line-height: 14px;
+    font: 600 9px/14px var(--font);
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-dim);
 }
 
 .flows-header-title {
-    margin: 6px 0 8px 0;
-    font: 600 22px/1.2 var(--font);
+    height: 24px;
+    margin: 4px 0 6px 0;
+    font: 600 18px/24px var(--font);
     color: var(--fg);
     letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .flows-header-blurb {
-    font-size: 12px;
-    line-height: 1.55;
+    height: 42px;     /* 2 lines × 21px line-height */
+    font: 400 11.5px/16.5px var(--font);
     color: var(--fg-dim);
-    max-width: 760px;
+    max-width: 1100px;
+    overflow: hidden;
+    /* Clamp to 2 lines so a long blurb doesn't push the canvas. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
 }
 
 /* ── Legend ─────────────────────────────────────────────────────────────── */
 
 .flows-legend {
     display: flex;
-    flex-wrap: wrap;
-    gap: 14px 22px;
-    padding: 10px 14px;
+    /* Lock to one line so the legend row never grows vertically. */
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 18px;
+    padding: 0 12px;
+    height: 34px;
     background: var(--bg-module);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+}
+
+.flows-legend-item {
+    flex: 0 0 auto;
 }
 
 .flows-legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    font-size: 10.5px;
+    gap: 6px;
+    font-size: 10px;
     color: var(--fg-dim);
 }
 
 .flows-legend-glyph {
     display: inline-block;
-    width: 22px;
-    height: 10px;
+    width: 18px;
+    height: 8px;
     border-radius: 2px;
-    position: relative;
 }
 
-.flows-legend-sync   { background: #6B8FBC; }
-.flows-legend-async  { background: repeating-linear-gradient(90deg, #C49B76 0 4px, transparent 4px 7px); height: 2px; margin-top: 4px; }
-.flows-legend-lock   { background: rgba(214, 167, 90, 0.22); border: 1px dashed #C49B76; }
-.flows-legend-choke  { background: #E6B673; box-shadow: 0 0 0 2px rgba(230, 182, 115, 0.20); }
-.flows-legend-io     { background: #5FAA89; }
+.flows-legend-sync   { background: #7AB0FF; }
+.flows-legend-async  { background: repeating-linear-gradient(90deg, #7AB0FF 0 4px, transparent 4px 7px); height: 2px; margin-top: 3px; }
+.flows-legend-lock   { background: #E0A45F; }
+.flows-legend-choke  { background: #E6B673; box-shadow: 0 0 0 2px rgba(230, 182, 115, 0.30); }
+.flows-legend-io     { background: #9BD4A8; }
 
-/* ── Diagram pane ───────────────────────────────────────────────────────── */
+/* ── d3 canvas (single screen, fills remaining space) ───────────────────── */
 
-.flows-diagram {
+.flows-canvas {
+    position: relative;
     background: var(--bg-module);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md, 6px);
-    padding: 20px;
-    overflow: auto;
-    min-height: 380px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    overflow: hidden;
+    min-height: 0;
 }
 
-.flows-diagram .mermaid {
-    background: transparent;
-    color: var(--fg);
-    font-family: var(--font);
-    font-size: 12px;
-    text-align: center;
+.flows-canvas svg {
+    display: block;
     width: 100%;
+    height: 100%;
+    cursor: grab;
 }
 
-.flows-diagram .mermaid svg {
-    max-width: 100% !important;
-    height: auto !important;
-    display: inline-block;
+.flows-canvas svg:active {
+    cursor: grabbing;
 }
 
-/* ── Diagnostic notes ───────────────────────────────────────────────────── */
+/* ── Diagnostic notes (collapsed below canvas) ──────────────────────────── */
 
 .flows-notes {
     background: var(--bg-module);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
-    padding: 16px 20px;
+    padding: 10px 16px;
+    /* Fixed-height notes panel so it never shrinks the canvas. Content
+       overflows into a scroll inside the panel instead. */
+    height: 130px;
+    overflow-y: auto;
+    opacity: 1;
+    transition: opacity 180ms ease;
+}
+
+.flows-notes[hidden] {
+    /* Even when hidden, the grid row holds its 130px slot to keep the
+       canvas anchored. Setting visibility:hidden achieves that;
+       display:none would collapse the row. */
+    display: block !important;
+    visibility: hidden;
+}
+
+.flows-notes.is-fading {
+    opacity: 0;
 }
 
 .flows-notes-title {
-    margin: 0 0 10px 0;
-    font: 600 11px/1 var(--font);
+    margin: 0 0 6px 0;
+    font: 600 10px/1 var(--font);
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--fg-dim);
@@ -196,19 +301,19 @@
 
 .flows-notes-list {
     margin: 0;
-    padding: 0 0 0 18px;
+    padding: 0 0 0 16px;
     color: var(--fg);
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: 11.5px;
+    line-height: 1.55;
 }
 
 .flows-notes-list li {
-    margin: 5px 0;
+    margin: 3px 0;
 }
 
 .flows-notes-list li code {
     background: rgba(255, 255, 255, 0.05);
     padding: 1px 5px;
     border-radius: 3px;
-    font-size: 11px;
+    font-size: 10.5px;
 }
