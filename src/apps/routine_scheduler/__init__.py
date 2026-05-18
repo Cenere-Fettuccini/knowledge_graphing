@@ -1,1 +1,0 @@
-"""Routine Scheduler app registration."""

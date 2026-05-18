@@ -1,1 +1,0 @@
-"""Financial Manager app registration."""
