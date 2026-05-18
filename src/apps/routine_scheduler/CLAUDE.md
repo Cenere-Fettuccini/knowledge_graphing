@@ -26,6 +26,21 @@ layer yet.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: *(none yet — stub)*
+
+**State**: `stateless`
+
+**Inbound**: none beyond the registry hand-off in `src.platform.app_factory`.
+
+**Outbound**: none beyond `AppDefinition` registration.
+
+**Diagnostic notes**
+- Stub app. When real endpoints land, follow the chat / explorer pattern: routes inject `MemoryManager` and `AgentService` via `Depends()`, services accept them as parameters.
+
+---
+
 ## Adding Features to This App
 Follow the same pattern as `chat` or `explorer`:
 

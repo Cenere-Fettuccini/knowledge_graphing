@@ -30,6 +30,38 @@ graph node from the Explorer app.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request`
+
+**State**: `stateless` (per-request)
+- Routes inject `MemoryManager` and `AgentService` via `Depends()`; services accept them as parameters. No module-level state.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| Browser | POST `/apps/chat/message` | `{session_id, text, ...}` | `async` |
+| Browser | GET `/apps/chat/sessions` | session list | `async` |
+| Browser | GET `/apps/chat/history/{session_id}` | history fetch | `async` |
+| Browser | DELETE `/apps/chat/sessions/{session_id}` | delete session | `async` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.agent_platform.public.agent_service.arun` | each message | `AgentRunRequest` | `async` |
+| `src.memory.manager.store` | each user / assistant turn | text + metadata | `sync` |
+| `src.memory.manager.get_history` | history endpoint | session-scoped read | `sync` |
+| `src.memory.manager.list_sessions` | sessions endpoint | scan Chroma metadata | `sync` |
+| `src.memory.manager.graph_node_detail` | when message is pinned to a node | node + connections | `sync` |
+
+**Diagnostic notes**
+- Chat is **purely synchronous from the user's perspective** — the reply only returns after `service.arun` completes. The lazy `maybe_trigger` after `store()` does NOT block.
+- No app-level concurrency control. Two browsers in the same session can interleave turns; ordering is whoever's `store()` lands first in Chroma.
+
+---
+
 ## Allowed Imports
 ```python
 from fastapi import Depends

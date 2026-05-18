@@ -105,6 +105,48 @@ class LMStudioClient:
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `background` · `ad-hoc`
+
+**State**: `module-level`
+- `graph_ingest_trigger._lock` — `asyncio.Lock` guarding auto-triggered runs against each other.
+- `cloud_belief_trigger._lock` — same pattern for the cloud belief pass.
+- Each call constructs its own `LMStudioClient` instance (no shared client).
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.memory.manager.store` | post-store hook on non-ephemeral rows | `graph_ingest_trigger.maybe_trigger(self)` | `event` (fire-and-forget) |
+| `src.apps.explorer.api` POST `/analyze/run` | manual button | `run_extraction_pass(memory, batch_size)` | `async` (no lock) |
+| `src.apps.explorer.services.process_all_queue` | "Process all" button | `_drain_queue` → `run_extraction_pass` loop | `async` (own `_drain_lock`) |
+| `src.apps.explorer.services.drain_after_reset` | nuke `BackgroundTasks` | `_drain_queue` (200-row cap) | `async` (no lock) |
+| `src.apps.explorer.api` POST `/analyze/beliefs/extract` | manual | `cloud_belief_extraction.run_belief_extraction_once` | `async` |
+| `src.apps.explorer.api` POST `/analyze/contradictions` | manual | `contradiction_detection.run_contradiction_detection` | `async` |
+| `src.apps.explorer.services.run_bulk_import` | bulk import completes | `run_extraction_pass` loop (50-batch cap) | `async` (no lock) |
+| `src.platform.graph_ingest` POST `/graph/ingest` | external pipeline | `run_extraction_pass` | `async` (no lock) |
+| `src.bot.proactive.handle_refinement_reply` | Telegram reconciliation reply | `refinement_extraction.parse_reconciliation_reply` | `async` |
+| `src.rumination.deep_pass` | scheduled tick | direct `LMStudioClient.chat_completion` | `scheduled` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| LM Studio HTTP `/v1/chat/completions` | every extraction / repair / refinement / orphan call | blocking `httpx.post` in `asyncio.to_thread` | `sync inside async` |
+| Gemini HTTP | cloud belief pass + contradiction detection | `genai.GenerativeModel.generate_content` | `sync inside async` |
+| `src.memory.manager` | every pass | `list_unanalyzed`, `upsert_node`, `upsert_relationship`, `mark_analyzed`, `mark_belief_candidates` | `sync` |
+| `src.agent_platform.tools.graph_write` | each completed extraction | `graph_write(intents)` | `sync` |
+| `src.agent_platform.analyzers.cloud_belief_trigger` | post-extraction | `maybe_trigger` (fire-and-forget) | `event` |
+
+**Diagnostic notes**
+- **Chokepoint**: LM Studio. Four lock domains plus bot/rumination paths can all drive concurrent `chat_completion` calls. The trigger's `_lock` only deduplicates within the auto path.
+- **Sliding window cost**: one `run_extraction_pass` does `⌈rows / 3⌉` LM Studio calls + up to 1 repair call per batch with isolated nodes.
+- **Retry**: `LocalLLMUnavailable` is caught at the trigger level and leaves rows un-marked so the next pass retries. `_drain_queue` adds exponential backoff up to a 30-min total wait.
+- **30 s inter-batch sleep** in `_drain_queue` is the only throttle on LM Studio fan-in — and it doesn't apply to the chat-triggered `_run_once` path.
+
+---
+
 ## Trigger Paths
 - **Auto (count-based)** — `graph_ingest_trigger.maybe_trigger` fires from
   `MemoryManager.store()`. After the local pass, `cloud_belief_trigger.maybe_trigger`

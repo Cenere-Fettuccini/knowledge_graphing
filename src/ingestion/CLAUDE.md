@@ -30,6 +30,34 @@ storage — that path goes directly through `MemoryManager.store()`.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request` (within the long-running import call)
+
+**State**: `per-call`
+- `BulkImporter` instantiated per HTTP request. Holds the `MemoryManager` reference for the duration of an import. No module-level state.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.apps.explorer.services.run_bulk_import` | POST `/api/explorer/ingest/bulk` | `BulkImporter(memory).import_directory(path, ...)` | `async` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.memory.manager.store` | each chunk | text + metadata | `sync` |
+| `src.ingestion.chunker.chunk_text` | each file | document → chunks | `sync` |
+| local filesystem | per file | parse `.txt` / `.jsonl` / Telegram export | `sync` |
+
+**Diagnostic notes**
+- Each `memory.store()` lazily fires `graph_ingest_trigger.maybe_trigger` — most are deduplicated by the trigger's `_lock`, but the cumulative effect during a large import is many trigger calls.
+- The explicit post-loop `run_extraction_pass` × 50 in `explorer/services.py` is what actually drains the queue — the lazy trigger only helps if the threshold is crossed mid-import.
+- No deduplication. Re-importing the same path doubles Chroma rows.
+
+---
+
 ## Public API
 
 ### `bulk_importer.py`

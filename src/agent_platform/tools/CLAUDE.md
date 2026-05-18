@@ -39,6 +39,36 @@ calls them, not application code.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request`
+
+**State**: `stateless` (per-call)
+- Each tool is a plain function. State lives in `MemoryManager` or the external API being called. No module-level state.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.core.agent.Agent` | tool list registered at agent init | imported `tools` list from `registry.py` | `sync` (import time) |
+| PydanticAI runtime | LLM emitted a tool call | function arguments validated against type hints | `sync` (inside async turn) |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.memory.manager` | most tools | `get_memory_manager()` then read/write methods | `sync` |
+| Google Custom Search API | `web_search` | HTTPS GET | `sync` |
+| Google Calendar API | `list_events`, `create_event`, `delete_event` | HTTPS | `sync` |
+| `src.agent_platform.tools.common.ensure_graph_online` | graph tools | health probe | `sync` |
+
+**Diagnostic notes**
+- Tools call `get_memory_manager()` directly (not via FastAPI `Depends()`) because they run inside an agent turn, not a route handler.
+- `graph_write` is the only tool that writes structured data — it owns the entity / edge / belief / task intent shape and enforces the "every node touched must have an edge" invariant.
+- Tool failures bubble up as exceptions to PydanticAI, which surfaces them to the LLM for retry. Long-running tools (Calendar API) can stretch the chat reply latency.
+
+---
+
 ## Active Tools (from `registry.py`)
 ```python
 from src.agent_platform.tools.registry import tools

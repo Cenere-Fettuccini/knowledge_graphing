@@ -19,6 +19,7 @@
     <link rel="stylesheet" href="/shell-assets/chat.css" />
     <link rel="stylesheet" href="/shell-assets/credits.css" />
     <link rel="stylesheet" href="/shell-assets/architecture.css" />
+    <link rel="stylesheet" href="/shell-assets/flows.css" />
 
     <!-- External libs -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -584,6 +585,45 @@
                 </div>
             </div>
 
+            <!-- ── FLOWS PAGE ─────────────────────────────────────────────── -->
+            <div class="page-view" id="page-flows">
+                <div class="flows-layout">
+                    <aside class="flows-rail">
+                        <div class="flows-rail-title">Scenarios</div>
+                        <ul class="flows-rail-list" id="flowsList" role="listbox"></ul>
+                        <div class="flows-rail-footer">
+                            Each scenario traces a single user action through the
+                            codebase to find chokepoints and concurrency hazards.
+                        </div>
+                    </aside>
+                    <div class="flows-main" id="flowsMain">
+                        <header class="flows-header">
+                            <div class="flows-header-eyebrow" id="flowsCategory">—</div>
+                            <h2 class="flows-header-title" id="flowsTitle">Select a scenario</h2>
+                            <div class="flows-header-blurb" id="flowsBlurb">
+                                Pick a user action from the left to see the
+                                function-level data flow, annotated with
+                                concurrency semantics.
+                            </div>
+                        </header>
+                        <div class="flows-legend" id="flowsLegend">
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-sync"></span>sync / awaited</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-async"></span>fire-and-forget</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-lock"></span>lock / semaphore held</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-choke"></span>chokepoint / fan-in</span>
+                            <span class="flows-legend-item"><span class="flows-legend-glyph flows-legend-io"></span>external I/O</span>
+                        </div>
+                        <div class="flows-diagram" id="flowsDiagram">
+                            <pre class="mermaid" id="flowsMermaidSrc"></pre>
+                        </div>
+                        <section class="flows-notes" id="flowsNotes" hidden>
+                            <h3 class="flows-notes-title">Diagnostic notes</h3>
+                            <ul class="flows-notes-list" id="flowsNotesList"></ul>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
         </div><!-- /page-container -->
 
     </div><!-- /app-shell -->
@@ -632,7 +672,9 @@
     <script src="/shell-assets/panel.js"></script>
     <script src="/shell-assets/graph.js"></script>
     <script src="/shell-assets/timeline.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="/shell-assets/architecture-page.js"></script>
+    <script src="/shell-assets/flows-page.js"></script>
 
     <!-- Reset-graph confirmation modal -->
     <div class="bootstrap-modal" id="resetGraphModal" hidden>

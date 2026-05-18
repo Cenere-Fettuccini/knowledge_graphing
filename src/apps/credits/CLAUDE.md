@@ -30,6 +30,34 @@ specifically to expose and manage model limits.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request`
+
+**State**: `stateless` (per-request)
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| Browser | GET `/apps/credits/` | quota / headroom table | `async` |
+| Browser | POST `/apps/credits/limits/import` | pasted rate-limit table text | `async` |
+| Browser | GET `/apps/credits/mismatches` | 429 / mismatch log | `async` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.core.router.llm_router` | every quota endpoint | `models`, `limiter._get_state(...)` | `sync` |
+| `src.core.limits_store` | import endpoint | `import_from_paste(raw_text)` writes `limits_override.json` | `sync` |
+| `src.core.limits_store` | mismatches endpoint | `load_mismatch_log()` | `sync` |
+
+**Diagnostic notes**
+- The only app permitted to read `llm_router` internals. All other apps go through `AgentService.aquota_status()`.
+- `limits_store` writes a JSON file on disk — race conditions possible if multiple importers fire simultaneously (admin only, rare in practice).
+
+---
+
 ## Allowed Imports
 ```python
 from src.core.router import llm_router          # intentional — credits is a router admin app

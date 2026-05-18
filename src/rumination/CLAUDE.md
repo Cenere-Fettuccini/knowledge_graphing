@@ -31,6 +31,38 @@ Runs background ticks while the FastAPI server is live. Two cadences:
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `boot` · `background` · `shutdown`
+
+**State**: `lifespan-scoped`
+- `RuminationScheduler` instance built in the FastAPI lifespan. Owns 2 long-running `asyncio` tasks (`_deep_pass_loop`, `_rabbit_hole_loop`) and one `ProactiveBot`.
+- Tasks cancelled on lifespan shutdown.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| `src.platform.app_factory` | lifespan startup | `RuminationScheduler(memory).start()` | `async` |
+| `src.platform.app_factory` | lifespan shutdown | `.stop()` cancels tasks | `async` |
+| internal asyncio sleep | each tick interval | wakes the loop body | `scheduled` |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.memory.manager` | each deep-pass tick | `list_active_beliefs` etc. | `sync` |
+| `src.agent_platform.public.agent_service` | each tick | `service.arun(synth prompt)` → Gemini | `async` |
+| `src.bot.proactive.ProactiveBot.send_belief_digest` | tick produces digest | digest text | `async` |
+| LM Studio (only via `deep_pass`) | direct `LMStudioClient.chat_completion` | tick body | `sync inside async` |
+
+**Diagnostic notes**
+- Two ticks run as **independent asyncio tasks** — they do not contend with each other. They DO share Gemini quota with chat traffic via `LLMRouter`.
+- `settings.rumination_enabled=False` makes both loops no-op.
+- Tick overruns don't overlap (each loop awaits its own body), but they do skew the next tick's start time.
+
+---
+
 ## Public API
 
 ### `engine.py`

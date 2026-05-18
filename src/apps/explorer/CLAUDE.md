@@ -38,6 +38,49 @@ aggregates memory, agent, and LLM quota status.
 
 ---
 
+## Data Flow & Lifecycle
+
+**Phases**: `request` · `background`
+
+**State**: `module-level` (one lock) + `per-request` (services)
+- `services._drain_lock` — `asyncio.Lock` guarding `process_all_queue` against itself.
+- `BulkImporter` instances are per-request; everything else is stateless.
+
+**Inbound**
+
+| From | Trigger | Payload | Mode |
+|------|---------|---------|------|
+| Browser | GET `/api/explorer/graph/overview` | graph data | `async` |
+| Browser | GET `/api/explorer/graph/node/{id}` (+ provenance, neighborhood) | node detail | `async` |
+| Browser | POST `/api/explorer/graph/reset` | nuke + drain | `async` |
+| Browser | POST `/api/explorer/analyze/run` | manual extraction | `async` |
+| Browser | POST `/api/explorer/analyze/process-all` | full drain | `async` |
+| Browser | POST `/api/explorer/analyze/beliefs/extract` | cloud belief pass | `async` |
+| Browser | POST `/api/explorer/analyze/contradictions` | contradiction sweep | `async` |
+| Browser | POST `/api/explorer/ingest/bulk` | bulk import | `async` |
+| Browser | GET `/api/explorer/system/status` | health probe | `async` |
+| FastAPI `BackgroundTasks` | nuke handler returns | `drain_after_reset(memory)` | `event` (fire-and-forget) |
+
+**Outbound**
+
+| To | Trigger | Payload | Mode |
+|----|---------|---------|------|
+| `src.memory.manager` | every endpoint | graph reads, queue counts, era/belief CRUD, bootstrap | `sync` |
+| `src.agent_platform.public.agent_service` | system status | `astatus()`, `aquota_status()` | `async` |
+| `src.agent_platform.analyzers.graph_ingest_trigger.run_extraction_pass` | analyze/run, process-all loop, drain-after-reset, post-bulk drain | varies | `async` (no lock; own `_drain_lock` for process-all) |
+| `src.agent_platform.analyzers.cloud_belief_extraction` | beliefs endpoint | `run_belief_extraction_once` | `async` |
+| `src.agent_platform.analyzers.contradiction_detection` | contradictions endpoint | `run_contradiction_detection` | `async` |
+| `src.agent_platform.analyzers.canonicalize` | canonicalize endpoints | `EntityCanonicalizer().run()` / `BeliefCanonicalizer().run()` | `sync` |
+| `src.agent_platform.analyzers.local_llm.LMStudioClient` | analyzer status | `is_available()`, `list_models()` (probe, not extraction) | `sync` |
+| `src.ingestion.bulk_importer` | bulk import endpoint | `BulkImporter(memory).import_directory` | `async` |
+
+**Diagnostic notes**
+- Three of the analyzer entry points here (`run_analyzer`, `drain_after_reset`, `run_bulk_import` post-loop) **do not hold any lock**. They run in parallel with each other and with chat-triggered `_run_once`. This is the root cause of LM Studio fan-in.
+- `process_all_queue` holds `_drain_lock` but only against itself — it doesn't serialize against any other entry point.
+- The system-status endpoint probes LM Studio via `is_available()` (GET `/models`) — cheap, but it does enter LM Studio's HTTP stack.
+
+---
+
 ## Allowed Imports
 ```python
 from fastapi import Depends
