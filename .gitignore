@@ -34,3 +34,5 @@ data/
 # Backup for restart
 backup/
 docs/project_status_checklist.md
+docs/APPLICATION_STRUCTURE.md
+docs/IMPLEMENTATION_HANDOFF.md
