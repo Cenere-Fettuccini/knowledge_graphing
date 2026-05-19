@@ -1,12 +1,14 @@
 """Shared fixtures for agent-module tests.
 
 Every test gets:
-- A fresh ``_AgentService`` singleton.
-- A fresh ``_MemoryManager`` singleton plus a tmp ``CONVERSATION_LOG_DIR``
-  (the memory tool talks through the real public surface; tests use
-  real on-disk storage so the tool round-trip is exercised).
-- A ``FakeLLM`` adapter installed in place of the LM Studio client, with
-  a tight default ``AGENT_MAX_ITERATIONS`` cap (overridable per-test).
+- Fresh ``_AgentService`` and ``_MemoryManager`` singletons.
+- A tmp ``CONVERSATION_LOG_DIR`` (the memory tool talks through the real
+  public surface; tests use real on-disk storage so the tool round-trip
+  is exercised).
+- A tight ``AGENT_MAX_ITERATIONS`` cap so the iteration test runs fast.
+- A ``FakeLLM`` that gets installed in place of the ``"lmstudio"`` entry
+  in ``BaseModel._registry`` via ``monkeypatch.setitem`` — opt-in by
+  requesting the ``fake_llm`` fixture.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from typing import Any, Callable, Iterator
 
 import pytest
 
-from src.agent import _models as agent_models
+from src.agent._models._base import BaseModel
 from src.agent._service import _AgentService
 from src.memory._manager import _MemoryManager
 
@@ -29,11 +31,22 @@ class FakeLLM:
       (returned wrapped as ``{"message": ...}``); or
     - a callable taking ``(messages, tools)`` and returning that shape; or
     - an exception instance to raise.
+
+    Deliberately *not* a ``BaseModel`` subclass — keeping ``name = ""``
+    avoids auto-registration, so the fake only enters the registry when
+    a test explicitly swaps it in. The duck-typed ``chat`` method
+    matches the registry's structural contract.
     """
+
+    name = ""
+    description = "test double"
 
     def __init__(self) -> None:
         self.responses: list[Any] = []
         self.calls: list[tuple[list[dict], list[dict]]] = []
+
+    def identify(self) -> dict:
+        return {"kind": "model", "name": "fake", "description": self.description}
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         self.calls.append((list(messages), list(tools)))
@@ -51,11 +64,9 @@ class FakeLLM:
 def _reset_singletons() -> Iterator[None]:
     _AgentService.reset_for_tests()
     _MemoryManager.reset_for_tests()
-    agent_models.reset_for_tests()
     yield
     _AgentService.reset_for_tests()
     _MemoryManager.reset_for_tests()
-    agent_models.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)
@@ -73,9 +84,16 @@ def _tight_iteration_cap(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def fake_llm(monkeypatch: pytest.MonkeyPatch) -> FakeLLM:
-    """Install a FakeLLM in place of the LM Studio adapter and return it."""
+    """Replace the ``lmstudio`` registry entry with a FakeLLM for one test.
+
+    Importing ``src.agent._models`` ensures the real adapter has
+    registered first; ``monkeypatch.setitem`` then swaps in the fake and
+    restores the original on teardown.
+    """
+    import src.agent._models  # noqa: F401 — ensures registry is populated
+
     llm = FakeLLM()
-    monkeypatch.setattr(agent_models, "_adapter", llm)
+    monkeypatch.setitem(BaseModel._registry, "lmstudio", llm)
     return llm
 
 
@@ -88,6 +106,7 @@ def text_response() -> Callable[[str], dict]:
 @pytest.fixture
 def tool_call_response() -> Callable[..., dict]:
     """Helper to build a tool-call LLM response."""
+
     def _build(name: str, arguments: str, call_id: str = "call_1") -> dict:
         return {
             "content": None,

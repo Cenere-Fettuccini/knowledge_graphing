@@ -31,7 +31,7 @@ async def test_llm_connection_failure_propagates_typed_error(fake_llm):
 @pytest.mark.asyncio
 async def test_lmstudio_adapter_wraps_httpx_errors(monkeypatch):
     """The LM Studio adapter itself converts ``httpx`` failures to ``AgentRunError``."""
-    from src.agent._models.lmstudio import LMStudioAdapter
+    from src.agent._models.lmstudio import LMStudioModel
 
     class _Boom:
         async def __aenter__(self):
@@ -45,7 +45,7 @@ async def test_lmstudio_adapter_wraps_httpx_errors(monkeypatch):
 
     monkeypatch.setattr("src.agent._models.lmstudio.httpx.AsyncClient", lambda *a, **k: _Boom())
 
-    adapter = LMStudioAdapter()
+    adapter = LMStudioModel()
     with pytest.raises(AgentRunError, match="LM Studio unavailable"):
         await adapter.chat([{"role": "user", "content": "hi"}], [])
 
@@ -53,7 +53,7 @@ async def test_lmstudio_adapter_wraps_httpx_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_lmstudio_adapter_wraps_malformed_response(monkeypatch):
     """Missing ``choices`` in the LM Studio response surfaces a typed error."""
-    from src.agent._models.lmstudio import LMStudioAdapter
+    from src.agent._models.lmstudio import LMStudioModel
 
     class _Resp:
         def raise_for_status(self):
@@ -74,6 +74,6 @@ async def test_lmstudio_adapter_wraps_malformed_response(monkeypatch):
 
     monkeypatch.setattr("src.agent._models.lmstudio.httpx.AsyncClient", lambda *a, **k: _Client())
 
-    adapter = LMStudioAdapter()
+    adapter = LMStudioModel()
     with pytest.raises(AgentRunError, match="malformed"):
         await adapter.chat([{"role": "user", "content": "hi"}], [])

@@ -1,9 +1,10 @@
 """Chat agent loop: build prompt → call LLM → run tool calls → iterate.
 
-Stateless across invocations. The caller (``_AgentService.arun``) hands in
-a request, an LLM adapter, and the tools list; the loop assembles the
-OpenAI-style messages array, drives the LLM until it returns a plain
-text reply or the iteration cap is hit, and returns the reply string.
+Stateless across invocations. The caller (``_AgentService.arun``) hands
+in a request, an agent's system prompt, an LLM adapter, and a tools
+list; the loop assembles the OpenAI-style messages array, drives the
+LLM until it returns a plain text reply or the iteration cap is hit,
+and returns the reply string.
 
 The loop never writes to memory itself. Tools may read memory.
 """
@@ -19,17 +20,10 @@ from src.log import get_logger
 
 if TYPE_CHECKING:
     from src.agent import AgentRunRequest
-    from src.agent._models import LLMAdapter
-    from src.agent._tools import Tool
+    from src.agent._models._base import BaseModel
+    from src.agent._tools._base import BaseTool
 
 logger = get_logger(__name__)
-
-
-SYSTEM_PROMPT = (
-    "You are AIManager, a helpful chat agent. Reply concisely. "
-    "Use the provided tools when they would meaningfully improve the answer; "
-    "otherwise reply directly."
-)
 
 
 def _max_iterations() -> int:
@@ -39,14 +33,14 @@ def _max_iterations() -> int:
         return 8
 
 
-def _build_initial_messages(request: "AgentRunRequest") -> list[dict]:
-    """Compose the OpenAI-style messages list from history.
+def _build_initial_messages(prompt: str, request: "AgentRunRequest") -> list[dict]:
+    """Compose the OpenAI-style messages list from the agent prompt + history.
 
     ``request.history`` already contains the latest user message at the
     tip (per the public contract), so we do not append ``request.text``
     again.
     """
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: list[dict] = [{"role": "system", "content": prompt}]
     for turn in request.history:
         role = turn.get("role")
         text = turn.get("text", "")
@@ -55,7 +49,7 @@ def _build_initial_messages(request: "AgentRunRequest") -> list[dict]:
     return messages
 
 
-async def _run_one_tool_call(call: dict, tool_map: dict[str, "Tool"]) -> str:
+async def _run_one_tool_call(call: dict, tool_map: dict[str, "BaseTool"]) -> str:
     name = call.get("function", {}).get("name", "")
     raw_args = call.get("function", {}).get("arguments") or "{}"
     try:
@@ -80,15 +74,16 @@ async def _run_one_tool_call(call: dict, tool_map: dict[str, "Tool"]) -> str:
 async def run_agent_loop(
     request: "AgentRunRequest",
     *,
-    llm: "LLMAdapter",
-    tools: list["Tool"],
+    prompt: str,
+    llm: "BaseModel",
+    tools: list["BaseTool"],
 ) -> str:
     """Drive the LLM until it returns plain text. Returns the reply.
 
     Raises ``AgentRunError`` if the LLM is unreachable or the iteration
     cap is hit without a text reply.
     """
-    messages = _build_initial_messages(request)
+    messages = _build_initial_messages(prompt, request)
     tool_schemas = [t.schema for t in tools]
     tool_map = {t.name: t for t in tools}
     cap = _max_iterations()

@@ -4,8 +4,8 @@ LM Studio exposes an OpenAI-style ``/v1/chat/completions`` endpoint. We
 post the conversation + tool schema and translate the single returned
 choice into the loop's ``{"message": {...}}`` shape.
 
-All transport/protocol failures are wrapped in ``AgentRunError`` so the
-loop sees one exception type regardless of which adapter is active.
+All transport / protocol failures are wrapped in ``AgentRunError`` so
+the loop sees one exception type regardless of which adapter is active.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import os
 import httpx
 
 from src.agent._errors import AgentRunError
+from src.agent._models._base import BaseModel
 from src.log import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,7 @@ def _base_url() -> str:
     return os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/")
 
 
-def _model() -> str:
+def _model_id() -> str:
     return os.environ.get("LM_STUDIO_MODEL", "")
 
 
@@ -35,11 +36,12 @@ def _request_timeout() -> float:
         return 60.0
 
 
-class LMStudioAdapter:
-    """OpenAI-compatible client against the configured LM Studio endpoint."""
+class LMStudioModel(BaseModel):
+    name = "lmstudio"
+    description = "OpenAI-compatible local LLM served by LM Studio."
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> dict:
-        payload: dict = {"model": _model(), "messages": messages}
+        payload: dict = {"model": _model_id(), "messages": messages}
         if tools:
             payload["tools"] = tools
         url = f"{_base_url()}/chat/completions"

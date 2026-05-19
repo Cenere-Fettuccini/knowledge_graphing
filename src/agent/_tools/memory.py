@@ -1,12 +1,13 @@
-"""Memory-backed tools the agent loop can invoke.
+"""``recall_recent`` — read recent turns from a session's active branch.
 
-These tools call into ``src.memory`` through its public factory; they
-must never reach past the facade. Each tool catches its own failures
-and returns them as a string the LLM can read.
+Goes through ``src.memory.get_memory_manager`` (the public facade) — no
+reaching past the memory module's surface. Wraps every failure as a
+string the LLM can read; never crashes the loop.
 """
 
 from __future__ import annotations
 
+from src.agent._tools._base import BaseTool
 from src.log import get_logger
 from src.memory import get_memory_manager
 
@@ -26,33 +27,27 @@ def _format_turns(turns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-class RecallRecentTool:
+class RecallRecentTool(BaseTool):
     name = "recall_recent"
-    schema = {
-        "type": "function",
-        "function": {
-            "name": "recall_recent",
-            "description": (
-                "Return the most recent turns from a session's active branch, "
-                "oldest-first, as a plain-text transcript. Use when you need "
-                "context beyond what's already in the prompt."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "The session whose history to read.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max turns to return (default 10).",
-                        "default": 10,
-                    },
-                },
-                "required": ["session_id"],
+    description = (
+        "Return the most recent turns from a session's active branch, "
+        "oldest-first, as a plain-text transcript. Use when you need "
+        "context beyond what's already in the prompt."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "The session whose history to read.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max turns to return (default 10).",
+                "default": 10,
             },
         },
+        "required": ["session_id"],
     }
 
     async def run(self, *, session_id: str, limit: int = 10) -> str:
