@@ -17,9 +17,9 @@ from src.memory._manager import _MemoryManager
 
 @pytest.fixture(autouse=True)
 def _reset_singleton() -> Iterator[None]:
-    _MemoryManager._reset()
+    _MemoryManager.reset_for_tests()
     yield
-    _MemoryManager._reset()
+    _MemoryManager.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

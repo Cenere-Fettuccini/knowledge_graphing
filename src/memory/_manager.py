@@ -50,11 +50,15 @@ class _MemoryManager:
         return cls._instance
 
     @classmethod
-    def _reset(cls) -> None:
-        """Drop the cached singleton. Package-internal test seam.
+    def reset_for_tests(cls) -> None:
+        """Drop the cached singleton. Test seam.
 
-        Not part of the public API. Tests call this between cases so each
-        gets a fresh instance bound to its own ``CONVERSATION_LOG_DIR``.
+        Not for production code — there is no operational reason to
+        recreate the manager mid-process. Tests call this between cases
+        so each gets a fresh instance bound to its own
+        ``CONVERSATION_LOG_DIR``. The whole class is already package-
+        internal (the leading underscore on ``_MemoryManager`` carries
+        that signal); the method name carries the test-only signal.
         """
         cls._instance = None
 
