@@ -49,11 +49,11 @@ def capture() -> _Capture:
     return _Capture()
 
 
-def attach_capture(capture: _Capture) -> None:
-    """Attach `capture` to root, copying the ModeFilter from the StreamHandler."""
+def attach_capture(cap_handler: _Capture) -> None:
+    """Attach `cap_handler` to root, copying the ModeFilter from the StreamHandler."""
     root = logging.getLogger()
     # Copy the filter set on the first existing handler (the StreamHandler).
     if root.handlers:
         for f in root.handlers[0].filters:
-            capture.addFilter(f)
-    root.addHandler(capture)
+            cap_handler.addFilter(f)
+    root.addHandler(cap_handler)

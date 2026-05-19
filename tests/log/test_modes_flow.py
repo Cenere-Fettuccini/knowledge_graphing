@@ -18,6 +18,7 @@ def _emit_all_levels(name: str = "tests.log.modes") -> None:
 
 
 def test_dev_mode_emits_everything(capture, monkeypatch):
+    """Dev mode should emit all log levels including DEBUG and INFO."""
     monkeypatch.setenv("LOG_MODE", "dev")
     setup_logging()
     attach_capture(capture)
@@ -31,6 +32,7 @@ def test_dev_mode_emits_everything(capture, monkeypatch):
 
 
 def test_prod_mode_emits_only_errors(capture, monkeypatch):
+    """Production mode should only emit ERROR and CRITICAL log levels."""
     monkeypatch.setenv("LOG_MODE", "prod")
     setup_logging()
     attach_capture(capture)
@@ -52,6 +54,7 @@ def test_active_dev_mode_unmarked_function_only_errors(capture, monkeypatch):
 
 
 def test_setup_logging_is_idempotent(monkeypatch):
+    """Calling setup_logging multiple times should be idempotent and not stack handlers."""
     monkeypatch.setenv("LOG_MODE", "dev")
     setup_logging()
     setup_logging()
