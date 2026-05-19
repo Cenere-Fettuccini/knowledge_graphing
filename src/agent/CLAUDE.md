@@ -16,6 +16,11 @@ from src.agent import (
     AgentRunRequest,
     AgentRunResult,
     AgentRunError,
+    RegistryLookupError,
+    UnknownAgentError,
+    UnknownModelError,
+    UnknownToolError,
+    DEFAULT_AGENT,
     get_agent_service,
 )
 ```
@@ -25,7 +30,7 @@ from src.agent import (
 ```python
 from src.agent import AgentRunRequest, get_agent_service
 
-service = get_agent_service()
+service = get_agent_service("chat")          # name defaults to DEFAULT_AGENT ("chat")
 result = await service.arun(AgentRunRequest(
     session_id="session-1",
     text="what's the weather?",
@@ -33,17 +38,28 @@ result = await service.arun(AgentRunRequest(
 print(result.reply)
 ```
 
+`get_agent_service` is a **per-agent factory**: each registered agent
+name maps to its own cached `_AgentService` instance. A future
+graph-builder agent will simply add a new file under
+`src/agent/_agents/` and become reachable as
+`get_agent_service("graph_builder")` without any wiring change.
+
 ## Public API quick reference
 
-The `__init__.py` exports exactly five names:
+The `__init__.py` exports:
 
 | Name | Kind | Description |
 |---|---|---|
-| `AgentService` | `typing.Protocol` | Structural type for the singleton. Not a class to instantiate. |
+| `AgentService` | `typing.Protocol` | Structural type for a per-name agent singleton. Not a class to instantiate. |
 | `AgentRunRequest` | `@dataclass(frozen=True)` | Input payload for `arun`. |
 | `AgentRunResult` | `@dataclass(frozen=True)` | Return value from `arun`. |
-| `AgentRunError` | `RuntimeError` subclass | Raised by `arun` when the LLM is unreachable, returns malformed data, or the iteration cap is exhausted. |
-| `get_agent_service` | function | Returns the shared instance; constructs it on first call. |
+| `AgentRunError` | `RuntimeError` subclass | Raised by `arun` on LLM-unreachable, malformed response, or iteration-cap exhaustion. |
+| `RegistryLookupError` | `LookupError` subclass | Base for the three `Unknown*Error` types below. |
+| `UnknownAgentError` | `RegistryLookupError` | Raised by `get_agent_service` (or the underlying agent registry) on an unregistered name. |
+| `UnknownModelError` | `RegistryLookupError` | Raised when an agent references a model not in `BaseModel._registry`. |
+| `UnknownToolError` | `RegistryLookupError` | Raised when an agent references a tool not in `BaseTool._registry`. |
+| `DEFAULT_AGENT` | `str` constant (`"chat"`) | Name used when `get_agent_service()` is called without an argument. |
+| `get_agent_service` | function | `get_agent_service(name=DEFAULT_AGENT)` → per-agent cached singleton. |
 
 ### `AgentService` methods at a glance
 
@@ -98,8 +114,17 @@ class AgentRunResult:
 ### `get_agent_service`
 
 ```python
-def get_agent_service() -> AgentService:
-    """Return the shared AgentService. Constructs the implementation on first call."""
+DEFAULT_AGENT = "chat"
+
+def get_agent_service(name: str = DEFAULT_AGENT) -> AgentService:
+    """Return the shared service for ``name``.
+
+    Each registered agent has its own cached service. The first call
+    for a given name resolves the agent's declared model + tools
+    through their registries. Raises ``UnknownAgentError`` /
+    ``UnknownModelError`` / ``UnknownToolError`` when a referenced
+    name isn't registered.
+    """
 ```
 
 ## Execution model
@@ -174,32 +199,85 @@ public contract.
 
 ## Internals
 
-Implementation modules are private and may change without notice:
+Implementation modules are private and may change without notice. The
+package is organised as three parallel registries — agents, models,
+tools — each with a base class that auto-registers concrete subclasses
+on import. Adding a new agent / model / tool is one new file; nothing
+else changes.
 
 ```
 agent/
-  __init__.py        Protocol + dataclasses + factory (public)
-  _service.py        concrete `_AgentService` class
-  _loop.py           chat agent loop (LLM + tools iteration)
-  _tools/
-    __init__.py      TOOLS list (consumed by `_loop`)
-    memory.py        memory-related tools
+  __init__.py            Protocol + dataclasses + errors + factory (public)
+  _errors.py             AgentRunError + RegistryLookupError family
+  _service.py            concrete `_AgentService` (one cached instance per agent name)
+  _loop.py               LLM + tools iteration; parameterised on prompt/llm/tools
+  _agents/
+    __init__.py          imports every concrete agent → registry populated
+    _base.py             `BaseAgent` + `BaseAgent._registry` + `get`/`all_names`/`identify`
+    _chat.py             `CHAT_AGENT_PROMPT` constant + `ChatAgent(BaseAgent)`
   _models/
-    __init__.py      active LLM adapter
-    lmstudio.py      LM Studio (OpenAI-compatible) adapter
-  py.typed           PEP 561 marker — package ships types
+    __init__.py          imports every concrete model → registry populated
+    _base.py             `BaseModel` + `BaseModel._registry` + `get`/`all_names`/`identify`
+    _lmstudio.py         `LMStudioModel(BaseModel)`
+  _tools/
+    __init__.py          imports every concrete tool → registry populated
+    _base.py             `BaseTool` + `BaseTool._registry` + `schema` + `get`/`all_names`/`identify`
+    _memory.py           `RecallRecentTool(BaseTool)`
+  py.typed               PEP 561 marker
 ```
 
-The concrete class enforces singleton construction via a private
-classmethod (`_AgentService.get()`), invoked only by
-`get_agent_service()`. Tools are registered automatically from the
-`_tools` package and exposed to the LLM at runtime.
+### The registration pattern (template for new agents / models / tools)
+
+Each base class follows the same shape:
+
+1. **Class-level metadata** describes the artifact (`name`,
+   `description`, plus per-kind fields — `prompt`/`model`/`tools` for
+   agents, `parameters` for tools).
+2. **`__init_subclass__`** auto-inserts the subclass (or a singleton
+   instance, for models and tools) into a class-level `_registry`
+   dict, keyed by `name`. Empty `name` skips registration (used for
+   abstract intermediates and test doubles).
+3. **`get(name)`** raises a typed `Unknown{Agent,Model,Tool}Error` —
+   subclass of `RegistryLookupError` — on miss. Misnamed references
+   fail at boot, not at request time.
+4. **`identify()`** returns a `dict` self-description used by
+   diagnostics (and by the future `/flows` page).
+5. **`all_names()`** lists every registered name, sorted.
+
+### Adding a new agent
+
+```python
+# src/agent/_agents/_graph_builder.py
+"""Graph-builder agent — extracts entities and edges from conversation."""
+
+GRAPH_BUILDER_PROMPT = """You are a knowledge-graph extractor..."""
+
+from src.agent._agents._base import BaseAgent
+
+
+class GraphBuilderAgent(BaseAgent):
+    name = "graph_builder"
+    description = "Extracts entity / edge intents from a conversation slice."
+    prompt = GRAPH_BUILDER_PROMPT
+    model = "lmstudio"                  # any name registered in BaseModel._registry
+    tools = ["recall_recent"]           # any names registered in BaseTool._registry
+```
+
+Then add `from src.agent._agents import _graph_builder` to
+`_agents/__init__.py` so the import side-effect fires on package load.
+The agent is immediately reachable as `get_agent_service("graph_builder")`.
+
+Adding a new model or tool follows the same shape — subclass
+`BaseModel` / `BaseTool`, set `name`, implement `chat` / `run`, register
+the module in the corresponding package `__init__.py`.
 
 ## Anti-patterns
 
 - `AgentService(...)` — the Protocol has no implementation.
 - Capturing the instance at module load. Call inside functions, or inject via `Depends`.
-- Importing `_service`, `_loop`, `_tools`, `_models`, or any underscore-prefixed module.
+- Importing `_service`, `_loop`, `_tools`, `_models`, `_agents`, or any underscore-prefixed module.
 - Calling tools directly from outside the agent package.
 - Writing to the conversation log from inside the agent.
 - Mutating attributes on the returned instance.
+- Bypassing the registries — e.g. constructing `LMStudioModel()` ad-hoc and passing it to the loop. Always go through `get_model(name)` / `get_tool(name)` so misnamed references fail at the registry boundary instead of producing surprises at request time.
+- Defining two artifacts under the same `name`. `__init_subclass__` rejects the duplicate at import time.

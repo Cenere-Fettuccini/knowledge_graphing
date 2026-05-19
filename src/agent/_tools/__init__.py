@@ -1,34 +1,24 @@
-"""Tool registry consumed by the agent loop.
+"""Tool registry.
 
-Each tool is a small object with a ``name``, a JSON-schema description
-the LLM sees, and an async ``run(**kwargs) -> str`` that the loop calls
-when the LLM emits a matching tool call.
-
-Tools must never crash the loop — they return their failure as a string
-the LLM can read and react to. The loop additionally guards with a
-top-level ``except Exception`` (see ``_loop._run_one_tool_call``).
+Importing this package imports every concrete tool module, which fires
+``__init_subclass__`` and populates ``BaseTool._registry``. External
+callers use ``get_tool(name)`` / ``all_tools()``.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
-
-from src.agent._tools.memory import RecallRecentTool
-
-
-class Tool(Protocol):
-    name: str
-    schema: dict
-
-    async def run(self, **kwargs) -> str: ...
+from src.agent._tools import _memory  # noqa: F401 — side-effect: registers
+from src.agent._tools._base import BaseTool
 
 
-_TOOLS: list[Tool] = [RecallRecentTool()]
+def get_tool(name: str) -> BaseTool:
+    """Return the registered tool instance, or raise ``UnknownToolError``."""
+    return BaseTool.get(name)
 
 
-def get_tools() -> list[Tool]:
-    """Return the active tool list. Currently fixed; rebuilt only via tests."""
-    return list(_TOOLS)
+def all_tools() -> list[BaseTool]:
+    """Return every registered tool, sorted by name."""
+    return [BaseTool.get(n) for n in BaseTool.all_names()]
 
 
-__all__ = ["Tool", "get_tools"]
+__all__ = ["BaseTool", "all_tools", "get_tool"]

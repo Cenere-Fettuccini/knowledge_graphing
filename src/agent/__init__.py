@@ -1,10 +1,12 @@
 """Public surface for the chat agent.
 
-External callers see exactly five names: the ``AgentService`` Protocol,
+External callers see exactly six names: the ``AgentService`` Protocol,
 the request/result dataclasses, the ``AgentRunError`` typed exception,
-and the ``get_agent_service`` factory. The concrete service class and
-the loop / tool / model adapters live in underscore-prefixed modules
-and are not part of the contract.
+the ``RegistryLookupError`` family base, and the
+``get_agent_service(name)`` factory. The concrete service class, the
+loop, the agent / model / tool registries, and the individual agent /
+model / tool definitions all live in underscore-prefixed submodules and
+are not part of the contract.
 """
 
 from __future__ import annotations
@@ -12,12 +14,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from src.agent._errors import AgentRunError
+from src.agent._errors import (
+    AgentRunError,
+    RegistryLookupError,
+    UnknownAgentError,
+    UnknownModelError,
+    UnknownToolError,
+)
 
 
 @dataclass(frozen=True)
 class AgentRunRequest:
-    """One invocation of the chat agent.
+    """One invocation of an agent.
 
     ``history`` is oldest-first and includes the latest user message at
     the tip — the orchestrator (``backend.conversation``) is responsible
@@ -40,19 +48,29 @@ class AgentRunResult:
 
 @runtime_checkable
 class AgentService(Protocol):
-    """Structural type of the agent singleton.
+    """Structural type of an agent singleton.
 
-    Not a class to instantiate — call ``get_agent_service()`` instead.
+    Not a class to instantiate — call ``get_agent_service(name)``.
     """
 
     async def arun(self, request: AgentRunRequest) -> AgentRunResult: ...
 
 
-def get_agent_service() -> AgentService:
-    """Return the shared AgentService. Constructs it on first call."""
+DEFAULT_AGENT = "chat"
+
+
+def get_agent_service(name: str = DEFAULT_AGENT) -> AgentService:
+    """Return the shared service for ``name``.
+
+    Each registered agent has its own singleton; the first call for a
+    given name resolves the agent's declared model + tools through their
+    registries and caches the resulting service. Raises
+    ``UnknownAgentError`` / ``UnknownModelError`` / ``UnknownToolError``
+    when a referenced name isn't registered.
+    """
     from src.agent._service import _AgentService
 
-    return _AgentService.get()
+    return _AgentService.get(name)
 
 
 __all__ = [
@@ -60,5 +78,10 @@ __all__ = [
     "AgentRunRequest",
     "AgentRunResult",
     "AgentService",
+    "DEFAULT_AGENT",
+    "RegistryLookupError",
+    "UnknownAgentError",
+    "UnknownModelError",
+    "UnknownToolError",
     "get_agent_service",
 ]
