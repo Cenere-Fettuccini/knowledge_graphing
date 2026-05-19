@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
-import pytest
-
 from src.memory import get_memory_manager
 from src.memory import _conversation as conv
 
@@ -45,18 +41,22 @@ def test_status_reports_writable_dir():
     assert snap["writable"] is True
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="chmod read-only is unreliable on Windows")
-def test_status_reports_unwritable_dir(log_dir):
-    """status() reports degraded when the dir is not writable."""
+def test_status_reports_unwritable_dir(monkeypatch):
+    """status() reports degraded when the dir is not writable.
+
+    Cross-platform: monkeypatch ``os.access`` rather than chmod the real
+    directory. Windows enforces directory writability through ACLs, not
+    POSIX permission bits, so ``chmod(0o500)`` is a no-op there; patching
+    the access check exercises the same branch in ``status()`` on every
+    platform without depending on OS-specific FS behaviour.
+    """
     conv.ensure_dir()
-    log_dir.chmod(0o500)
-    try:
-        memory = get_memory_manager()
-        snap = memory.status()
-        assert snap["conversation_log"] == "degraded"
-        assert snap["writable"] is False
-    finally:
-        log_dir.chmod(0o700)
+    monkeypatch.setattr("src.memory._manager.os.access", lambda _p, _mode: False)
+
+    memory = get_memory_manager()
+    snap = memory.status()
+    assert snap["conversation_log"] == "degraded"
+    assert snap["writable"] is False
 
 
 def test_append_survives_simulated_crash_between_jsonl_and_head():
