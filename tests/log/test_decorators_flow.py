@@ -30,6 +30,7 @@ def _emit_unmarked():
 
 
 def test_active_dev_in_development_function_emits_all_levels(capture, monkeypatch):
+    """Functions marked with @in_development in active_dev mode should emit all logs."""
     monkeypatch.setenv("LOG_MODE", "active_dev")
     setup_logging()
     attach_capture(capture)
@@ -41,6 +42,7 @@ def test_active_dev_in_development_function_emits_all_levels(capture, monkeypatc
 
 
 def test_active_dev_done_function_emits_only_errors(capture, monkeypatch):
+    """Functions marked with @done in active_dev mode should only emit error logs."""
     monkeypatch.setenv("LOG_MODE", "active_dev")
     setup_logging()
     attach_capture(capture)
@@ -51,6 +53,7 @@ def test_active_dev_done_function_emits_only_errors(capture, monkeypatch):
 
 
 def test_active_dev_unmarked_function_emits_only_errors(capture, monkeypatch):
+    """Unmarked functions in active_dev mode should only emit error logs."""
     monkeypatch.setenv("LOG_MODE", "active_dev")
     setup_logging()
     attach_capture(capture)
@@ -61,6 +64,7 @@ def test_active_dev_unmarked_function_emits_only_errors(capture, monkeypatch):
 
 
 def test_dev_mode_ignores_decorators(capture, monkeypatch):
+    """Dev mode should ignore decorators and emit all logs."""
     monkeypatch.setenv("LOG_MODE", "dev")
     setup_logging()
     attach_capture(capture)
@@ -71,6 +75,7 @@ def test_dev_mode_ignores_decorators(capture, monkeypatch):
 
 
 def test_prod_mode_ignores_decorators(capture, monkeypatch):
+    """Production mode should ignore decorators and only emit error logs."""
     monkeypatch.setenv("LOG_MODE", "prod")
     setup_logging()
     attach_capture(capture)
