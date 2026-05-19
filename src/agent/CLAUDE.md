@@ -15,6 +15,7 @@ from src.agent import (
     AgentService,
     AgentRunRequest,
     AgentRunResult,
+    AgentRunError,
     get_agent_service,
 )
 ```
@@ -34,13 +35,14 @@ print(result.reply)
 
 ## Public API quick reference
 
-The `__init__.py` exports exactly four names:
+The `__init__.py` exports exactly five names:
 
 | Name | Kind | Description |
 |---|---|---|
 | `AgentService` | `typing.Protocol` | Structural type for the singleton. Not a class to instantiate. |
 | `AgentRunRequest` | `@dataclass(frozen=True)` | Input payload for `arun`. |
 | `AgentRunResult` | `@dataclass(frozen=True)` | Return value from `arun`. |
+| `AgentRunError` | `RuntimeError` subclass | Raised by `arun` when the LLM is unreachable, returns malformed data, or the iteration cap is exhausted. |
 | `get_agent_service` | function | Returns the shared instance; constructs it on first call. |
 
 ### `AgentService` methods at a glance
