@@ -15,6 +15,7 @@ from src.agent._agents._base import BaseAgent
 
 
 class ChatAgent(BaseAgent):
+    """Conversational agent supporting open-ended chat with episodic memory recall."""
     name = "chat"
     description = "Default conversational agent. Open-ended chat with memory recall."
     prompt = CHAT_AGENT_PROMPT

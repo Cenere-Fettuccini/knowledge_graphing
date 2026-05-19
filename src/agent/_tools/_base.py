@@ -49,6 +49,7 @@ class BaseTool:
         }
 
     async def run(self, **kwargs: object) -> str:
+        """Execute the tool's core logic with the provided arguments and return a string result."""
         raise NotImplementedError
 
     @classmethod
@@ -63,6 +64,7 @@ class BaseTool:
 
     @classmethod
     def get(cls, name: str) -> "BaseTool":
+        """Retrieve a registered tool instance by name, or raise UnknownToolError."""
         try:
             return BaseTool._registry[name]
         except KeyError:
@@ -72,4 +74,5 @@ class BaseTool:
 
     @classmethod
     def all_names(cls) -> list[str]:
+        """Return a sorted list of all registered tool names."""
         return sorted(BaseTool._registry)

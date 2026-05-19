@@ -42,6 +42,7 @@ class BaseAgent:
 
     @classmethod
     def identify(cls) -> dict:
+        """Return a dictionary of metadata describing the agent."""
         return {
             "kind": "agent",
             "name": cls.name,
@@ -53,6 +54,7 @@ class BaseAgent:
 
     @classmethod
     def get(cls, name: str) -> type["BaseAgent"]:
+        """Retrieve a registered agent class by name, or raise UnknownAgentError."""
         try:
             return BaseAgent._registry[name]
         except KeyError:
@@ -62,4 +64,5 @@ class BaseAgent:
 
     @classmethod
     def all_names(cls) -> list[str]:
+        """Return a sorted list of all registered agent names."""
         return sorted(BaseAgent._registry)

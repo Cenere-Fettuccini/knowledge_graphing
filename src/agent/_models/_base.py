@@ -40,10 +40,12 @@ class BaseModel:
 
     @classmethod
     def identify(cls) -> dict:
+        """Return a dictionary of metadata describing the model adapter."""
         return {"kind": "model", "name": cls.name, "description": cls.description}
 
     @classmethod
     def get(cls, name: str) -> "BaseModel":
+        """Retrieve a registered model instance by name, or raise UnknownModelError."""
         try:
             return BaseModel._registry[name]
         except KeyError:
@@ -53,4 +55,5 @@ class BaseModel:
 
     @classmethod
     def all_names(cls) -> list[str]:
+        """Return a sorted list of all registered model names."""
         return sorted(BaseModel._registry)

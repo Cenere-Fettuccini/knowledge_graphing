@@ -37,6 +37,7 @@ def _request_timeout() -> float:
 
 
 class LMStudioModel(BaseModel):
+    """LLM adapter for connecting to a local LM Studio server."""
     name = "lmstudio"
     description = "OpenAI-compatible local LLM served by LM Studio."
 

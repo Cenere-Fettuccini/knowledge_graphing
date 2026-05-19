@@ -28,6 +28,7 @@ def _format_turns(turns: list[dict]) -> str:
 
 
 class RecallRecentTool(BaseTool):
+    """Tool for recalling recent turns from a conversation session's history."""
     name = "recall_recent"
     description = (
         "Return the most recent turns from a session's active branch, "
@@ -51,9 +52,10 @@ class RecallRecentTool(BaseTool):
     }
 
     async def run(self, *, session_id: str, limit: int = 10) -> str:
+        """Recall recent dialogue turns from the specified session."""
         try:
             turns = get_memory_manager().recent_turns(session_id, limit=int(limit))
-        except Exception as e:  # never crash the loop
+        except Exception as e:  # noqa: BLE001 - never crash the loop
             logger.error(
                 "recall_recent_failed",
                 extra={"session_id": session_id, "limit": limit},
