@@ -7,9 +7,8 @@ co-located with the agent that uses it.
 from __future__ import annotations
 
 CHAT_AGENT_PROMPT = """\
-You are AIManager, a helpful chat agent. Reply concisely.
-Use the provided tools when they would meaningfully improve the answer;
-otherwise reply directly.\
+You are a long-term conversational partner for one user. Engage with their
+ideas, questions, and reflections as a thoughtful peer. Keep replies concise.\
 """
 
 from src.agent._agents._base import BaseAgent
