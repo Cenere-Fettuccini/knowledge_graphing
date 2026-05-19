@@ -49,6 +49,15 @@ class _MemoryManager:
             logger.info("memory_manager_initialised")
         return cls._instance
 
+    @classmethod
+    def _reset(cls) -> None:
+        """Drop the cached singleton. Package-internal test seam.
+
+        Not part of the public API. Tests call this between cases so each
+        gets a fresh instance bound to its own ``CONVERSATION_LOG_DIR``.
+        """
+        cls._instance = None
+
     # ----- turn-level -------------------------------------------------
 
     def append(

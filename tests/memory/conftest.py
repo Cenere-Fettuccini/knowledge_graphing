@@ -17,13 +17,14 @@ from src.memory._manager import _MemoryManager
 
 @pytest.fixture(autouse=True)
 def _reset_singleton() -> Iterator[None]:
-    _MemoryManager._instance = None
+    _MemoryManager._reset()
     yield
-    _MemoryManager._instance = None
+    _MemoryManager._reset()
 
 
 @pytest.fixture(autouse=True)
 def log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Configure and return a temporary conversation log directory for tests."""
     d = tmp_path / "conversations"
     monkeypatch.setenv("CONVERSATION_LOG_DIR", str(d))
     return d
