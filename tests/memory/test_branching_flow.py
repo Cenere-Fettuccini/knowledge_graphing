@@ -7,7 +7,7 @@ import pytest
 from src.memory import get_memory_manager
 
 
-def test_fork_creates_sibling_branch_and_becomes_active(log_dir):
+def test_fork_creates_sibling_branch_and_becomes_active():
     """Appending with an explicit parent_id forks the conversation."""
     memory = get_memory_manager()
     root = memory.append("s1", "user", "hello")
@@ -22,7 +22,7 @@ def test_fork_creates_sibling_branch_and_becomes_active(log_dir):
     assert a1 not in {t["id"] for t in turns}
 
 
-def test_set_active_switches_branch(log_dir):
+def test_set_active_switches_branch():
     """set_active flips which leaf subsequent recent_turns walks from."""
     memory = get_memory_manager()
     root = memory.append("s1", "user", "hello")
@@ -37,7 +37,7 @@ def test_set_active_switches_branch(log_dir):
     assert [t["id"] for t in memory.recent_turns("s1")] == [a2, root]
 
 
-def test_list_branches_reports_each_leaf(log_dir):
+def test_list_branches_reports_each_leaf():
     """Every leaf shows up exactly once with the expected metadata."""
     memory = get_memory_manager()
     root = memory.append("s1", "user", "hello")
@@ -60,7 +60,7 @@ def test_list_branches_reports_each_leaf(log_dir):
     assert "original" in by_id[a1]["head_text_preview"]
 
 
-def test_set_active_unknown_leaf_raises(log_dir):
+def test_set_active_unknown_leaf_raises():
     """An unknown leaf id raises ValueError without touching the head."""
     memory = get_memory_manager()
     root = memory.append("s1", "user", "hello")
@@ -69,7 +69,7 @@ def test_set_active_unknown_leaf_raises(log_dir):
     assert memory.active_leaf("s1") == root
 
 
-def test_recent_turns_named_leaf_walks_that_branch(log_dir):
+def test_recent_turns_named_leaf_walks_that_branch():
     """Passing ``leaf_id`` explicitly walks that branch even if not active."""
     memory = get_memory_manager()
     root = memory.append("s1", "user", "hello")

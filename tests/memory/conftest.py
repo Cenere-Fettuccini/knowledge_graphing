@@ -22,7 +22,7 @@ def _reset_singleton() -> Iterator[None]:
     _MemoryManager._instance = None
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "conversations"
     monkeypatch.setenv("CONVERSATION_LOG_DIR", str(d))

@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.memory import get_memory_manager
 
 
-def test_session_lifecycle_create_list_delete(log_dir):
+def test_session_lifecycle_create_list_delete():
     """The full lifecycle: empty → append creates one → list shows it → delete removes."""
     memory = get_memory_manager()
 
@@ -26,13 +26,13 @@ def test_session_lifecycle_create_list_delete(log_dir):
     assert memory.active_leaf("s1") is None
 
 
-def test_delete_unknown_session_is_noop(log_dir):
+def test_delete_unknown_session_is_noop():
     """Deleting a session that never existed must not raise."""
     memory = get_memory_manager()
     memory.delete_session("never-existed")  # no exception
 
 
-def test_multiple_sessions_listed_independently(log_dir):
+def test_multiple_sessions_listed_independently():
     """Sessions are independent files; list_sessions reports each."""
     memory = get_memory_manager()
     memory.append("alpha", "user", "a")

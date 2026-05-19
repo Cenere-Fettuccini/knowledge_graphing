@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 
 import pytest
@@ -11,7 +10,7 @@ from src.memory import get_memory_manager
 from src.memory import _conversation as conv
 
 
-def test_truncated_jsonl_line_is_skipped(log_dir):
+def test_truncated_jsonl_line_is_skipped():
     """A torn trailing JSON line is skipped on read; clean turns still load."""
     memory = get_memory_manager()
     memory.append("s1", "user", "hello")
@@ -27,7 +26,7 @@ def test_truncated_jsonl_line_is_skipped(log_dir):
     assert all(t["id"] != "t-broken" for t in turns)
 
 
-def test_missing_head_treated_as_empty_session(log_dir):
+def test_missing_head_treated_as_empty_session():
     """If the .head file is gone but the .jsonl exists, recent_turns returns []."""
     memory = get_memory_manager()
     memory.append("s1", "user", "hello")
@@ -38,7 +37,7 @@ def test_missing_head_treated_as_empty_session(log_dir):
     assert memory.recent_turns("s1") == []
 
 
-def test_status_reports_writable_dir(log_dir):
+def test_status_reports_writable_dir():
     """status() returns an 'online' shape when the directory is writable."""
     memory = get_memory_manager()
     snap = memory.status()
@@ -47,7 +46,7 @@ def test_status_reports_writable_dir(log_dir):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="chmod read-only is unreliable on Windows")
-def test_status_reports_unwritable_dir(log_dir, monkeypatch):
+def test_status_reports_unwritable_dir(log_dir):
     """status() reports degraded when the dir is not writable."""
     conv.ensure_dir()
     log_dir.chmod(0o500)
@@ -60,7 +59,7 @@ def test_status_reports_unwritable_dir(log_dir, monkeypatch):
         log_dir.chmod(0o700)
 
 
-def test_append_survives_simulated_crash_between_jsonl_and_head(log_dir, monkeypatch):
+def test_append_survives_simulated_crash_between_jsonl_and_head():
     """If a crash occurs after JSONL append but before head update, next read still works.
 
     The JSONL is the source of truth; the head is a cached pointer. With
@@ -93,7 +92,7 @@ def test_append_survives_simulated_crash_between_jsonl_and_head(log_dir, monkeyp
     assert [t["id"] for t in walked] == [t2, t1]
 
 
-def test_corrupt_head_treated_as_empty(log_dir):
+def test_corrupt_head_treated_as_empty():
     """A garbled .head file does not crash reads; session reads as empty until repaired."""
     memory = get_memory_manager()
     memory.append("s1", "user", "hello")
