@@ -7,7 +7,7 @@ callers use ``get_tool(name)`` / ``all_tools()``.
 
 from __future__ import annotations
 
-from src.agent._tools import memory as _memory  # noqa: F401 — side-effect: registers
+from src.agent._tools import _memory  # noqa: F401 — side-effect: registers
 from src.agent._tools._base import BaseTool
 
 

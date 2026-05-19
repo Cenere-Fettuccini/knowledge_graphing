@@ -7,7 +7,7 @@ External callers use ``get_model(name)`` / ``all_models()``.
 
 from __future__ import annotations
 
-from src.agent._models import lmstudio as _lmstudio  # noqa: F401 — side-effect: registers
+from src.agent._models import _lmstudio  # noqa: F401 — side-effect: registers
 from src.agent._models._base import BaseModel
 
 

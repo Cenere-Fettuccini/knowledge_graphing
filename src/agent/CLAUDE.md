@@ -214,15 +214,15 @@ agent/
   _agents/
     __init__.py          imports every concrete agent → registry populated
     _base.py             `BaseAgent` + `BaseAgent._registry` + `get`/`all_names`/`identify`
-    chat.py              `CHAT_AGENT_PROMPT` constant + `ChatAgent(BaseAgent)`
+    _chat.py             `CHAT_AGENT_PROMPT` constant + `ChatAgent(BaseAgent)`
   _models/
     __init__.py          imports every concrete model → registry populated
     _base.py             `BaseModel` + `BaseModel._registry` + `get`/`all_names`/`identify`
-    lmstudio.py          `LMStudioModel(BaseModel)`
+    _lmstudio.py         `LMStudioModel(BaseModel)`
   _tools/
     __init__.py          imports every concrete tool → registry populated
     _base.py             `BaseTool` + `BaseTool._registry` + `schema` + `get`/`all_names`/`identify`
-    memory.py            `RecallRecentTool(BaseTool)`
+    _memory.py           `RecallRecentTool(BaseTool)`
   py.typed               PEP 561 marker
 ```
 
@@ -247,7 +247,7 @@ Each base class follows the same shape:
 ### Adding a new agent
 
 ```python
-# src/agent/_agents/graph_builder.py
+# src/agent/_agents/_graph_builder.py
 """Graph-builder agent — extracts entities and edges from conversation."""
 
 GRAPH_BUILDER_PROMPT = """You are a knowledge-graph extractor..."""
@@ -263,7 +263,7 @@ class GraphBuilderAgent(BaseAgent):
     tools = ["recall_recent"]           # any names registered in BaseTool._registry
 ```
 
-Then add `from src.agent._agents import graph_builder` to
+Then add `from src.agent._agents import _graph_builder` to
 `_agents/__init__.py` so the import side-effect fires on package load.
 The agent is immediately reachable as `get_agent_service("graph_builder")`.
 

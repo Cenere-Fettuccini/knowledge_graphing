@@ -10,7 +10,7 @@ loop driver) lives in ``_service`` / ``_loop``.
 
 from __future__ import annotations
 
-from src.agent._agents import chat as _chat  # noqa: F401 — side-effect: registers
+from src.agent._agents import _chat  # noqa: F401 — side-effect: registers
 from src.agent._agents._base import BaseAgent
 
 
